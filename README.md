@@ -4,6 +4,9 @@
 - Requires a valid json response from DraftKings Sportsbook e.g (`https://sportsbook-nash.draftkings.com/sites/US-SB/api/v5/eventgroups/205797?format=json`) to exist in the root of the project `/path/to/repo/dk_data.json`
 - Requires a json list of participant name strings to exist at the root of the project `/path/to/repo/participants.json` (example `["Mo", "Diogo", "Luis", "Cody", "Darwin"]`)
 
+## Hidden Option
+- Can fine tune which odds type you'd like to choose by changing the `ODDS_TYPE` function variable to match the DK odds type label. Defaults to "Winner" but another good option is "Top 10 (Including Ties)"
+
 ## Purpose
 Using the documented algorithms below, this tool aims to determine the optimal groups aiming to minimize the difference between the groups with the highest and lowest cumulative odds. Once the best groups are identified, they are randomly assigned to the participants.
 

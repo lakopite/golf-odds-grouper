@@ -73,80 +73,68 @@ def backtracking_generate_groups(golfers, n_groups):
 def dp_generate_groups(golfers, n_groups):
     n = len(golfers)
     max_sum = sum(g["odds"] for g in golfers)
-    
-    # Initialize DP table and a table for tracking the group distribution
-    dp = np.full((n + 1, n_groups + 1, max_sum + 1), float('inf'))
+    scaled_max_sum = int(max_sum * 100)  # Scaling to avoid precision issues
+
+    # Initialize DP table and backtracking table
+    dp = np.full((n + 1, n_groups + 1, scaled_max_sum + 1), float('inf'))
     dp[0][0][0] = 0
-    
-    # Track the selection of golfers
-    selected = np.zeros((n + 1, n_groups + 1, max_sum + 1), dtype=bool)
-    
+    selected = np.full((n + 1, n_groups + 1, scaled_max_sum + 1), -1)
+
     # Progress bar setup
     total_steps = (n + 1) * (n_groups + 1)
     progress_bar = tqdm(total=total_steps, desc="DP Progress")
-    
+
     for i in range(1, n + 1):
-        golfer_odds = golfers[i - 1]["odds"]
+        golfer_odds = int(golfers[i - 1]["odds"] * 100)
         for j in range(1, n_groups + 1):
-            for k in range(max_sum + 1):
-                # Skip if previous group sum is invalid
-                if dp[i - 1][j - 1][k] == float('inf'):
-                    continue
-                
-                # Including the current golfer
-                if k + golfer_odds <= max_sum:
-                    include = dp[i - 1][j - 1][k] + golfer_odds
-                    if include < dp[i][j][k + golfer_odds]:
-                        dp[i][j][k + golfer_odds] = include
-                        selected[i][j][k + golfer_odds] = True
-                
-                # Excluding the current golfer
-                exclude = dp[i - 1][j][k]
-                if exclude < dp[i][j][k]:
-                    dp[i][j][k] = exclude
-                    selected[i][j][k] = False
-                
+            for k in range(scaled_max_sum + 1):
+                # Exclude current golfer
+                if dp[i - 1][j][k] < dp[i][j][k]:
+                    dp[i][j][k] = dp[i - 1][j][k]
+                    selected[i][j][k] = 0  # Indicates exclusion
+
+                # Include current golfer
+                if k >= golfer_odds and dp[i - 1][j - 1][k - golfer_odds] + golfer_odds < dp[i][j][k]:
+                    dp[i][j][k] = dp[i - 1][j - 1][k - golfer_odds] + golfer_odds
+                    selected[i][j][k] = 1  # Indicates inclusion
+
             progress_bar.update(1)
-    
+
     progress_bar.close()
-    
+
     # Finding the minimal difference
-    min_diff = float('inf')
-    best_groups = []
-    
-    for k in range(max_sum + 1):
+    best_min_diff = float('inf')
+    best_max_total = 0
+    for k in range(scaled_max_sum + 1):
         if dp[n][n_groups][k] != float('inf'):
             max_total = k
             min_total = dp[n][n_groups][k]
             diff = max_total - min_total
-            if diff < min_diff:
-                min_diff = diff
-                best_groups = []
-                group_sums = [0] * n_groups
-                
-                # Reconstruct groups
-                i, j, current_sum = n, n_groups, max_total
-                while j > 0 and i > 0:
-                    if selected[i][j][current_sum]:
-                        best_groups.append(golfers[i - 1])
-                        group_sums[j - 1] += golfers[i - 1]["odds"]
-                        current_sum -= golfers[i - 1]["odds"]
-                        j -= 1
-                    i -= 1
-                
-                # Assign the remaining golfers to the groups
-                unassigned_golfers = set(golfers) - set(best_groups)
-                for golfer in unassigned_golfers:
-                    min_group_index = min(range(n_groups), key=lambda x: group_sums[x])
-                    group_sums[min_group_index] += golfer["odds"]
-                    best_groups[min_group_index].append(golfer)
-    
-    # Ensuring all golfers are included in the final groups
+            if diff < best_min_diff:
+                best_min_diff = diff
+                best_max_total = max_total
+
+    # Reconstruct groups
     groups = [[] for _ in range(n_groups)]
-    for group in best_groups:
+    used = [False] * n
+    i, j, current_sum = n, n_groups, best_max_total
+
+    while j > 0:
+        while i > 0 and selected[i][j][current_sum] == 0:
+            i -= 1
+        if i > 0:
+            groups[j - 1].append(golfers[i - 1])
+            used[i - 1] = True
+            current_sum -= int(golfers[i - 1]["odds"] * 100)
+            j -= 1
+        i -= 1
+
+    # Assign remaining unassigned golfers
+    remaining_golfers = [golfers[i] for i in range(n) if not used[i]]
+    for golfer in remaining_golfers:
         min_group_index = min(range(n_groups), key=lambda x: sum(g["odds"] for g in groups[x]))
-        groups[min_group_index].append(group)
-    
+        groups[min_group_index].append(golfer)
+
     return groups
 
 # Simulated Annealing
