@@ -82,7 +82,7 @@ def dp_generate_groups(golfers, n_groups):
 
     # Progress bar setup
     total_steps = (n + 1) * (n_groups + 1)
-    progress_bar = tqdm(total=total_steps, desc="DP Progress")
+    progress_bar = tqdm(total=total_steps, desc="Dynamic Programming Progress")
 
     for i in range(1, n + 1):
         golfer_odds = int(golfers[i - 1]["odds"] * 100)
@@ -160,7 +160,7 @@ def sa_generate_groups(golfers, n_groups, max_iter=1000, temp=1000, cooling_rate
     current_cost = calculate_cost(groups)
     best_groups, best_cost = groups, current_cost
 
-    progress_bar = tqdm(total=max_iter, desc="SA Progress")
+    progress_bar = tqdm(total=max_iter, desc="Simulated Annealing Progress")
 
     for _ in range(max_iter):
         new_groups = swap_golfers(groups)
