@@ -109,7 +109,7 @@ if __name__ == '__main__':
     result["Genetic Algorithm"]=confirm_group("Genetic Algorithm", ga_assigned_groups, ga_group_totals, golfers)
     result["Greedy Algorithm"]=confirm_group("Greedy Algorithm", greedy_assigned_groups, greedy_group_totals, golfers)
 
-    min_delta = math.infinity
+    min_delta = float('inf')
     best_groups = None
     for k,v in result.items():
         if v is not None:
