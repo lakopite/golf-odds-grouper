@@ -85,7 +85,7 @@ if __name__ == '__main__':
     backtracking_groups = backtracking_generate_groups(golfers, n_groups)
     dp_groups = dp_generate_groups(golfers, n_groups)
     sa_groups = sa_generate_groups(golfers, n_groups, max_iter=100000)
-    ga_groups = ga_generate_groups(golfers, n_groups, pop_size=500, generations=10000, mutation_rate=0.1)
+    ga_groups = ga_generate_groups(golfers, n_groups, pop_size=500, generations=1000, mutation_rate=0.1)
     greedy_groups = greedy_redistribute_groups(golfers, n_groups)   
 
     backtracking_assigned_groups = {name: group for name, group in zip(participant_names, backtracking_groups)}
@@ -121,7 +121,7 @@ if __name__ == '__main__':
     if best_groups is None:
         print("NO VALID GROUPS FOUND")
     else:
-        print(f"Best Grouping Method was {best_groups.get('method')} with a delta percentage of {best_groups.get('method')}%")
+        print(f"Best Grouping Method was {best_groups.get('method')} with a delta percentage of {best_groups.get('delta_percentage')}%")
         print("Assigning names to group...")
         # Shuffle participant names and assign groups
         random.shuffle(participant_real_names)
@@ -132,5 +132,5 @@ if __name__ == '__main__':
             final_groups['totals'][i] = best_groups['totals'][f"Group {index}"]
         with open(f'output/BESTGROUPS.json','w') as f:
             json.dump(final_groups, f, indent=4)
-        print("FINAL GROUPS:")
-        print(json.dumps(final_groups, indent=4))
+        print("FINAL GROUPS (also written to output/BESTGROUPS.json):")
+        print(json.dumps(final_groups))
