@@ -1,0 +1,5 @@
+venv
+output
+dk_data*
+participants*.json
+__pycache__
