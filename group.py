@@ -72,7 +72,7 @@ def confirm_group(method_name, assigned_groups, group_totals, golfers):
 
 if __name__ == '__main__':
     # ODDS_TYPE = "Winner"
-    ODDS_TYPE = "Top 10 (Including Ties)"
+    ODDS_TYPE = "Top 5 (Including Ties)"
     start_time = time.time()
     with open('dk_data.json') as dkdf:
         dkd = json.load(dkdf)
