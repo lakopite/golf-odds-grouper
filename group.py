@@ -3,12 +3,12 @@ import random
 import time
 from groupers import calculate_total_odds, backtracking_generate_groups, dp_generate_groups, sa_generate_groups, ga_generate_groups, greedy_redistribute_groups
 
-def fraction_to_decimal(fraction_str):
+def fractional_odds_to_implied_probability(fraction_str):
     numerator, denominator = fraction_str.split('/')
     numerator = float(numerator)
     denominator = float(denominator)
-    decimal_value = numerator / denominator
-    return decimal_value
+    implied_probability = denominator / (denominator + numerator)
+    return implied_probability
 
 def print_completion_time(start_time,end_time):
     print(f"Completed in {int(end_time - start_time) // 60} minutes and {int(end_time - start_time) % 60} seconds")
@@ -20,7 +20,7 @@ def list_dk_golf_odds(d, odds_type="Winner"):
     for o in sublist:
         result.append({
             "golfer_name": o['participants'][0]['name'],
-            "odds": 1 / fraction_to_decimal(o['oddsFractional'])
+            "odds": fractional_odds_to_implied_probability(o['oddsFractional'])
         })
     return result
 
