@@ -15,13 +15,20 @@ def print_completion_time(start_time,end_time):
 
 def list_dk_golf_odds(d, odds_type="Winner"):
     result = []
-    odds_section = next((i for i in d['eventGroup']['offerCategories'][0]['offerSubcategoryDescriptors'][0]['offerSubcategory']['offers'][0] if i.get('label') == odds_type), None)
-    sublist = odds_section.get('outcomes')
-    for o in sublist:
+
+    #odds_section = next((i for i in d['eventGroup']['offerCategories'][0]['offerSubcategoryDescriptors'][0]['offerSubcategory']['offers'][0] if i.get('label') == odds_type), None)
+
+    market_section = next((i for i in d['markets'] if i.get('name') == odds_type), None)
+    odds_type_marketID = market_section.get('id')
+
+    odds_section = [s for s in d['selections'] if s.get('marketId') == odds_type_marketID]
+
+    for o in odds_section:
         result.append({
             "golfer_name": o['participants'][0]['name'],
-            "odds": fractional_odds_to_implied_probability(o['oddsFractional'])
+            "odds": fractional_odds_to_implied_probability(o['displayOdds']['fractional'])
         })
+    print(f"result {result}")
     return result
 
 def validate_groups(groups, golfers):
@@ -71,8 +78,8 @@ def confirm_group(method_name, assigned_groups, group_totals, golfers):
     return None
 
 if __name__ == '__main__':
-    # ODDS_TYPE = "Winner"
-    ODDS_TYPE = "Top 5 (Including Ties)"
+    ODDS_TYPE = "Winner"
+    # ODDS_TYPE = "Top 5 (Including Ties)"
     start_time = time.time()
     with open('dk_data.json') as dkdf:
         dkd = json.load(dkdf)
