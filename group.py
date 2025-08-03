@@ -28,8 +28,26 @@ def list_dk_golf_odds(d, odds_type="Winner"):
             "golfer_name": o['participants'][0]['name'],
             "odds": fractional_odds_to_implied_probability(o['displayOdds']['fractional'])
         })
-    print(f"result {result}")
+    #print(f"result {result}")
     return result
+
+def odds_to_conditional(_golfers, _excluded_golfers=[], _verbose=False):
+    _conditional_golfers = []
+    total_prob = sum(g["odds"] for g in _golfers)
+    excluded_fair_prob = sum((g["odds"] / total_prob) for g in _golfers if g["golfer_name"] in _excluded_golfers)
+    scale_factor = 1 / (1 - excluded_fair_prob)
+    if _verbose:
+        print("Conditional Odds Mode.. calculating VIG")
+        print(f"Total Market Probability: {total_prob}")
+        print(f"Excluded Fair Probability: {excluded_fair_prob}")
+        print(f"Conditional Scale Factor: {scale_factor}")
+    for g in _golfers:
+        if g["golfer_name"] not in _excluded_golfers:
+            _conditional_golfers.append({
+                **g,
+                "odds": (g["odds"] / total_prob) * scale_factor
+            })
+    return _conditional_golfers
 
 def validate_groups(groups, golfers):
     valid_groups = True
@@ -80,6 +98,8 @@ def confirm_group(method_name, assigned_groups, group_totals, golfers):
 if __name__ == '__main__':
     ODDS_TYPE = "Winner"
     # ODDS_TYPE = "Top 5 (Including Ties)"
+    EXCLUDE_LIST = ["Scottie Scheffler", "Rory McIlroy"]
+    # EXCLUDE_LIST = []
     start_time = time.time()
     with open('dk_data.json') as dkdf:
         dkd = json.load(dkdf)
@@ -87,12 +107,16 @@ if __name__ == '__main__':
         participant_real_names = json.load(pf)
     participant_names = [f"Group {i}" for i in range(len(participant_real_names))]
     golfers = list_dk_golf_odds(dkd, odds_type=ODDS_TYPE)
+
+    if EXCLUDE_LIST:
+        golfers = odds_to_conditional(golfers, EXCLUDE_LIST, True)
+
     n_groups = len(participant_names)
 
     backtracking_groups = backtracking_generate_groups(golfers, n_groups)
     dp_groups = dp_generate_groups(golfers, n_groups)
     sa_groups = sa_generate_groups(golfers, n_groups, max_iter=100000)
-    ga_groups = ga_generate_groups(golfers, n_groups, pop_size=500, generations=10000, mutation_rate=0.1)
+    ga_groups = ga_generate_groups(golfers, n_groups, pop_size=500, generations=int(10000 / 1), mutation_rate=0.1)
     greedy_groups = greedy_redistribute_groups(golfers, n_groups)   
 
     backtracking_assigned_groups = {name: group for name, group in zip(participant_names, backtracking_groups)}
