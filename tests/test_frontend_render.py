@@ -10,6 +10,7 @@ Skipped without Playwright and a browser. Chromium is pre-installed in this
 environment; elsewhere, `pip install playwright && playwright install chromium`.
 """
 
+import glob
 import json
 import os
 
@@ -33,11 +34,24 @@ def _chromium_path():
     Environments that pre-install Chromium often pin a different build number than the
     Playwright package expects, and the default launch then fails on a path that does
     not exist. Point at whatever is actually on disk before giving up.
+
+    The candidates have to be filtered down to an actual EXECUTABLE. `pw-browsers` holds
+    a directory per build -- `chromium`, `chromium-1194`, `chromium_headless_shell-1194`
+    -- and handing Playwright the directory fails exactly like handing it nothing, except
+    that the test then reports "no chromium available" on a machine that has three. This
+    whole suite skipped silently for that reason, which is the worst way for a browser
+    test to be wrong: it never runs and never says so.
     """
-    for candidate in (os.environ.get("CHROMIUM_PATH"),
-                      os.path.join(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""), "chromium"),
-                      "/opt/pw-browsers/chromium"):
-        if candidate and os.path.exists(candidate):
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "/opt/pw-browsers"]
+    candidates = [os.environ.get("CHROMIUM_PATH")]
+    for root in roots:
+        if root:
+            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "chrome-linux", "chrome")))
+            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "**", "headless_shell"),
+                                           recursive=True))
+    candidates += ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
 
