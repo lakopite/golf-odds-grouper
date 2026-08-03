@@ -139,9 +139,22 @@ _TENS = ("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eigh
 
 
 def golfer_name(i):
-    """`Golfer Seven`, `Golfer Thirty Four` -- distinct to the name matcher, unlike a number."""
-    word = _ONES[i] if i < 20 else (_TENS[i // 10] + ("" if i % 10 == 0 else f" {_ONES[i % 10]}"))
-    return f"Golfer {word}"
+    """
+    `Golfer Seven`, `Golfer Thirty Four`, `Golfer One Hundred Six`.
+
+    Distinct to the name matcher, unlike a number, which normalisation deletes. Goes
+    past a hundred because the render suite deals out a real 147-player field.
+    """
+    return f"Golfer {_spell(i)}"
+
+
+def _spell(i):
+    if i >= 100:
+        rest = i % 100
+        return f"{_ONES[i // 100]} Hundred" + (f" {_spell(rest)}" if rest else "")
+    if i < 20:
+        return _ONES[i]
+    return _TENS[i // 10] + ("" if i % 10 == 0 else f" {_ONES[i % 10]}")
 
 
 def groups_stage():
