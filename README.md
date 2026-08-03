@@ -55,7 +55,10 @@ deployable and honest on its own terms. So a normal week is two runs against one
 competition, and the second one is a rebuild:
 
 ```bash
+# Wednesday night, no field published: the groups sheet.
 python build_competition.py --league leagues/my-league.json --tournament "Wyndham"
+
+# Thursday, play under way: the same competition, now with scoring.
 python build_competition.py --from-result build/result.json --output build/thursday.json
 ```
 
@@ -297,12 +300,23 @@ the first tee time there is no field to join against.
 
 A `live` build writes every name it would not guess at to `match-review.json` beside the
 result file: each unmatched Kalshi name, what it is worth, whose team it is in, the ESPN
-athletes nobody claimed, and two or three ranked suggestions with the reason for each.
+athletes nobody claimed, and up to three ranked suggestions with the reason for each.
+Heaviest golfer first, because a reviewer who only gets through half the list should get
+through the half that moves the standings. A golfer who is simply not in the field comes
+back with an empty suggestion list, which is itself the answer — an ESPN field and a
+Kalshi field for the same tournament are very nearly the same people.
+
 Somebody — in practice Claude, driving `.claude/skills/golf-pool/` — fills in
 `decisions`, binding an athlete id or recording an absence, and the next build reads it
-back. `--match-review PATH` points at a different file; `--update-aliases` promotes the
-name bindings (never the absences: a withdrawal is true of one week) into
-`data/espn_aliases.json`, where next month's build resolves them with nobody looking.
+back and records what it applied. Nothing is written at all when every name resolved and
+there was nothing to record; a file whose only content is "nothing to do" is a file
+somebody has to open to find that out.
+
+`--match-review PATH` points at a different file, and a review file recorded against
+another ESPN event is refused outright rather than applied — its athlete ids are ids in
+somebody else's field. `--update-aliases` promotes the name bindings (never the
+absences: a withdrawal is true of exactly one week) into `data/espn_aliases.json`, where
+next month's build resolves them with nobody looking.
 
 **A golfer left unresolved at build time is unscoreable for the life of that page.**
 They carry no athlete id, so the page has nothing to look up, and no amount of polling
@@ -312,15 +326,16 @@ name match, and it is worth paying: the join is now checkable, once, by a person
 it takes effect, instead of being re-guessed in every browser on every poll. See
 `espn_leaderboard.py`, `match_review.py` and `docs/FRONTEND-SPEC.md` §8.
 
-**Kalshi will not answer a browser, so the page does not ask it.** Its API allowlists
-request origins — `kalshi.com` gets a 200, every other origin including `localhost` and
-`file://` gets a 403 with no CORS headers. The exported page therefore fetches at most
-one thing — the ESPN leaderboard, and in `groups` mode not even that — and carries its
-odds baked in and time-stamped as of the draw. There are no live odds and no relay to
-configure, in either mode. The one way to show prices
-moving is to rebuild with `--refresh-odds`, which re-reads Kalshi server-side and bakes
-a second reading in beside the first; the page shows the movement since the draw and
-says it is frozen until the next rebuild.
+### Kalshi will not answer a browser, so the page does not ask it
+
+Its API allowlists request origins — `kalshi.com` gets a 200, every other origin
+including `localhost` and `file://` gets a 403 with no CORS headers. The exported page
+therefore fetches at most one thing, the ESPN leaderboard, and in `groups` mode not even
+that; its odds are baked in and time-stamped as of the draw. There are no live odds and
+no relay to configure, in either mode. The one way to show prices moving is to rebuild
+with `--refresh-odds`, which re-reads Kalshi server-side and bakes a second reading in
+beside the first; the page shows the movement since the draw and says it is frozen until
+the next rebuild.
 
 ## Tests
 

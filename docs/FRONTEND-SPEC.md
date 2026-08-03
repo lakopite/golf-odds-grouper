@@ -4,18 +4,22 @@ The design brief for the page a golf pool actually watches on Sunday afternoon.
 
 It is a **single static HTML file**. No server, no build step, no backend, no
 database. Everything it knows about the competition is baked into it at build time;
-the only thing it fetches while running is the live leaderboard. It opens from a
-`file://` URL, from a USB stick, from Dropbox, from anywhere.
+the most it ever fetches while running is the ESPN leaderboard, and a page built
+before the field posted does not fetch even that (§2). It opens from a `file://` URL,
+from a USB stick, from Dropbox, from anywhere.
 
 A working reference implementation lives in `frontend/template/`. It is deliberately
 plain — it exists to prove the contract, not to be the design. Read it for *what*, and
 ignore it for *how*.
 
 > **The one thing to read first.** §4. Kalshi will not answer a browser, so **the page
-> fetches exactly one thing: the ESPN leaderboard.** There is no live-odds panel, no
+> fetches at most one thing: the ESPN leaderboard.** There is no live-odds panel, no
 > relay, no setting that turns one on. Odds are baked in and stated as of the moment
 > they were captured. Any design that treats "live odds" as a thing the page can fetch
 > is designing a panel that is permanently empty for every user.
+>
+> **The second thing.** §2. `DATA.build_mode` says whether this page is a scoreboard or
+> a groups sheet, and a groups sheet fetches nothing at all.
 
 ---
 
@@ -112,23 +116,23 @@ someone notices the names.
 
 ### The four things in this payload that are not what they look like
 
-Measured against a live Round 2 payload (`espn-api/lb.json`, 147 competitors) and the
-same tournament's final payload.
+Measured against a mid-tournament Round 2 payload (`espn-api/lb.json`, 147 competitors)
+and the same tournament's final payload.
 
 1. **`competitors[]` is not in rank order.** Sort it.
 
 2. **`score.displayValue` is stale mid-round.** It counts *completed rounds only*, so
    a player halfway through round 2 shows their round-1 total. It was wrong for **42
-   of 147** players. Never rank on it, never display it. The live total is the sum of
-   the `linescores[].displayValue` values.
+   of 147** players. Never rank on it, never display it. The running total is the sum
+   of the `linescores[].displayValue` values.
 
 3. **`linescores[]` contains stubs** for rounds not yet played — no `value`, no
    `displayValue` key at all. Filter before summing. A withdrawn round reads `"-"`.
 
-4. **`sortOrder` is the live rank**, and it is the only field that is. Zero inversions
-   against the live total; the stale score field inverts 29 times. It is a total order
-   `1..N` over the whole field, and it places every cut player (74–147) below every
-   player who made the cut (1–73).
+4. **`sortOrder` is the in-play rank**, and it is the only field that is. Zero
+   inversions against the running total; the stale score field inverts 29 times. It is
+   a total order `1..N` over the whole field, and it places every cut player (74–147)
+   below every player who made the cut (1–73).
 
 Also: the current round is `competitions[0].status.period`, **not** `event.status`.
 And `status.position.isTie` is already a boolean — no need to parse the `T`.
@@ -150,9 +154,9 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 This guard has nothing to do with the name join and survives every change to it. Since
 2.0 the Wednesday-night page is a `groups` page that does not fetch, so the *first* row
 above is settled at build time — but a `live` page can be handed an empty board any
-afternoon of the week: ESPN unreachable, a payload refused for the wrong event (§3), a
-fetch that fails on a train, a first poll that has not returned yet. All of those arrive
-as zero competitors, and one of them is not rare.
+afternoon of the week: ESPN unreachable, a payload refused for the wrong event (above),
+a fetch that fails on a train, a first poll that has not returned yet. All of those
+arrive as zero competitors, and none of them is rare.
 
 Everything the pool cares about is already in the file regardless: who holds whom, what
 each golfer was worth, and that the draw came out even. Show all of it. What must
@@ -186,9 +190,10 @@ design answers it by not fetching odds at all.
 
 ### What this means for the page
 
-**The page has one network dependency: ESPN.** There is no odds request, no relay
-setting, no "live odds unavailable" state to design, and no empty panel to fill. The
-result file carries no Kalshi URL for the page to try, because trying it can only fail.
+**The page has at most one network dependency: ESPN** — and a `groups` page has none
+(§2). There is no odds request in either mode, no relay setting, no "live odds
+unavailable" state to design, and no empty panel to fill. The result file carries no
+Kalshi URL for the page to try, because trying it can only fail.
 
 **The snapshot is the odds display.** Every golfer's price at the moment the groups
 were drawn is in `DATA.golfers[].odds`, along with the book it came from and the time
@@ -435,8 +440,8 @@ much worse fact than no join having been possible. See §2.
                                  // Never feeds the grouping. Compare against `raw`.
     },
     // NULL on every golfer in groups mode — there was no field, so there is nothing
-    // to say. In live mode, every golfer has this block and athlete_id may still be
-    // null; see §8.
+    // to say. In live mode every golfer has this block, and a golfer no tier settled
+    // carries it with athlete_id, display_name, headshot and country all null. See §8.
     "espn": {
       "athlete_id": "4425906", "display_name": "Cameron Young",
       "headshot": "https://a.espncdn.com/…", "country": "USA",
@@ -452,8 +457,11 @@ much worse fact than no join having been possible. See §2.
     }
   }],
 
+  // "pre" on the groups build, "in" once play starts. Dates and course survive a
+  // rebuild that could not reach ESPN; the state does not, because a run that could
+  // not read it does not know it.
   "tournament": { "name": "…", "season": 2026, "start": "…", "end": "…",
-                  "state_at_build": "pre", "course": { "name": "…", "par": 70 } },
+                  "state_at_build": "in", "course": { "name": "…", "par": 70 } },
 
   "sources": {
     "kalshi": { "event_ticker": "KXPGATOUR-WYC26", "series_ticker": "KXPGATOUR",
@@ -471,9 +479,10 @@ much worse fact than no join having been possible. See §2.
                 "field_size_at_build": 147,
                 // NULL in groups mode: there was no join, so there is no report on one.
                 // `matched` can legitimately be lower than `requested` — see §8.
-                "match_report": { "espn_field_size": 147, "requested": 151,
-                                  "matched": 139, "matched_decision": 0,
-                                  "matched_alias": 0, "matched_exact": 139,
+                // `requested` is the Kalshi field, odds_snapshot.field_size below.
+                "match_report": { "espn_field_size": 147, "requested": 150,
+                                  "matched": 146, "matched_decision": 6,
+                                  "matched_alias": 1, "matched_exact": 139,
                                   "absent": [ … ],       // reviewed and confirmed out
                                   "unresolved": [ … ],   // nobody has looked yet
                                   // normalised full names two athletes in THIS field
@@ -585,9 +594,10 @@ Measured on the Rocket Classic, 151 Kalshi names against 147 ESPN competitors:
 
 | outcome | count |
 |---|---|
-| `exact` | 139 |
-| left for review | 12 — of which **8** are formal-vs-familiar first names: Zachary/Zach Bauchou, Cameron/Cam Davis, Kris/Kristoffer Ventura, Nicolas/Nico Echavarria, Matthew/Matt McCarty, Benjamin/Ben James, Jordan L./Jordan Smith, Hao-Tong/Haotong Li |
-| genuinely absent | 4 — Daniel Brown, Taylor Moore, Brooks Koepka, Jason Day, all withdrawn before play |
+| matched by `exact` | 139 |
+| left open for review | 12 |
+| — of those, really in the field | 8, all formal-vs-familiar first names: Zachary/Zach Bauchou, Cameron/Cam Davis, Kris/Kristoffer Ventura, Nicolas/Nico Echavarria, Matthew/Matt McCarty, Benjamin/Ben James, Jordan L./Jordan Smith, Hao-Tong/Haotong Li |
+| — of those, genuinely absent | 4: Daniel Brown, Taylor Moore, Brooks Koepka, Jason Day, all withdrawn before play |
 
 A first-initial-plus-last-name rule binds those eight correctly, and it was measured
 collision-free inside that 147-player field. It used to be tier 4. It is not any more,
@@ -624,7 +634,10 @@ Both score nothing. Only one of them is a fact:
 An unresolved golfer is the build saying it does not know, out loud, by name. The
 `unresolved` list in `match_report` is that list, and the build also writes it to a
 `match-review.json` beside the result file with the unclaimed ESPN athletes and ranked
-suggestions, for somebody to settle and rebuild from.
+suggestions, for somebody to settle and rebuild from. What came back settled is in the
+file too — `sources.espn.match_decisions` for the reviewed bindings and absences,
+`sources.espn.aliases_applied` for the aliases that actually fired — so a page can say
+how a golfer was settled without the review file being anywhere near it.
 
 **A golfer left unresolved at build time is unscoreable for the life of that page.**
 They carry no `athlete_id`, so there is nothing for `resolveGolfer` to look up, and
@@ -687,10 +700,13 @@ number is lying about the rules.
 **Refresh honestly.** Show when the board was last updated. When ESPN fails, keep the
 last-known board and mark it stale rather than blanking or silently freezing.
 
-**Design the empty states.** Before the field is posted, after ESPN goes down, when a
-team's golfers have all been cut, when a logo is null. Every one of these happens in a
-normal week. What is *not* on that list any more is live odds: there is no such state,
-because there is no such fetch — the odds are simply there, dated.
+**Design the empty states.** A page built before the field was posted, after ESPN goes
+down, when a team's golfers have all been cut, when a logo is null. Every one of these
+happens in a normal week, and the first is half of all the pages this repo produces —
+it is a groups sheet, not a scoreboard with the numbers missing, and it should look
+finished rather than early (§2). What is *not* on that list any more is live odds:
+there is no such state, because there is no such fetch — the odds are simply there,
+dated.
 
 **Accessibility.** Position and score must not be conveyed by colour alone — a page
 read across a room is exactly where that fails. Support both colour schemes; the
@@ -704,12 +720,16 @@ reference honours `prefers-color-scheme`.
 - [ ] Contains `/*__COMPETITION_JSON__*/` inside that script tag
 - [ ] No CDN, no external module, no build step
 - [ ] **ESPN is the only host it ever requests** — no odds fetch, no relay, at all
-- [ ] Polls ESPN on `live.poll_interval_seconds`, with the pinned `event` id
-- [ ] Refuses a leaderboard whose event id is not the pinned one
-- [ ] Live total summed from `linescores`, never `score.displayValue`
+- [ ] Branches on `DATA.live` once: a `groups` page (`live: null`) starts no poll loop,
+      issues no request at all, and says so rather than looking like it is waiting
+- [ ] Polls ESPN on `live.poll_interval_seconds`, using `live.espn_leaderboard_url`
+- [ ] Refuses a leaderboard whose event id is not `live.espn_event_id`
+- [ ] Joins golfers to the board on `golfers[].espn.athlete_id` and nothing else — no
+      name matching anywhere in the page
+- [ ] Running total summed from `linescores`, never `score.displayValue`
 - [ ] Standings match `tests/fixtures/standings_golden.json`
 - [ ] Ties shown as ties; `decided_at` surfaced
-- [ ] Cut / WD / not-in-field golfers listed and visibly out
+- [ ] Cut / WD golfers and golfers with no athlete id listed and visibly out
 - [ ] Snapshot odds shown with capture time; exclusions shown with reasons
 - [ ] A rebuilt page shows `odds.current` as movement against `odds.raw`, and says the
       arrows are from a rebuild rather than a feed

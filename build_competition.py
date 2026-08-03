@@ -1214,8 +1214,10 @@ def save_aliases(path, aliases):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump({
-            "note": ("Kalshi golfer name -> ESPN displayName, for names the two-tier match "
-                     "cannot settle on its own. Learned by --update-aliases; safe to edit."),
+            "note": ("Kalshi golfer name -> ESPN displayName. This file IS one of the three "
+                     "tiers the build-time join uses, and the only one a person maintains. "
+                     "Learned by --update-aliases from decisions settled in a match review; "
+                     "safe to edit by hand."),
             "aliases": dict(sorted(aliases.items())),
         }, f, indent=2, ensure_ascii=False)
         f.write("\n")
