@@ -175,8 +175,11 @@ def index_players(players, matches=None):
     Build the lookup `compute` wants: every key a golfer might carry -> ESPN player.
 
     `matches` is the build-time Kalshi-name -> ESPN-player join from
-    espn_leaderboard.match_field, folded in so a golfer resolved by first-initial
-    still resolves here.
+    espn_leaderboard.match_field, folded in so a golfer the join settled by alias or
+    by review -- whose Kalshi name is not the ESPN display name -- still resolves
+    here. The scoreboard does not need this: the build writes an athlete id onto every
+    golfer it resolved and the page joins on that. This is the reference
+    implementation, and it is handed golfers straight out of a Kalshi field.
     """
     by_key = {}
     for p in players:

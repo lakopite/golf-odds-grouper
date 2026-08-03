@@ -191,14 +191,32 @@ def default_basename(result):
 
 
 def manifest(result, report):
+    """
+    What is in the zip, and -- the part worth getting right -- what the page does.
+
+    A groups page and a live page are different artifacts and the manifest travels with
+    them, so it says which one this is rather than describing the live page twice. A
+    manifest that promises live scoring on a page built before the field existed is the
+    kind of wrong that makes somebody wait all afternoon for a number to appear.
+    """
     k = result["sources"]["kalshi"]
-    e = result["sources"]["espn"]
     g = result["grouping"]
+    live = result.get("live")
+    scoring = ([f"live scoring    {live['espn_leaderboard_url']}"] if live else
+               ["live scoring    none -- built before ESPN published a field"])
+    behaviour = ([
+        "ESPN is the only thing it fetches, and it fetches it for the scores.",
+    ] if live else [
+        "It fetches NOTHING. The tournament had not started when this was built,",
+        "so ESPN had published no field and there is nothing to score against.",
+        "Rebuild once play begins for a page that ranks.",
+    ])
     return "\n".join([
         f"{result['league']['league_name']} -- {result['tournament']['name']}",
         f"{k['market_label']} ({k['odds_type']}), priced off the {k['price_mode']}",
         "",
         f"competition_id  {result['competition_id']}",
+        f"build mode      {result.get('build_mode', 'live')}",
         f"built           {result['generated_at']}",
         f"tool            {result['generator']['tool']} @ {result['generator']['git_commit']}",
         f"seed            {result['generator']['seed']}",
@@ -210,10 +228,10 @@ def manifest(result, report):
         f"odds source     {k['markets_endpoint']}",
         f"                captured {result['odds_snapshot']['captured_at']}, "
         f"book sums to {result['odds_snapshot']['raw_book_sum']}",
-        f"live scoring    {e['leaderboard_endpoint']}",
+        *scoring,
         "",
         "index.html is self-contained: open it from disk, no server needed.",
-        "ESPN is the only thing it fetches, and it fetches it for the scores.",
+        *behaviour,
         "The odds above are baked in as of the capture time -- Kalshi's API",
         "allowlists request origins and returns 403 to a browser, so no page",
         "can read them. Rebuild with --refresh-odds for a newer reading.",

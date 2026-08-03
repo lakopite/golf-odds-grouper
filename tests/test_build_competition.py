@@ -128,8 +128,50 @@ def test_auto_exclusion_off_leaves_the_field_alone():
 # assemble()
 # ---------------------------------------------------------------------------
 
-def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
-    """Run the whole assembly with a synthetic field and no network."""
+def groups_stage():
+    """
+    The ESPN half of a build made before the field existed.
+
+    This is what `espn_stage` returns in groups mode, and it is mostly nulls on purpose:
+    there was no join, so there is no join to report on. See build_competition's module
+    docstring.
+    """
+    return {"mode": "groups", "meta": None, "players": [], "matches": {}, "report": None,
+            "decisions": {}, "error": None, "review": None}
+
+
+def live_stage(names, players=None, matches=None, report=None, decisions=None):
+    """
+    The ESPN half of a build made once the field was published.
+
+    `matches` is keyed by Kalshi name and shaped as espn_leaderboard.match_field returns
+    it. Anything not in it and not named in `report["absent"]` comes out `unresolved`.
+    """
+    players = players if players is not None else [
+        {"athlete_id": f"a{i:02d}", "name": name, "headshot": None, "country": None,
+         "position": str(i + 1), "sort_order": i + 1}
+        for i, name in enumerate(names)]
+    if matches is None:
+        by_name = {p["name"]: p for p in players}
+        matches = {n: {"player": by_name[n], "match": "exact"} for n in names if n in by_name}
+    report = report if report is not None else {
+        "espn_field_size": len(players), "requested": len(names), "matched": len(matches),
+        "matched_decision": 0, "matched_alias": 0, "matched_exact": len(matches),
+        "absent": [], "unresolved": [n for n in names if n not in matches],
+        "ambiguous_names": [], "problems": [],
+    }
+    return {"mode": "live", "meta": {"state": "in", "course": "Sedgefield", "par": 70},
+            "players": players, "matches": matches, "report": report,
+            "decisions": decisions or {}, "error": None, "review": None}
+
+
+def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None, espn=None):
+    """
+    Run the whole assembly with a synthetic field and no network.
+
+    Groups mode by default, because that is the first build of any competition. Pass
+    `espn=live_stage([...])` for the Thursday one.
+    """
     teams = [{"team_id": f"t{i}", "team_name": f"Team {i}", "player_name": f"P{i}",
               "team_logo": None} for i in range(n_teams)]
 
@@ -158,12 +200,12 @@ def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
         market_label="Outright Winner", exclusive=True, event_ticker="KXPGATOUR-WYC26",
         tournament_name="Wyndham Championship", season=2026,
         espn_event={"event_id": "401811961", "name": "Wyndham Championship", "state": "pre"},
-        espn_meta=None, matches={}, match_report=None, espn_field_size=0,
+        espn=espn if espn is not None else groups_stage(),
         field=raw, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity={"golfers": n_golfers}, raw_sum=sum(g["odds"] for g in raw),
         auto_exclude=True,
         tick_structures=["tapered_deci_cent"], report=report, groups=groups,
-        order=order, seed=7, aliases={},
+        order=order, seed=7,
     )
 
 
