@@ -107,7 +107,7 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 
 | State | What ESPN returns | What the page shows |
 |---|---|---|
-| Before the tournament | `state: "pre"`, **zero competitors** | rosters and odds; "not started" |
+| Before the tournament | `state: "pre"`, **zero competitors** | every roster, with odds at creation; "not started"; **no positions and no ranking** |
 | In progress | `state: "in"`, positions live | the full board |
 | After the cut | 74 of 147 have position `"-"` | cut golfers visibly out, still listed |
 | Withdrawn / DQ | `status.type` `STATUS_WD`/`STATUS_DQ`, no position | same treatment as cut, labelled |
@@ -117,6 +117,15 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 The pre-tournament case is not an edge case. Groups are drawn Wednesday night and the
 page exists from that moment; for its first ~12 hours ESPN publishes **no field at
 all**. It must be a designed state, not an empty div.
+
+Everything the pool cares about at that point is already decided and already in the
+file: who holds whom, what each golfer was worth, and that the draw came out even. Show
+all of it. What must **not** appear is a ranking — running the standings rule over an
+empty leaderboard puts every golfer in tier 2, which orders the teams by roster size and
+presents it as a leaderboard. Positions read `—` until there are positions. The same
+applies whenever the board is empty for any other reason: ESPN unreachable, or a payload
+for the wrong tournament (§3). The rosters and the odds stay; the positions do not
+appear.
 
 ---
 
@@ -155,10 +164,29 @@ unavailable and why. Design that sentence; it is the state most users will see.
 If a relay *is* configured, the template carries `{url}` where the encoded Kalshi URL
 goes, and live prices become available. Present them as **movement against the
 snapshot** — an arrow and a delta — rather than as a second column of raw numbers.
-"Cameron Young is shorter than when you drafted him" is the interesting fact.
+"Cameron Young is shorter than when you drafted him" is the interesting fact. A raw
+level beside `grouping_weight` is actively misleading: one is de-vigged and the other
+is not, so an unmoved golfer reads as a jump.
 
 Setting a relay up is ten lines of Cloudflare Worker, and the result file has a slot
 for it, but nothing in the page may depend on it existing.
+
+### The other way prices move
+
+`build_competition.py --from-result <file> --refresh-odds` re-reads Kalshi server-side
+and bakes the result in: `odds_snapshot.refreshed` describes the re-read, and every
+golfer gains `odds.current`. It needs no relay and no network at load, because it is not
+a feed — it is a second snapshot, taken when somebody rebuilt and re-sent the page.
+
+Show it as movement against `odds.raw` (the price the groups were drawn on — **not**
+`kalshi.ask`, which is a different number on any price mode but the default), and say
+what it is: the arrows will not change again until the next rebuild. `refreshed` is
+`null` on a page that was never rebuilt, and `odds.current` is then `null` throughout.
+
+`refreshed.priced_since_the_draw` names golfers who were added to the market after the
+draw and are therefore in nobody's group; `refreshed.no_longer_priced` names drawn
+golfers whose market is gone, which usually means a withdrawal. Both are worth
+surfacing — the pool will ask.
 
 ---
 
@@ -290,10 +318,16 @@ for a complete one.
 
 ```jsonc
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "competition_id": "uuid5, stable for this league+event+market",
   "generated_at": "2026-08-03T20:41:00+00:00",
   "generator": { "tool": "...", "git_commit": "e581c23", "seed": 42 },
+
+  // null on a first build. On a rebuild (--from-result), what it was rebuilt from and
+  // how: mode is "refresh" | "refresh-odds" | "regroup". A file carrying Wednesday's
+  // odds and Sunday's leaderboard says so here.
+  "rebuilt_from": { "source_file": "build/result.json", "mode": "refresh",
+                    "source_generated_at": "…", "first_built_at": "…", "rebuild_count": 2 },
 
   "league":   { "league_id": "uuid", "league_name": "Sunday Fivesome",
                 "league_slug": "sunday-fivesome", "team_count": 5 },
@@ -315,15 +349,22 @@ for a complete one.
     "excluded": false,
     "kalshi": { "ticker": "KXPGATOUR-WYC26-CAME", "bid": 0.081, "ask": 0.09, "spread": 0.009 },
     "odds": {
-      "raw": 0.09,               // as quoted
+      "raw": 0.09,               // as quoted, when the groups were drawn
       "devigged": 0.0688,        // ÷ observed book sum, whole field
-      "grouping_weight": 0.0772  // what the partitioner saw; null if excluded.
+      "grouping_weight": 0.0772, // what the partitioner saw; null if excluded.
                                  // Sums to 1.0 across every grouped golfer.
+      "current": 0.095           // the same market at odds_snapshot.refreshed.at.
+                                 // null unless the build re-read it (--refresh-odds).
+                                 // Never feeds the grouping. Compare against `raw`.
     },
-    "espn": {                    // null / "deferred" when the field was not yet posted
+    "espn": {                    // athlete_id may be null; see §8
       "athlete_id": "4425906", "display_name": "Cameron Young",
       "headshot": "https://a.espncdn.com/…", "country": "USA",
-      "match": "exact | initial_last | alias | unresolved | deferred"
+      "match": "exact | initial_last | alias | unresolved | deferred",
+      "source": "field | history | null",   // where the identity came from
+      "from_event": { "event_id": "401811960", "name": "Rocket Classic", "end": "…" },
+      "in_field": true           // in THIS week's ESPN field. null while it is
+                                 // unpublished — unknown is not the same as no.
     }
   }],
 
@@ -339,12 +380,23 @@ for a complete one.
                 "browser_reachable": false, "browser_note": "…403…" },
     "espn":   { "event_id": "401811961", "leaderboard_endpoint": "https://…",
                 "browser_reachable": true,
-                "field_available_at_build": false, "match_report": { … } }
+                "field_available_at_build": false,
+                "identities_from_history": 146,        // see §8
+                "match_report": { "matched": 146, "requested": 150,
+                                  "from_field": 0, "from_history": 146,
+                                  "not_in_field": [], "unresolved": [ … ],
+                                  "history": { "scanned": [ … ], "athletes": 358,
+                                               "unscanned_events": 30 } } }
   },
 
   "odds_snapshot": {
-    "captured_at": "…", "price_mode": "ask", "field_size": 150,
+    "captured_at": "…",          // when the groups were drawn. Never moves on a rebuild.
+    "price_mode": "ask", "field_size": 150,
     "raw_book_sum": 1.166, "liquidity": { … },
+    // null unless a rebuild re-read the market. See §4.
+    "refreshed": { "at": "…", "price_mode": "ask", "field_size": 151,
+                   "raw_book_sum": 1.171, "matched": 149,
+                   "no_longer_priced": ["…"], "priced_since_the_draw": ["…"] },
     "normalization": { "basis": "probability | share_of_n_slots", "note": "…" },
     "excluded": [{ "golfer_name": "…", "reason": "named | over_fair_share",
                    "raw_odds": 0.21, "devigged_odds": 0.18 }],
@@ -405,6 +457,34 @@ Measured on a real field, 151 Kalshi names against 147 ESPN competitors:
 Collisions inside the ESPN field for tier 2: **zero**. When a key *is* ambiguous it is
 dropped rather than guessed, and the golfer falls through to unresolved — which is
 tier 2 of the rank key, and a legitimate display state ("not in the field").
+
+### Identity before the tournament starts
+
+The build does not have to leave `athlete_id` null just because this week's field is
+empty. Those golfers played last week, so the build walks back through the season's
+finished tournaments and matches against the union of their fields — the same three
+tiers, over a wider set of athletes. Measured on the 2026 Wyndham with nothing
+published: **146 of 150** identified from four earlier leaderboards, in 3.5 seconds.
+
+Two things follow, and the page depends on both:
+
+1. **What comes back is identity, never scoring.** An athlete id, a display name, a
+   headshot, a country. Position, `sortOrder` and to-par describe a tournament that is
+   over, and the standings rule ranks on exactly those fields — a golfer who won in July
+   would show T1 on Thursday morning. `golfers[].espn.source` says `"history"` when this
+   is where the identity came from, and `from_event` names the tournament.
+
+2. **A baked `athlete_id` is a better runtime key than a name.** `lib.js` tries it first,
+   so a pre-tournament build now hands the page an exact join instead of re-deriving one
+   by name every poll. A golfer who does not tee off simply fails that lookup and falls
+   through the name tiers to unresolved, which is correct.
+
+Tier 2 needs one extra guard over a season's worth of athletes: a first-initial key that
+is unique inside one field need not be unique across five hundred golfers. The union
+index drops any key two athletes share, and the scan keeps widening the union while any
+match still rests on tier 2 — so an ambiguous name comes back unresolved rather than
+bound to the wrong person. Measured four tournaments back from the 2026 Wyndham: one
+refused key, `c|young`, holding both Cameron Young and Carson Young.
 
 ---
 
@@ -482,6 +562,9 @@ reference honours `prefers-color-scheme`.
 - [ ] Cut / WD / not-in-field golfers listed and visibly out
 - [ ] Snapshot odds shown with capture time; exclusions shown with reasons
 - [ ] Live-odds-unavailable is a designed state, not a blank
+- [ ] A rebuilt page shows `odds.current` as movement against `odds.raw`, and says the
+      arrows are from a rebuild rather than a feed
 - [ ] Handles `pre` (zero competitors), ESPN down, null logos
+- [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
 - [ ] Readable on a phone; works in light and dark
 - [ ] `python -m pytest tests/test_frontend_parity.py tests/test_frontend_render.py` passes

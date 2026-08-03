@@ -102,5 +102,6 @@ def league_file(tmp_path):
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "live: hits the real Kalshi API; runs only when KALSHI_LIVE=1"
+        "markers",
+        "live: hits a real API; runs only when KALSHI_LIVE=1 / ESPN_LIVE=1",
     )

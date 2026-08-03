@@ -44,11 +44,34 @@ function resolvePlayer(golfer) {
  * static page cannot read live odds unless the result file names a relay. Without
  * one this reports why and the page shows the snapshot, which is always present and
  * always correct as of the time it states.
+ *
+ * There is a second way for prices to move without a relay: somebody re-ran the build
+ * with --refresh-odds and re-sent the page. That re-read is baked in the same way the
+ * original snapshot is, so it needs no network at all -- and it is compared against
+ * the price the groups were DRAWN on rather than against the raw ask, because those
+ * differ on any price mode but the default.
  * ------------------------------------------------------------------ */
+
+function bakedOdds() {
+  var refreshed = DATA.odds_snapshot.refreshed;
+  if (!refreshed) return null;
+  var byId = new Map();
+  DATA.golfers.forEach(function (g) {
+    if (g.golfer_id && g.odds.current !== null && g.odds.current !== undefined) {
+      byId.set(g.golfer_id, { ask: g.odds.current });
+    }
+  });
+  return {
+    ok: true, byId: byId, sum: refreshed.raw_book_sum,
+    at: new Date(refreshed.at), basis: 'drawn_price', source: 'rebuild'
+  };
+}
 
 function fetchLiveOdds() {
   var template = DATA.live.kalshi_proxy_url_template;
-  if (!template) return Promise.resolve({ ok: false, reason: 'no-proxy' });
+  if (!template) {
+    return Promise.resolve(bakedOdds() || { ok: false, reason: 'no-proxy' });
+  }
   var url = template.replace('{url}', encodeURIComponent(DATA.live.kalshi_markets_url));
   return fetch(url, { headers: { Accept: 'application/json' } })
     .then(function (r) {
@@ -68,9 +91,14 @@ function fetchLiveOdds() {
         var id = (m.custom_strike || {}).golf_competitor;
         if (id) byId.set(id, { ask: ask, bid: parseFloat(m.yes_bid_dollars || '0') });
       });
-      return { ok: true, byId: byId, sum: sum, at: new Date() };
+      return { ok: true, byId: byId, sum: sum, at: new Date(), basis: 'kalshi_ask',
+               source: 'relay' };
     })
-    .catch(function (err) { return { ok: false, reason: String(err.message || err) }; });
+    .catch(function (err) {
+      // A relay that is down does not make a baked re-read wrong; it just makes it
+      // the freshest thing left.
+      return bakedOdds() || { ok: false, reason: String(err.message || err) };
+    });
 }
 
 /* ------------------------------------------------------------------ *
@@ -79,13 +107,98 @@ function fetchLiveOdds() {
 
 function pct(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
 
+/* Movement, not a second column of levels. The number beside it is what the golfer was
+ * worth when the groups were drawn; repeating today's price next to it reads as a jump
+ * even when nothing has moved, because one is de-vigged and the other is not. What is
+ * actually interesting is "shorter than when you drafted him", in points of the same
+ * price. Under half a point is not a move worth an arrow. */
 function liveCell(golfer) {
   if (!STATE.live || !STATE.live.ok) return '';
   var hit = STATE.live.byId.get(golfer.golfer_id);
   if (!hit) return '';
-  var delta = hit.ask - (golfer.kalshi.ask || 0);
-  var arrow = Math.abs(delta) < 1e-9 ? '→' : (delta > 0 ? '↑' : '↓');
-  return (hit.ask * 100).toFixed(1) + '% ' + arrow;
+  var base = STATE.live.basis === 'drawn_price' ? golfer.odds.raw : (golfer.kalshi.ask || 0);
+  var delta = (hit.ask - (base || 0)) * 100;
+  if (Math.abs(delta) < 0.05) return '→';
+  return (delta > 0 ? '↑ +' : '↓ −') + Math.abs(delta).toFixed(1);
+}
+
+/* One golfer's row. `player` is null before the tournament starts and for anyone who
+ * never teed off, and the row still has to say who they are and what they were worth --
+ * a roster does not shrink because the leaderboard has not opened.
+ *
+ * Those two nulls are different, which is why the "out" marker is conditioned on the
+ * field existing: once it does, a golfer with no player is a golfer who is not playing
+ * and belongs greyed out. Before it does, nobody is out of anything. */
+function golferRow(golfer, player) {
+  var started = STATE.players.length > 0;
+  var tr = document.createElement('tr');
+  var madeCut = !!(player && player.positionNumber !== null && player.positionNumber !== undefined);
+  if (started && !madeCut) tr.className = 'out';
+  tr.append(el('td', 'gpos', player ? (player.position || player.statusShort || 'CUT')
+                                    : (started ? 'n/a' : '—')));
+  tr.append(el('td', 'gname', golfer.name));
+  tr.append(el('td', 'gscore', player ? GolfPool.fmtPar(player.toPar) : '—'));
+  tr.append(el('td', 'gthru', player ? String(player.thru || player.statusShort || '') : ''));
+  tr.append(el('td', 'godds', pct(golfer.odds.grouping_weight)));
+  tr.append(el('td', 'glive', liveCell(golfer)));
+  return tr;
+}
+
+/* The card. Built from a view rather than from a standings row, because the page has
+ * to draw the same card in two situations: ranked, once ESPN has a leaderboard, and
+ * unranked, before the first tee time. Only the header and the note differ. */
+function teamCard(view) {
+  var card = el('article', 'team' + (view.leader ? ' leader' : ''));
+
+  var head = el('header', 'team-head');
+  head.append(el('span', 'pos', view.position));
+  if (view.team.team_logo) {
+    var img = document.createElement('img');
+    img.className = 'logo';
+    img.src = view.team.team_logo;
+    img.alt = '';
+    head.append(img);
+  }
+  var names = el('div', 'names');
+  names.append(el('strong', null, view.team.team_name));
+  names.append(el('span', 'muted', view.team.player_name));
+  head.append(names);
+
+  var stat = el('div', 'stat');
+  stat.append(el('span', 'big', view.statValue));
+  stat.append(el('span', 'muted small', view.statLabel));
+  head.append(stat);
+  card.append(head);
+  card.append(el('p', 'muted small', view.bits.join(' · ')));
+
+  var table = el('table', 'golfers');
+  var tbody = document.createElement('tbody');
+  view.golfers.forEach(function (d) { tbody.append(golferRow(d.golfer, d.player)); });
+  table.append(tbody);
+  card.append(table);
+  return card;
+}
+
+/* Before the first tee time ESPN publishes no competitors at all, so there is nothing
+ * to rank on -- but everything else about the pool is already decided and is worth
+ * showing: who holds whom, what each golfer was worth when the groups were drawn, and
+ * that the draw came out even. Ranking anyway would order teams by roster size and
+ * present it as a leaderboard, which is worse than saying "not started". */
+function renderRosters(host) {
+  DATA.teams.forEach(function (team) {
+    var golfers = (GOLFERS_BY_TEAM.get(team.team_id) || []).slice()
+      .sort(function (a, b) { return (b.odds.grouping_weight || 0) - (a.odds.grouping_weight || 0); });
+    host.append(teamCard({
+      team: team,
+      position: '—',
+      leader: false,
+      statValue: pct(team.total_odds),
+      statLabel: 'odds at creation',
+      bits: [team.golfer_count + ' golfers', 'group ' + (team.group_index + 1) + ' of '
+             + DATA.league.team_count],
+      golfers: golfers.map(function (g) { return { golfer: g, player: null }; })
+    }));
+  });
 }
 
 function renderHeader() {
@@ -100,64 +213,42 @@ function renderHeader() {
   $('#built').textContent = 'built ' + DATA.generated_at + ' · ' + DATA.grouping.summary;
 }
 
+function notStarted() {
+  if (STATE.error) return 'ESPN unavailable: ' + STATE.error + '. Groups and odds below are '
+    + 'baked into this page and are unaffected.';
+  var start = DATA.tournament.start ? new Date(DATA.tournament.start).toLocaleString() : null;
+  return 'Not started' + (start ? ' — first round ' + start : '') + '. ESPN publishes no '
+    + 'competitors until play begins, so there are no positions yet. The groups below are '
+    + 'final and were drawn on the odds shown.';
+}
+
 function renderStandings() {
   var host = $('#standings');
   host.textContent = '';
 
   if (!STATE.players.length) {
-    host.append(el('p', 'muted', STATE.error
-      ? 'ESPN unavailable: ' + STATE.error
-      : 'The field is not posted yet. ESPN publishes no competitors until play starts.'));
+    host.append(el('p', 'muted', notStarted()));
+    renderRosters(host);
     return;
   }
 
   GolfPool.computeStandings(DATA.teams, GOLFERS_BY_TEAM, resolvePlayer).forEach(function (row) {
-    var card = el('article', 'team' + (row.rank === 1 ? ' leader' : ''));
-
-    var head = el('header', 'team-head');
-    head.append(el('span', 'pos', row.position));
-    if (row.team.team_logo) {
-      var img = document.createElement('img');
-      img.className = 'logo';
-      img.src = row.team.team_logo;
-      img.alt = '';
-      head.append(img);
-    }
-    var names = el('div', 'names');
-    names.append(el('strong', null, row.team.team_name));
-    names.append(el('span', 'muted', row.team.player_name));
-    head.append(names);
-
-    var stat = el('div', 'stat');
-    stat.append(el('span', 'big', row.best && row.best.player
-      ? (row.best.player.position || row.best.player.statusShort || 'CUT') : '—'));
-    stat.append(el('span', 'muted small', row.best ? row.best.golfer.name : 'no golfers'));
-    head.append(stat);
-    card.append(head);
-
     var bits = [row.counting + '/' + row.roster + ' still in'];
     if (row.toPar !== null) bits.push('aggregate ' + GolfPool.fmtPar(row.toPar));
     if (row.decidedAt) bits.push('separated on golfer #' + row.decidedAt);
     if (row.tied) bits.push('tied');
     bits.push('odds at creation ' + (row.team.total_odds * 100).toFixed(2) + '%');
-    card.append(el('p', 'muted small', bits.join(' · ')));
 
-    var table = el('table', 'golfers');
-    var tbody = document.createElement('tbody');
-    row.golfers.forEach(function (d) {
-      var tr = document.createElement('tr');
-      if (!d.madeCut) tr.className = 'out';
-      tr.append(el('td', 'gpos', d.player ? (d.player.position || d.player.statusShort || 'CUT') : 'n/a'));
-      tr.append(el('td', 'gname', d.golfer.name));
-      tr.append(el('td', 'gscore', d.player ? GolfPool.fmtPar(d.player.toPar) : '—'));
-      tr.append(el('td', 'gthru', d.player ? String(d.player.thru || d.player.statusShort || '') : ''));
-      tr.append(el('td', 'godds', pct(d.golfer.odds.grouping_weight)));
-      tr.append(el('td', 'glive', liveCell(d.golfer)));
-      tbody.append(tr);
-    });
-    table.append(tbody);
-    card.append(table);
-    host.append(card);
+    host.append(teamCard({
+      team: row.team,
+      position: row.position,
+      leader: row.rank === 1,
+      statValue: row.best && row.best.player
+        ? (row.best.player.position || row.best.player.statusShort || 'CUT') : '—',
+      statLabel: row.best ? row.best.golfer.name : 'no golfers',
+      bits: bits,
+      golfers: row.golfers
+    }));
   });
 }
 
@@ -171,7 +262,20 @@ function renderOdds() {
     }).join(', ') + '.');
   }
   if (!STATE.live) parts.push('Live odds: checking…');
-  else if (STATE.live.ok) {
+  else if (STATE.live.ok && STATE.live.source === 'rebuild') {
+    // Not a feed. Somebody re-ran the build against Kalshi and re-sent this page, and
+    // that re-read is baked in exactly as the snapshot is. Saying "live" would promise
+    // a number that will not change until the next rebuild.
+    parts.push('Odds re-read ' + STATE.live.at.toLocaleString() + ' when this page was '
+      + 'rebuilt, book then summing to ' + STATE.live.sum.toFixed(3)
+      + '. The arrows are movement since the draw; they will not change again until the '
+      + 'next rebuild.');
+    if (snap.refreshed && snap.refreshed.priced_since_the_draw.length) {
+      parts.push(snap.refreshed.priced_since_the_draw.length + ' golfer(s) were added to the '
+        + 'market after the draw and are in nobody’s group: '
+        + snap.refreshed.priced_since_the_draw.join(', ') + '.');
+    }
+  } else if (STATE.live.ok) {
     parts.push('Live odds updated ' + STATE.live.at.toLocaleTimeString()
       + ', book now sums to ' + STATE.live.sum.toFixed(3) + '.');
   } else if (STATE.live.reason === 'no-proxy') {

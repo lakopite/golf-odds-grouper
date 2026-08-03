@@ -60,16 +60,41 @@ playing rather than a golfer we failed to find.
 
 Tier 3 is a manual alias, which always wins. That is the escape hatch for the day a
 field contains two J. Smiths.
+
+WHEN THERE IS NO FIELD TO JOIN AGAINST
+--------------------------------------
+A `pre` event returns zero competitors, so on Wednesday night there is nothing to
+match. That does not mean the golfers are unknown: a Kalshi field is drawn from the
+same tour that played last week, so almost every name in it appears in an EARLIER
+event's leaderboard, and those payloads are up and finished. `match_history()` walks
+back through the season and joins against the union of the fields it finds.
+
+Measured 2026-08-03, the 150-golfer Kalshi Wyndham field against an ESPN event that
+had published nothing at all:
+
+    1 earlier tournament    147 athletes    123 of 150 resolved
+    2                       183            130
+    3                       282            143
+    4                       358            146   <- the default
+    12                      ~900           146   (no further gain; 3.5s -> 6.5s)
+
+The four it never resolves are golfers with no PGA Tour start this season -- they are
+absent from ESPN, not missed by the matcher. The whole scan costs about 3.5 seconds.
+
+What comes back from an earlier tournament is an IDENTITY -- athlete id, display
+name, headshot, country -- and deliberately nothing else. See identity().
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 LEADERBOARD_URL = "https://site.web.api.espn.com/apis/site/v2/sports/golf/leaderboard"
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/golf/{league}/scoreboard"
@@ -150,6 +175,56 @@ def season_events(season, league=DEFAULT_LEAGUE):
             "state": ((e.get("status") or {}).get("type") or {}).get("state"),
         })
     return out
+
+
+def season_calendar(season, league=DEFAULT_LEAGUE, on=None):
+    """
+    Every event in a season -- id, name, start, end -- for 12 KB instead of 35 MB.
+
+    `scoreboard?dates=<YYYY>` embeds every competitor of every event that has already
+    been played: 35 MB in August 2026, and it grows all season. The same endpoint asked
+    for ONE DAY returns only that day's events -- but `leagues[0].calendar` still lists
+    the WHOLE season regardless. Measured 2026-08-03: `dates=20250701` returned all 49
+    events of the 2025 season in a 12 KB response.
+
+    The calendar carries no status, which is why season_events() still exists: resolving
+    a tournament by name wants the state as well. It carries dates, and dates are all
+    that is needed to find the tournaments that came BEFORE this one.
+
+    `on` is the day to anchor the request on -- any date inside the season. The default
+    is 1 July, which is mid-season on every golf calendar and cheap on most of them; the
+    response is larger on a day with a tournament in it, and the calendar is identical
+    either way.
+    """
+    data = _get(SCOREBOARD_URL.format(league=league), dates=str(on or f"{season}0701"))
+    rows = []
+    for e in ((data.get("leagues") or [{}])[0].get("calendar") or []):
+        if isinstance(e, dict) and e.get("id"):
+            rows.append({
+                "event_id": str(e["id"]),
+                "name": e.get("label"),
+                "start": e.get("startDate"),
+                "end": e.get("endDate"),
+            })
+    rows.sort(key=lambda e: e.get("start") or "")
+    return rows
+
+
+def finished_before(calendar, cutoff=None, exclude_ids=()):
+    """
+    The events that had finished by `cutoff`, newest first.
+
+    Compared on the DATE alone. ESPN writes calendar times as `2026-07-30T07:00Z` and
+    the rest of this project writes `2026-08-03T21:00:00+00:00`; both truncate to the
+    same ten characters, and tournaments are days apart, so the day is the only part of
+    the comparison that has ever meant anything.
+    """
+    cutoff = (cutoff or datetime.now(timezone.utc).isoformat())[:10]
+    exclude = {str(i) for i in exclude_ids}
+    done = [e for e in calendar
+            if e.get("end") and e["end"][:10] < cutoff and e["event_id"] not in exclude]
+    done.sort(key=lambda e: e["end"], reverse=True)
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -459,8 +534,220 @@ def match_field(names, players, aliases=None):
 
 
 # ---------------------------------------------------------------------------
+# The join when this week's field does not exist yet
+# ---------------------------------------------------------------------------
+
+# What survives from an earlier tournament. Everything else a parsed player carries --
+# position, sortOrder, to_par, thru, rounds, status -- describes a week that is over.
+IDENTITY_FIELDS = ("athlete_id", "name", "short_name", "headshot", "flag", "country", "amateur")
+
+
+def identity(player, event=None):
+    """
+    The part of an ESPN player that is the PERSON rather than the week.
+
+    This is the whole safety argument for matching against an earlier tournament. A
+    player object pulled out of last month's leaderboard carries last month's position,
+    to-par and sortOrder, and the standings rule ranks on exactly those fields -- so
+    handing one to the scoreboard would show a golfer who won in July sitting at T1 on
+    Thursday morning of a tournament that has not started. Identity is stable and
+    scoring is not, so the scoring fields are dropped here rather than carried onward
+    and hoped about.
+
+    `event` is stamped on so the result file can say which tournament answered.
+    """
+    out = {k: player.get(k) for k in IDENTITY_FIELDS}
+    out["from_event"] = ({"event_id": event.get("event_id"), "name": event.get("name"),
+                          "end": event.get("end")} if event else None)
+    return out
+
+
+def match_history(names, season, league=DEFAULT_LEAGUE, aliases=None, max_events=4,
+                  cutoff=None, exclude_ids=(), calendar=None, fetch=None, log=None):
+    """
+    Resolve golfer names against the season's EARLIER tournaments.
+
+    Walks back from `cutoff`, newest first, accumulating a union of every athlete it
+    sees and re-running the two-tier match over that union after each event. Stops when
+    every name has an exact match, or after `max_events` leaderboards -- a first-initial
+    match keeps the scan going, because widening the union is the only thing that can
+    prove that match wrong.
+
+    Matching over the union rather than event by event is what keeps tier 2 honest. A
+    first-initial-and-last-name key is measured collision-free inside ONE field, but a
+    season is five hundred golfers and that guarantee does not survive the widening.
+    build_index() drops a key the moment two athletes share it, so a name that is
+    ambiguous anywhere in the scanned history comes back unresolved instead of bound to
+    a coin flip -- and because the whole union is re-matched each round, a name resolved
+    early is re-checked against everything found later.
+
+    It is not hypothetical. Four tournaments back from the 2026 Wyndham the union holds
+    both Cameron Young and Carson Young, so `c|young` is refused. Cameron Young was
+    already resolved on tier 1, so nothing was lost -- but a source writing "Cam Young"
+    would come back unresolved rather than silently bound to Carson.
+
+    Returns (matches, report). Each match carries the tier that found it, the identity,
+    and the event that answered.
+    """
+    fetch = fetch or fetch_leaderboard
+    pending = list(names)
+    report = {
+        "requested": len(pending),
+        "matched": 0,
+        "unresolved": list(pending),
+        "scanned": [],
+        "athletes": 0,
+        "ambiguous_keys": [],
+        "events_available": 0,
+        "unscanned_events": 0,
+    }
+    if not pending or max_events <= 0:
+        return {}, report
+
+    calendar = season_calendar(season, league) if calendar is None else calendar
+    earlier = finished_before(calendar, cutoff=cutoff, exclude_ids=exclude_ids)
+    report["events_available"] = len(earlier)
+
+    seen, union, matches, sub = set(), [], {}, None
+    for event in earlier[:max_events]:
+        try:
+            _, players = parse_leaderboard(fetch(event["event_id"], league))
+        except Exception as exc:                       # noqa: BLE001 -- reported, not fatal
+            if log:
+                log(f"!! could not read {event['name']} ({event['event_id']}): {exc}")
+            report["scanned"].append({**event, "field_size": None, "error": str(exc)})
+            continue
+
+        fresh = 0
+        for p in players:
+            if p.get("athlete_id") and p["athlete_id"] not in seen:
+                seen.add(p["athlete_id"])
+                union.append(identity(p, event))
+                fresh += 1
+        report["scanned"].append({**event, "field_size": len(players), "new_athletes": fresh})
+
+        matches, sub = match_field(pending, union, aliases)
+        if log:
+            log(f"   {event['name']}: {len(players)} played, {len(sub['unresolved'])} "
+                f"of {len(pending)} still unmatched")
+        # Stopping the moment everything is matched would defeat the ambiguity check for
+        # exactly the matches that need it: a tier-2 key that is unique in one field can
+        # stop being unique two tournaments back, and the run would already have stopped
+        # and taken the guess. So an all-exact answer ends the scan, and an answer
+        # leaning on a first-initial key keeps widening the union that could refute it.
+        if not sub["unresolved"] and not any(h["match"] == "initial_last"
+                                             for h in matches.values()):
+            break
+
+    report["athletes"] = len(union)
+    if sub:
+        report["matched"] = len(matches)
+        report["unresolved"] = sub["unresolved"]
+        report["ambiguous_keys"] = sub["ambiguous_keys"]
+    # How much history was left on the table. With names still unresolved, this is the
+    # difference between "nobody else has played this season" and "look further back".
+    report["unscanned_events"] = max(0, len(earlier) - len(report["scanned"]))
+    return {name: {**hit, "source": "history", "event": hit["player"]["from_event"]}
+            for name, hit in matches.items()}, report
+
+
+def match_field_and_history(names, players, season, league=DEFAULT_LEAGUE, aliases=None,
+                            max_events=4, cutoff=None, exclude_ids=(), calendar=None,
+                            fetch=None, log=None):
+    """
+    The whole join, in the order it should be attempted: this week's field first, the
+    season's earlier tournaments for whoever is left.
+
+    Both halves are worth keeping apart in the report. A name this week's field cannot
+    answer for means the golfer is not playing -- they withdrew -- and that is a fact
+    the pool wants stated. A name resolved out of history is an identity with no
+    scoring attached, which is exactly what a build run before the first tee time can
+    honestly know.
+    """
+    matches, report = match_field(names, players or [], aliases)
+    for hit in matches.values():
+        hit["source"], hit["event"] = "field", None
+
+    report["from_field"] = len(matches)
+    report["from_history"] = 0
+    # Only meaningful once a field exists: before that, nobody is "not in" it.
+    report["not_in_field"] = list(report["unresolved"]) if players else []
+    report["history"] = None
+
+    if report["unresolved"] and max_events > 0:
+        found, history = match_history(
+            report["unresolved"], season, league, aliases=aliases, max_events=max_events,
+            cutoff=cutoff, exclude_ids=exclude_ids, calendar=calendar, fetch=fetch, log=log)
+        matches.update(found)
+        report["history"] = history
+        report["from_history"] = len(found)
+        report["unresolved"] = history["unresolved"]
+
+    counts = {"alias": 0, "exact": 0, "initial_last": 0}
+    for hit in matches.values():
+        counts[hit["match"]] = counts.get(hit["match"], 0) + 1
+    report["matched"] = len(matches)
+    report.update({f"matched_{k}": v for k, v in counts.items()})
+    return matches, report
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def read_names(path):
+    """
+    Golfer names out of whatever file is to hand.
+
+    A result file from build_competition.py, a Kalshi odds file from kalshi_odds.py, a
+    bare JSON list, or one name per line. All four are things a user already has, and
+    guessing wrong is cheap to notice, so this reads the shape rather than asking for it.
+    """
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return [line.strip() for line in text.splitlines() if line.strip()]
+
+    if isinstance(data, dict):
+        rows = data.get("golfers")
+        if rows is None:
+            raise ValueError(f"{path}: JSON object with no golfers list")
+        return [r["name"] if "name" in r else r["golfer_name"] for r in rows if isinstance(r, dict)]
+    if isinstance(data, list):
+        if all(isinstance(r, str) for r in data):
+            return list(data)
+        return [r.get("name") or r.get("golfer_name") for r in data if isinstance(r, dict)]
+    raise ValueError(f"{path}: expected a list of names or an object with a golfers list")
+
+
+def print_match_report(matches, report, names):
+    """The join, name by name, with the tier and the tournament that answered it."""
+    width = max((len(n) for n in names), default=10)
+    for name in names:
+        hit = matches.get(name)
+        if not hit:
+            print(f"  {name:<{width}}  --")
+            continue
+        where = hit.get("event")
+        via = hit["match"] + (f" @ {where['name']}" if where else "")
+        print(f"  {name:<{width}}  {hit['player']['name']:<26} "
+              f"{str(hit['player']['athlete_id']):<10} {via}")
+
+    print(f"\n{report['matched']}/{report['requested']} matched "
+          f"({report.get('matched_exact', 0)} exact, {report.get('matched_initial_last', 0)} "
+          f"initial+last, {report.get('matched_alias', 0)} alias)")
+    if report.get("from_history"):
+        scanned = (report.get("history") or {}).get("scanned") or []
+        print(f"{report['from_history']} resolved from {len(scanned)} earlier tournament(s): "
+              + ", ".join(e["name"] for e in scanned))
+    if report.get("not_in_field"):
+        print(f"not in this week's field ({len(report['not_in_field'])}): "
+              + ", ".join(report["not_in_field"]))
+    if report["unresolved"]:
+        print(f"unresolved ({len(report['unresolved'])}): " + ", ".join(report["unresolved"]))
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -469,9 +756,53 @@ def main(argv=None):
     ap.add_argument("--season", help="list a season's events, e.g. 2026")
     ap.add_argument("--find", help="resolve a tournament name against --season")
     ap.add_argument("--file", help="read a saved payload instead of the API")
+    ap.add_argument("--calendar", action="store_true",
+                    help="list --season from the cheap calendar endpoint (no fields, 12 KB)")
+    ap.add_argument("--match", metavar="PATH",
+                    help="match golfer names onto ESPN athletes. Reads a result file, a "
+                         "Kalshi odds file, a JSON list of names, or one name per line.")
+    ap.add_argument("--history", type=int, default=4, metavar="N",
+                    help="earlier tournaments to fall back on when the field is not posted "
+                         "yet (default 4; 0 disables)")
+    ap.add_argument("--aliases", metavar="PATH", help="alias file for --match")
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.match:
+        if not args.season:
+            ap.error("--match needs --season (the season whose tournaments to look back through)")
+        try:
+            names = read_names(args.match)
+        except (OSError, ValueError) as exc:
+            ap.error(str(exc))
+        aliases = {}
+        if args.aliases and os.path.exists(args.aliases):
+            with open(args.aliases, encoding="utf-8") as f:
+                loaded = json.load(f)
+            aliases = loaded.get("aliases", loaded) if isinstance(loaded, dict) else {}
+
+        players, meta = [], None
+        if args.event:
+            meta, players = parse_leaderboard(fetch_leaderboard(args.event, args.league))
+            print(f"{(meta or {}).get('event', args.event)}: {len(players)} in the field"
+                  + ("" if players else " -- not posted yet, falling back on earlier tournaments"))
+        matches, report = match_field_and_history(
+            names, players, args.season, args.league, aliases=aliases,
+            max_events=args.history, cutoff=(meta or {}).get("start"),
+            exclude_ids=[args.event] if args.event else (), log=print)
+        if args.json:
+            print(json.dumps({"matches": matches, "report": report}, indent=2))
+            return 0
+        print_match_report(matches, report, names)
+        return 0 if report["matched"] else 1
+
+    if args.calendar:
+        if not args.season:
+            ap.error("--calendar needs --season")
+        for e in season_calendar(args.season, args.league):
+            print(f"  {e['event_id']:<12} {(e['start'] or '')[:10]}  {e['name']}")
+        return 0
 
     if args.season and not args.event and not args.find:
         for e in season_events(args.season, args.league):

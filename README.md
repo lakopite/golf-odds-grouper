@@ -33,6 +33,22 @@ live scores. The `.zip` beside it carries the page, the result JSON and a manife
 
 Neither is written back into the repository. `build/` and `dist/` are gitignored.
 
+Because that file describes the whole competition, it is also the input to the next
+build of it:
+
+```bash
+python build_competition.py --from-result build/result.json --output build/thursday.json
+```
+
+The league, the tournament on both APIs, the market, the price mode, the hand-picked
+exclusions and the seed all come back out of the file. The groups and the odds they
+were drawn on are carried forward untouched — **a rebuild never re-deals**, because
+people have already been told which golfers they own — and the parts that have a "now"
+are redone: the ESPN join above all, which a Wednesday build cannot finish and a
+Thursday one can. Add `--refresh-odds` to record what the market says today alongside
+the prices the groups were drawn on, or `--regroup` to pull fresh odds and partition
+again, which is the one that deals everybody new golfers and says so.
+
 Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
 sentence: *"build this week's pool for my-league at the Wyndham"*.
 
@@ -198,6 +214,20 @@ so the join is by name: normalised exact, then first-initial-plus-last-name. Mea
 on a real field, that resolves 147 of 147 golfers ESPN lists, with zero ambiguous keys.
 See `espn_leaderboard.py` and `docs/FRONTEND-SPEC.md` §8.
 
+**ESPN publishes no field until the first tee time**, so on the night the groups are
+drawn there is nothing to join against. There does not need to be: those golfers played
+last week. The join walks back through the season's finished tournaments and takes
+**identity** from them — athlete id, display name, headshot — and never scores, because
+those tournaments are over and the standings rule ranks on exactly the fields it drops.
+Measured on the 2026 Wyndham with no field published at all: 146 of 150 golfers
+identified in 3.5 seconds, from four earlier leaderboards. The four it misses have no
+PGA Tour start this season, so they are absent from ESPN rather than missed. Run it on
+its own with:
+
+```bash
+python espn_leaderboard.py --season 2026 --event 401811961 --match build/result.json
+```
+
 **Kalshi will not answer a browser.** Its API allowlists request origins — `kalshi.com`
 gets a 200, every other origin including `localhost` and `file://` gets a 403 with no
 CORS headers. So the exported page always carries the odds snapshot, and shows live
@@ -208,12 +238,16 @@ odds only when `--kalshi-proxy` gives it a relay.
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests/ -q          # offline, uses checked-in fixtures
-KALSHI_LIVE=1 python -m pytest tests/test_live.py -v   # hits the real Kalshi API
+KALSHI_LIVE=1 python -m pytest tests/test_live.py -v        # hits the real Kalshi API
+ESPN_LIVE=1 python -m pytest tests/test_live_espn.py -v     # hits the real ESPN API
 ```
 
-The offline suite proves the code is self-consistent. The live suite proves the endpoint
-still answers, still sends money fields as strings, and still quotes an ask on every
-active market. Run the live suite before trusting a season's first pull.
+The offline suite proves the code is self-consistent. The live suites prove the
+endpoints still behave the way the code was measured against: that Kalshi still answers,
+still sends money fields as strings and still quotes an ask on every active market; and
+that ESPN still returns a whole season's calendar for a one-day request (12 KB, against
+35 MB for the year) and still publishes no field for a tournament that has not started.
+Run them before trusting a season's first pull.
 
 Two suites need a runtime beyond Python and skip cleanly without it:
 `test_frontend_parity.py` needs `node`, and `test_frontend_render.py` drives the
