@@ -5,6 +5,7 @@ import json
 import pytest
 
 import group
+import groupers
 import kalshi_odds
 
 
@@ -317,9 +318,8 @@ def test_auto_exclusion_excludes_nobody_on_a_flat_field():
 )
 def test_auto_exclusion_leaves_at_least_one_golfer_per_group(odds, n_participants):
     """
-    The cascade must stop rather than eat the field. A field shorter than the group
-    count is not groupable, and dp_generate_groups does not fail gracefully on one --
-    its reconstruction loop never terminates.
+    The cascade must stop rather than eat the field: a field shorter than the group
+    count is not groupable at all.
     """
     book = [{"golfer_name": f"G{i}", "odds": o} for i, o in enumerate(odds)]
     excluded = group.auto_exclusions(book, n_participants)
@@ -360,13 +360,20 @@ def test_percentage_difference_handles_two_zeroes():
     assert group.percentage_difference(0, 0) == float('inf')
 
 
+def _report(**over):
+    base = {"delta_ticks": 0, "floor_ticks": 0, "optimal": True, "dominant_golfers": []}
+    base.update(over)
+    return base
+
+
 def test_confirm_group_writes_its_json(tmp_path):
     golfers = [{"golfer_name": f"G{i}", "odds": 0.1} for i in range(4)]
     groups = {"Group 0": golfers[:2], "Group 1": golfers[2:]}
     totals = {"Group 0": 0.2, "Group 1": 0.2}
-    info = group.confirm_group("Greedy Algorithm", groups, totals, golfers, output_dir=str(tmp_path))
+    info = group.confirm_group(groups, totals, golfers, _report(), output_dir=str(tmp_path))
     assert info["valid"] and info["delta"] == 0
-    assert json.loads((tmp_path / "Greedy Algorithm.json").read_text())["method"] == "Greedy Algorithm"
+    written = json.loads((tmp_path / "GROUPING.json").read_text())
+    assert written["optimal"] is True and written["floor_ticks"] == 0
 
 
 def test_the_default_market_is_the_winner_series():
@@ -381,34 +388,40 @@ def test_the_default_market_is_the_winner_series():
     assert group.build_parser().parse_args([]).price == "ask"
 
 
-def test_each_method_gets_its_own_field_list():
-    """
-    greedy_redistribute_groups sorts its input in place. If the methods share one list,
-    a run's result depends on the order the methods were asked for.
-    """
+def test_the_partitioner_does_not_mutate_the_caller_s_field():
     golfers = [{"golfer_name": f"G{i}", "odds": o}
                for i, o in enumerate([0.05, 0.30, 0.10, 0.25, 0.15, 0.15])]
     before = [g["golfer_name"] for g in golfers]
-    group.run_methods(golfers, 2, methods=("greedy",))
+    groupers.partition(golfers, 2)
     assert [g["golfer_name"] for g in golfers] == before
 
 
-def test_method_order_does_not_change_the_other_methods_results():
-    golfers = [{"golfer_name": f"G{i}", "odds": o}
-               for i, o in enumerate([0.05, 0.30, 0.10, 0.25, 0.15, 0.15])]
-    dp_first = group.run_methods(list(golfers), 2, methods=("dp", "greedy"))
-    greedy_first = group.run_methods(list(golfers), 2, methods=("greedy", "dp"))
-
-    def sig(groups):
-        return sorted(sorted(g["golfer_name"] for g in grp) for grp in groups)
-
-    assert sig(dp_first["Dynamic Programming"]) == sig(greedy_first["Dynamic Programming"])
-
-
-def test_run_methods_refuses_a_field_shorter_than_the_group_count():
-    """dp_generate_groups does not terminate on this input, so it must never be reached."""
+def test_the_partitioner_refuses_a_field_shorter_than_the_group_count():
     with pytest.raises(ValueError, match="cannot fill"):
-        group.run_methods([{"golfer_name": "A", "odds": 0.5}], 3)
+        groupers.partition([{"golfer_name": "A", "odds": 0.5}], 3)
+
+
+def test_describe_partition_says_optimal_only_when_it_is():
+    proven = {"delta": 0.00087, "delta_ticks": 1, "floor_ticks": 1,
+              "optimal": True, "exact_grid": True}
+    assert "PROVEN OPTIMAL" in group.describe_partition(proven)
+
+    short = {**proven, "delta_ticks": 22, "floor_ticks": 21, "optimal": False}
+    assert "PROVEN OPTIMAL" not in group.describe_partition(short)
+    assert "floor is 21 ticks" in group.describe_partition(short)
+
+    off_grid = {**proven, "optimal": False, "exact_grid": False}
+    assert "not on a price grid" in group.describe_partition(off_grid)
+
+
+def test_describe_dominant_names_the_golfer_and_the_remedy():
+    report = {"floor_ticks": 22,
+              "dominant_golfers": [{"golfer_name": "Cameron Young", "ticks": 92,
+                                    "fair_shares": 1.28}]}
+    text = "\n".join(group.describe_dominant(report, 16))
+    assert "Cameron Young" in text and "1.28 fair shares" in text
+    assert "--auto-exclude" in text
+    assert group.describe_dominant({"dominant_golfers": []}, 5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -470,4 +483,4 @@ def test_confirm_group_returns_none_for_an_invalid_partition(tmp_path):
     golfers = [{"golfer_name": f"G{i}", "odds": 0.1} for i in range(4)]
     groups = {"Group 0": golfers[:2], "Group 1": golfers[:2]}
     totals = {"Group 0": 0.2, "Group 1": 0.2}
-    assert group.confirm_group("Backtracking", groups, totals, golfers, output_dir=str(tmp_path)) is None
+    assert group.confirm_group(groups, totals, golfers, _report(), output_dir=str(tmp_path)) is None

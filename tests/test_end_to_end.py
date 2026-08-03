@@ -16,8 +16,10 @@ import group
 import kalshi_odds
 
 
-FAST = ["--methods", "backtracking,dp,sa,ga,greedy",
-        "--sa-iter", "200", "--ga-pop", "8", "--ga-generations", "3", "--seed", "1"]
+# The solver returns in milliseconds on any field it can certify, and only spends the
+# time limit when the floor is out of reach. Keep it short so a pathological fixture
+# cannot stall the suite.
+FAST = ["--seed", "1", "--time-limit", "0.5"]
 
 
 @pytest.fixture
@@ -106,13 +108,21 @@ def test_auto_exclude_removes_the_dominant_favourite(workspace, dk_payload):
     assert "Scottie Scheffler" not in names
 
 
-def test_every_method_writes_its_own_result_file(workspace, kalshi_odds_file, tmp_path):
+def test_the_run_records_its_delta_and_whether_it_is_optimal(workspace, kalshi_odds_file, tmp_path):
+    """
+    The old output could say only "this method won". Winning says nothing about whether
+    the answer is good, so the run now records the proven floor alongside the delta.
+    """
     path = tmp_path / "kalshi_data.json"
     path.write_text(json.dumps(kalshi_odds_file))
     _run(workspace, "--data-file", str(path), "--no-exclude")
     written = set(os.listdir(workspace / "output"))
-    for label in group.METHOD_LABELS.values():
-        assert f"{label}.json" in written
+    assert written == {"BESTGROUPS.json", "GROUPING.json"}
+
+    info = json.loads((workspace / "output" / "GROUPING.json").read_text())
+    assert info["valid"]
+    assert info["delta_ticks"] >= info["floor_ticks"]
+    assert info["optimal"] is (info["delta_ticks"] <= info["floor_ticks"])
 
 
 def test_a_book_with_an_overround_still_produces_totals_of_one(workspace, kalshi_odds_file, tmp_path):
@@ -135,9 +145,9 @@ def _signature(best):
 
 def test_the_load_order_does_not_change_the_partition(workspace, kalshi_raw, kalshi_odds_file, tmp_path):
     """
-    The partitioners are order-sensitive: feeding the DP the API's own market order
-    rather than a sorted one measurably worsens the partition. Loading must sort, so
-    the same odds give the same groups whichever envelope they arrive in.
+    The partitioner is order-sensitive -- differencing breaks ties by input position --
+    so loading must sort. The same odds then give the same groups whichever envelope
+    they arrive in.
 
     Both fixtures are shuffled first. Written in file order they are already sorted by
     probability, which would let a missing sort pass unnoticed.
@@ -154,8 +164,8 @@ def test_the_load_order_does_not_change_the_partition(workspace, kalshi_raw, kal
     raw_path.write_text(json.dumps(shuffled_raw))
     file_path.write_text(json.dumps(shuffled_file))
 
-    from_raw = _run(workspace, "--data-file", str(raw_path), "--no-exclude", "--methods", "dp")
-    from_file = _run(workspace, "--data-file", str(file_path), "--no-exclude", "--methods", "dp")
+    from_raw = _run(workspace, "--data-file", str(raw_path), "--no-exclude")
+    from_file = _run(workspace, "--data-file", str(file_path), "--no-exclude")
 
     assert _signature(from_raw) == _signature(from_file)
 
@@ -169,16 +179,16 @@ def test_a_shuffled_file_groups_identically_to_a_sorted_one(workspace, kalshi_od
     sorted_path.write_text(json.dumps(kalshi_odds_file))
     shuffled_path.write_text(json.dumps(shuffled))
 
-    a = _run(workspace, "--data-file", str(sorted_path), "--no-exclude", "--methods", "dp,greedy")
-    b = _run(workspace, "--data-file", str(shuffled_path), "--no-exclude", "--methods", "dp,greedy")
+    a = _run(workspace, "--data-file", str(sorted_path), "--no-exclude")
+    b = _run(workspace, "--data-file", str(shuffled_path), "--no-exclude")
     assert _signature(a) == _signature(b)
 
 
 def test_exclusions_that_shorten_the_field_are_refused_not_hung(workspace, participants, tmp_path):
     """
-    dp_generate_groups does not terminate when given fewer golfers than groups, so a
-    field shortened by exclusions must be caught before it reaches the partitioners.
-    Without the post-exclusion check this test hangs rather than fails.
+    A field shorter than the group count is not groupable at all. The check that catches
+    it runs AFTER exclusions, because the exclusion list -- named or automatic -- is what
+    shortens the field.
     """
     (workspace / "kalshi_data.json").write_text(json.dumps({
         "golfers": [{"golfer_name": n, "odds": o} for n, o in
@@ -217,12 +227,6 @@ def test_more_groups_than_golfers_is_refused(workspace, participants):
     with pytest.raises(SystemExit, match="only 1 golfers"):
         group.main(["--participants", "participants.json",
                     "--output-dir", str(workspace / "output"), *FAST])
-
-
-def test_an_unknown_method_is_refused(workspace, kalshi_odds_file):
-    (workspace / "kalshi_data.json").write_text(json.dumps(kalshi_odds_file))
-    with pytest.raises(SystemExit, match="unknown method"):
-        group.main(["--participants", "participants.json", "--methods", "annealing"])
 
 
 def test_the_run_never_touches_the_network_when_a_file_is_present(
