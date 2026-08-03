@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  Reference scoreboard template.
+
+  The bundler (bundle_frontend.py) inlines style.css and app.js, substitutes the
+  {{token}}s below, and replaces the marker in the data script with the result JSON.
+  The result is one self-contained file that opens from disk.
+
+  A designed replacement only has to keep three things:
+    * the <script id="competition-data"> element with the marker inside it
+    * local asset references the bundler can inline
+    * whatever {{tokens}} it wants filled
+  See docs/FRONTEND-SPEC.md.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{league_name}} — {{tournament}}</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header class="page">
+    <h1><span id="league-name">{{league_name}}</span></h1>
+    <p class="sub"><span id="tournament">{{tournament}}</span> · <span id="market">{{market}}</span></p>
+    <p class="sub" id="round"></p>
+    <p class="sub small" id="built"></p>
+  </header>
+
+  <h2>Standings</h2>
+  <section id="standings"></section>
+
+  <h2>Odds</h2>
+  <p class="muted small" id="odds-note"></p>
+
+  <footer>
+    <p id="sources"></p>
+    <p id="poll"></p>
+    <p>competition {{competition_id}}</p>
+  </footer>
+</main>
+
+<script id="competition-data" type="application/json">/*__COMPETITION_JSON__*/</script>
+<script src="lib.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

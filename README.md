@@ -9,11 +9,41 @@ which moved its odds endpoint every season and started each year with an hour in
 DevTools hunting for the new URL. Kalshi publishes a documented, stable,
 unauthenticated REST API instead, so there is nothing to hunt for.
 
-## Quick start
+There are two ways in. The **competition pipeline** takes a named league and a
+tournament and hands back a scoreboard; the **grouper CLI** does the partition alone
+and is what the pipeline is built on. Start with the pipeline.
+
+## Quick start — a whole competition
 
 ```bash
 pip install -r requirements.txt
 
+# One file per league: team name, player name, team logo. Team ids are derived.
+cp leagues/example-league.json leagues/my-league.json   # then edit it
+
+python build_competition.py --league leagues/my-league.json --tournament "Wyndham"
+python bundle_frontend.py --result build/result.json --out dist/
+```
+
+`build/result.json` is the source of truth for that competition: the teams and their
+groups, the odds at the moment they were drawn, both API endpoints, who was excluded
+and why, and the partition's optimality certificate. `dist/*.html` is that file baked
+into a single static page — it opens from disk, needs no server, and polls ESPN for
+live scores. The `.zip` beside it carries the page, the result JSON and a manifest.
+
+Neither is written back into the repository. `build/` and `dist/` are gitignored.
+
+Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
+sentence: *"build this week's pool for my-league at the Wyndham"*.
+
+| | |
+|---|---|
+| `leagues/README.md` | the league file format |
+| `docs/FRONTEND-SPEC.md` | the scoreboard's design brief and the full result-JSON schema |
+
+## Quick start — the grouper alone
+
+```bash
 # Who is playing this week? (participants.json is a list of name strings)
 echo '["Mo", "Diogo", "Luis", "Cody", "Darwin"]' > participants.json
 
@@ -140,9 +170,43 @@ The same odds always produce the same groups. The field is sorted into one canon
 order on load, and the partitioner has no randomness in it. Group *assignment* to
 participants is random by design — pass `--seed N` to make a whole run reproducible.
 
+## The scoring side
+
+Grouping is half the job; the other half is saying who is winning. That runs on ESPN's
+unauthenticated leaderboard, and the rule is:
+
+> Rank each team by the best leaderboard position it holds. Teams tied on that are
+> separated by their next-best golfer, and so on. Groups are uneven, so a team can run
+> out of golfers partway down — when it does, the team that still has one wins.
+
+`standings.py` implements it and `frontend/template/lib.js` implements it again in the
+browser, because the browser is where it actually runs. `tests/test_frontend_parity.py`
+feeds both the same payloads and fails if they disagree — two implementations of a rule
+are one implementation and one rumour unless something checks them against each other.
+
+Three things about the ESPN payload are measured rather than assumed, and all three
+have bitten:
+
+- `competitors[]` is not in rank order.
+- `score.displayValue` counts completed rounds only, so mid-round it was wrong for 42
+  of 147 players. The live total is the sum of the linescores.
+- `sortOrder` *is* the live rank — zero inversions — and it already puts every cut
+  player below every player who made the cut.
+
+Kalshi's golfer UUID is stable across events and market series but is not an ESPN id,
+so the join is by name: normalised exact, then first-initial-plus-last-name. Measured
+on a real field, that resolves 147 of 147 golfers ESPN lists, with zero ambiguous keys.
+See `espn_leaderboard.py` and `docs/FRONTEND-SPEC.md` §8.
+
+**Kalshi will not answer a browser.** Its API allowlists request origins — `kalshi.com`
+gets a 200, every other origin including `localhost` and `file://` gets a 403 with no
+CORS headers. So the exported page always carries the odds snapshot, and shows live
+odds only when `--kalshi-proxy` gives it a relay.
+
 ## Tests
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -q          # offline, uses checked-in fixtures
 KALSHI_LIVE=1 python -m pytest tests/test_live.py -v   # hits the real Kalshi API
 ```
@@ -150,6 +214,10 @@ KALSHI_LIVE=1 python -m pytest tests/test_live.py -v   # hits the real Kalshi AP
 The offline suite proves the code is self-consistent. The live suite proves the endpoint
 still answers, still sends money fields as strings, and still quotes an ask on every
 active market. Run the live suite before trusting a season's first pull.
+
+Two suites need a runtime beyond Python and skip cleanly without it:
+`test_frontend_parity.py` needs `node`, and `test_frontend_render.py` drives the
+bundled page in a real browser through Playwright.
 
 ## How the grouping works
 
