@@ -5,6 +5,7 @@ import json
 import pytest
 
 import group
+import kalshi_odds
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +367,103 @@ def test_confirm_group_writes_its_json(tmp_path):
     info = group.confirm_group("Greedy Algorithm", groups, totals, golfers, output_dir=str(tmp_path))
     assert info["valid"] and info["delta"] == 0
     assert json.loads((tmp_path / "Greedy Algorithm.json").read_text())["method"] == "Greedy Algorithm"
+
+
+def test_the_default_market_is_the_winner_series():
+    """
+    Silently pricing a pool off the Top 5 book is a change nobody would notice from the
+    output: it groups fine, it just is not the market anyone agreed to play.
+    """
+    assert group.MARKET_SERIES == "KXPGATOUR"
+    assert kalshi_odds.DEFAULT_SERIES == "KXPGATOUR"
+    assert group.PRICE_MODE == "ask"
+    assert group.build_parser().parse_args([]).series == "KXPGATOUR"
+    assert group.build_parser().parse_args([]).price == "ask"
+
+
+def test_each_method_gets_its_own_field_list():
+    """
+    greedy_redistribute_groups sorts its input in place. If the methods share one list,
+    a run's result depends on the order the methods were asked for.
+    """
+    golfers = [{"golfer_name": f"G{i}", "odds": o}
+               for i, o in enumerate([0.05, 0.30, 0.10, 0.25, 0.15, 0.15])]
+    before = [g["golfer_name"] for g in golfers]
+    group.run_methods(golfers, 2, methods=("greedy",))
+    assert [g["golfer_name"] for g in golfers] == before
+
+
+def test_method_order_does_not_change_the_other_methods_results():
+    golfers = [{"golfer_name": f"G{i}", "odds": o}
+               for i, o in enumerate([0.05, 0.30, 0.10, 0.25, 0.15, 0.15])]
+    dp_first = group.run_methods(list(golfers), 2, methods=("dp", "greedy"))
+    greedy_first = group.run_methods(list(golfers), 2, methods=("greedy", "dp"))
+
+    def sig(groups):
+        return sorted(sorted(g["golfer_name"] for g in grp) for grp in groups)
+
+    assert sig(dp_first["Dynamic Programming"]) == sig(greedy_first["Dynamic Programming"])
+
+
+def test_run_methods_refuses_a_field_shorter_than_the_group_count():
+    """dp_generate_groups does not terminate on this input, so it must never be reached."""
+    with pytest.raises(ValueError, match="cannot fill"):
+        group.run_methods([{"golfer_name": "A", "odds": 0.5}], 3)
+
+
+# ---------------------------------------------------------------------------
+# participants.json -- a sentence, not a stack trace
+# ---------------------------------------------------------------------------
+
+def test_a_missing_participants_file_explains_the_format(tmp_path):
+    with pytest.raises(SystemExit, match="not found"):
+        group.read_participants(str(tmp_path / "nope.json"))
+
+
+def test_malformed_participants_json_names_the_problem(tmp_path):
+    path = tmp_path / "participants.json"
+    path.write_text('["Mo", "Diogo",')
+    with pytest.raises(SystemExit, match="not valid JSON"):
+        group.read_participants(str(path))
+
+
+def test_a_participants_object_is_refused_not_grouped(tmp_path):
+    """
+    A dict has a length, so it used to pass every check and reach random.shuffle, which
+    died with a KeyError inside the standard library -- after the grouping had run.
+    """
+    path = tmp_path / "participants.json"
+    path.write_text('{"a": 1, "b": 2}')
+    with pytest.raises(SystemExit, match="not a list"):
+        group.read_participants(str(path))
+
+
+def test_empty_participants_are_refused(tmp_path):
+    path = tmp_path / "participants.json"
+    path.write_text("[]")
+    with pytest.raises(SystemExit, match="no participants"):
+        group.read_participants(str(path))
+
+
+def test_non_string_participants_are_refused(tmp_path):
+    path = tmp_path / "participants.json"
+    path.write_text('["Mo", 7, null]')
+    with pytest.raises(SystemExit, match="only name strings"):
+        group.read_participants(str(path))
+
+
+def test_duplicate_participants_are_refused(tmp_path):
+    """Two groups would land under one key and one participant would silently vanish."""
+    path = tmp_path / "participants.json"
+    path.write_text('["Mo", "Diogo", "Mo"]')
+    with pytest.raises(SystemExit, match="duplicate names"):
+        group.read_participants(str(path))
+
+
+def test_a_good_participants_file_loads(tmp_path, participants):
+    path = tmp_path / "participants.json"
+    path.write_text(json.dumps(participants))
+    assert group.read_participants(str(path)) == participants
 
 
 def test_confirm_group_returns_none_for_an_invalid_partition(tmp_path):

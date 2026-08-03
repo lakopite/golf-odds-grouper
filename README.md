@@ -128,6 +128,26 @@ An archived DraftKings `dk_data.json` still parses — `list_dk_golf_odds()` and
 `--dk-odds-type` are unchanged — so old captures still run and a DK payload can be
 compared against Kalshi side by side if one is ever exported by hand.
 
+### Runtime
+
+A default run on a 143-golfer field takes about **5 minutes**, and around **10 minutes**
+with 25 participants. Essentially all of it is the genetic algorithm at its default
+`--ga-pop 500 --ga-generations 10000`; every other method finishes in under a second.
+These defaults pre-date the Kalshi migration and are left alone deliberately.
+
+The GA does not appear to be earning that time — on a measured 143-golfer run its best
+delta and backtracking's agreed to twelve significant figures, and with 25 participants
+the DP won outright. For a fast run that is unlikely to lose anything:
+
+```bash
+python group.py --ga-pop 40 --ga-generations 100        # seconds, not minutes
+python group.py --methods backtracking,dp,sa,greedy     # skip the GA entirely
+```
+
+The same odds always produce the same groups regardless of how the odds file was
+ordered: the field is sorted into one canonical order on load. Group *assignment* to
+participants is random by design — pass `--seed N` to make a whole run reproducible.
+
 ## Tests
 
 ```bash

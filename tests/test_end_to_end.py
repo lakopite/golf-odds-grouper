@@ -8,6 +8,7 @@ file the other could not read. These tests hold that seam shut.
 
 import json
 import os
+import random
 
 import pytest
 
@@ -128,23 +129,49 @@ def test_a_book_with_an_overround_still_produces_totals_of_one(workspace, kalshi
     assert sum(best["totals"].values()) == pytest.approx(1.0)
 
 
+def _signature(best):
+    return sorted(sorted(g["golfer_name"] for g in grp) for grp in best["groups"].values())
+
+
 def test_the_load_order_does_not_change_the_partition(workspace, kalshi_raw, kalshi_odds_file, tmp_path):
     """
     The partitioners are order-sensitive: feeding the DP the API's own market order
     rather than a sorted one measurably worsens the partition. Loading must sort, so
     the same odds give the same groups whichever envelope they arrive in.
+
+    Both fixtures are shuffled first. Written in file order they are already sorted by
+    probability, which would let a missing sort pass unnoticed.
     """
+    shuffled_raw = {**kalshi_raw, "markets": list(kalshi_raw["markets"])}
+    random.Random(4).shuffle(shuffled_raw["markets"])
+    shuffled_file = {**kalshi_odds_file, "golfers": list(kalshi_odds_file["golfers"])}
+    random.Random(9).shuffle(shuffled_file["golfers"])
+    assert [g["golfer_name"] for g in shuffled_file["golfers"]] != [
+        g["golfer_name"] for g in kalshi_odds_file["golfers"]
+    ], "fixture must actually be shuffled for this test to mean anything"
+
     raw_path, file_path = tmp_path / "raw.json", tmp_path / "converted.json"
-    raw_path.write_text(json.dumps(kalshi_raw))
-    file_path.write_text(json.dumps(kalshi_odds_file))
+    raw_path.write_text(json.dumps(shuffled_raw))
+    file_path.write_text(json.dumps(shuffled_file))
 
     from_raw = _run(workspace, "--data-file", str(raw_path), "--no-exclude", "--methods", "dp")
     from_file = _run(workspace, "--data-file", str(file_path), "--no-exclude", "--methods", "dp")
 
-    def signature(best):
-        return sorted(sorted(g["golfer_name"] for g in grp) for grp in best["groups"].values())
+    assert _signature(from_raw) == _signature(from_file)
 
-    assert signature(from_raw) == signature(from_file)
+
+def test_a_shuffled_file_groups_identically_to_a_sorted_one(workspace, kalshi_odds_file, tmp_path):
+    """Same odds, different file order, same groups -- the sort on load is what guarantees it."""
+    shuffled = {**kalshi_odds_file, "golfers": list(kalshi_odds_file["golfers"])}
+    random.Random(17).shuffle(shuffled["golfers"])
+
+    sorted_path, shuffled_path = tmp_path / "sorted.json", tmp_path / "shuffled.json"
+    sorted_path.write_text(json.dumps(kalshi_odds_file))
+    shuffled_path.write_text(json.dumps(shuffled))
+
+    a = _run(workspace, "--data-file", str(sorted_path), "--no-exclude", "--methods", "dp,greedy")
+    b = _run(workspace, "--data-file", str(shuffled_path), "--no-exclude", "--methods", "dp,greedy")
+    assert _signature(a) == _signature(b)
 
 
 def test_exclusions_that_shorten_the_field_are_refused_not_hung(workspace, participants, tmp_path):

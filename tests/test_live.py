@@ -24,7 +24,10 @@ pytestmark = [
     ),
 ]
 
-SERIES = "KXPGATOUR"
+# Deliberately the module constant rather than a literal: if the default market is ever
+# switched to Top 5, the live suite must follow it and fail on the tick structure, not
+# quietly keep testing the series it no longer uses.
+SERIES = kalshi_odds.DEFAULT_SERIES
 
 
 @pytest.fixture(scope="module")

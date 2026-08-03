@@ -246,6 +246,41 @@ def find_odds_file(candidates=DATA_FILES):
     return next((p for p in candidates if os.path.exists(p)), None)
 
 
+def read_participants(path):
+    """
+    Load the participant list, failing with a sentence rather than a stack trace.
+
+    A JSON object here used to be the nastiest input in the tool: it has a length, so
+    everything downstream accepted it, and the run died with a KeyError inside stdlib
+    random.py -- after the grouping had already run.
+    """
+    try:
+        with open(path) as f:
+            names = json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"{path} not found. It should hold a JSON list of participant names, "
+            'e.g. ["Mo", "Diogo", "Luis", "Cody", "Darwin"] -- one group is built per name.'
+        )
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}")
+
+    if not isinstance(names, list):
+        raise SystemExit(
+            f"{path} holds a JSON {type(names).__name__}, not a list. Expected "
+            '["Mo", "Diogo", ...] -- one group is built per name.'
+        )
+    if not names:
+        raise SystemExit(f"{path} holds no participants")
+    if not all(isinstance(n, str) for n in names):
+        bad = [n for n in names if not isinstance(n, str)][:3]
+        raise SystemExit(f"{path} must hold only name strings; found {bad}")
+    if len(set(names)) != len(names):
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        raise SystemExit(f"{path} has duplicate names {dupes}; each participant gets one group")
+    return names
+
+
 # ---------------------------------------------------------------------------
 # De-vig and exclusions
 # ---------------------------------------------------------------------------
@@ -463,23 +498,35 @@ def load_odds(args):
     kalshi_data.json / dk_data.json, then a live pull of the newest event that has
     active markets. Returns (golfers, description).
 
-    Whatever the route, the field comes back sorted by probability descending. The
-    partitioners are order-sensitive -- feeding the DP the API's own ordering rather
-    than a sorted one measurably worsens the partition -- so the sort belongs here,
-    once, rather than in whichever caller happens to remember it.
+    Whatever the route, the field comes back in one canonical order. The partitioners
+    are order-sensitive -- feeding the DP the API's own ordering rather than a sorted
+    one measurably worsens the partition -- so the sort belongs here, once, rather than
+    in whichever caller happens to remember it.
     """
     path = args.data_file or (None if args.event else find_odds_file())
     if path:
         golfers = read_odds_file(path, price=args.price, dk_odds_type=args.dk_odds_type)
-        golfers.sort(key=lambda g: g["odds"], reverse=True)
-        return golfers, f"{path}{_file_provenance(path)}"
+        return sort_field(golfers), f"{path}{_file_provenance(path)}"
 
     event_ticker, golfers, report = kalshi_odds.fetch_golfers(
         event_ticker=args.event, price=args.price, series=args.series
     )
     print(f"Kalshi liquidity: {report['two_sided_quotes']}/{report['golfers']} two-sided, "
           f"{report['spreads_over_5c']} spreads over 5c, book sums to {report['probability_sum']}")
-    return kalshi_odds.clean_golfers(golfers), f"Kalshi {event_ticker} ({args.price})"
+    return sort_field(kalshi_odds.clean_golfers(golfers)), f"Kalshi {event_ticker} ({args.price})"
+
+
+def sort_field(_golfers):
+    """
+    Canonical order: probability descending, then name.
+
+    Sorting on probability alone is not a total order here. The bottom third of a golf
+    field is functionally tied -- a dozen golfers sit on the 0.1c floor together -- and
+    Python's sort is stable, so tied golfers keep whatever order the file happened to
+    list them in. The partitioners are order-sensitive, so that alone is enough to make
+    the same odds produce different groups depending on how the file was written.
+    """
+    return sorted(_golfers, key=lambda g: (-g["odds"], g["golfer_name"]))
 
 
 def _file_provenance(path):
@@ -534,11 +581,12 @@ def main(argv=None):
 
     start_time = time.time()
 
+    # Read the participants BEFORE fetching odds. It is the cheapest thing that can be
+    # wrong, and finding out after a live pull and a five-minute grouping run is no way
+    # to learn that the file is a JSON object rather than a list.
+    participant_real_names = read_participants(args.participants)
+
     golfers, source = load_odds(args)
-    with open(args.participants) as pf:
-        participant_real_names = json.load(pf)
-    if not participant_real_names:
-        raise SystemExit(f"{args.participants} holds no participants")
 
     participant_names = [f"Group {i}" for i in range(len(participant_real_names))]
     n_groups = len(participant_names)

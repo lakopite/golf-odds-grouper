@@ -449,7 +449,11 @@ def write_capture(event_ticker, golfers, report, price, dump_dir, markets=None):
                 indent=2,
             )
 
-    odds_path = os.path.join(dump_dir, f"kalshi_{event_ticker}_golfers.json")
+    # The price mode is in the filename on purpose. Without it a `--price bid` run
+    # overwrites an `--price ask` capture of the same event, and the replacement is a
+    # book summing under 1.0 with a third of the field at zero weight -- which a later
+    # --data-file run would grade as real.
+    odds_path = os.path.join(dump_dir, f"kalshi_{event_ticker}_{price}_golfers.json")
     with open(odds_path, "w", encoding="utf-8") as f:
         json.dump(
             {
