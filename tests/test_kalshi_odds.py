@@ -9,8 +9,11 @@ import kalshi_odds
 # _f  --  the string-coercion trap
 # ---------------------------------------------------------------------------
 
-def test_money_fields_are_strings_in_the_fixture(kalshi_markets):
-    """Guard the trap itself: if Kalshi ever sends numbers, this test tells us."""
+def test_the_fixture_still_holds_money_as_strings(kalshi_markets):
+    """
+    Pins the fixture, not the API. If Kalshi ever switches to numbers, only
+    test_live.py::test_money_fields_are_still_strings can tell us.
+    """
     assert isinstance(kalshi_markets[0]["yes_ask_dollars"], str)
 
 
@@ -23,9 +26,10 @@ def test_f_returns_zero_not_a_string_for_junk():
         assert kalshi_odds._f(junk) == 0.0
 
 
-def test_summing_raw_strings_would_concatenate():
-    """Why _f exists at all: + on strings is silent and wrong."""
-    assert "0.0110" + "0.0200" == "0.01100.0200"
+def test_the_book_is_summed_numerically_not_concatenated(kalshi_markets):
+    """The trap _f exists for: + on Kalshi's string money is silent and wrong."""
+    total = sum(g["odds"] for g in kalshi_odds.to_golfers(kalshi_markets))
+    assert isinstance(total, float) and total > 0
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +207,10 @@ def test_non_200_is_not_swallowed(monkeypatch, no_sleep):
 # latest_event  --  must never quietly report "no tournament"
 # ---------------------------------------------------------------------------
 
+def _dated(markets, created):
+    return [{**m, "created_time": created} for m in markets]
+
+
 def test_latest_event_skips_events_with_no_active_markets(monkeypatch, no_sleep, kalshi_markets):
     settled_only = [m for m in kalshi_markets if m["status"] != "active"]
     monkeypatch.setattr(
@@ -214,6 +222,36 @@ def test_latest_event_skips_events_with_no_active_markets(monkeypatch, no_sleep,
         lambda t: settled_only if t == "OLD" else kalshi_markets,
     )
     assert kalshi_odds.latest_event("KXPGATOUR")["event_ticker"] == "NEW"
+
+
+def test_latest_event_picks_by_market_age_not_list_position(monkeypatch, no_sleep, kalshi_markets):
+    """
+    /events carries no date field, so list order is an assumption rather than a fact.
+    A stale event with one stray active market must not win just by sitting at the head.
+    """
+    stale = _dated(kalshi_markets[:2], "2026-06-01T00:00:00Z")
+    current = _dated(kalshi_markets, "2026-08-02T23:00:00Z")
+    monkeypatch.setattr(
+        kalshi_odds, "events_for",
+        lambda s, limit=200: [{"event_ticker": "STALE"}, {"event_ticker": "CURRENT"}],
+    )
+    monkeypatch.setattr(
+        kalshi_odds, "markets_for", lambda t: stale if t == "STALE" else current
+    )
+    assert kalshi_odds.latest_event("KXPGATOUR")["event_ticker"] == "CURRENT"
+
+
+def test_latest_event_says_so_when_more_than_one_is_tradeable(monkeypatch, no_sleep, kalshi_markets, capsys):
+    monkeypatch.setattr(
+        kalshi_odds, "events_for",
+        lambda s, limit=200: [{"event_ticker": "A"}, {"event_ticker": "B"}],
+    )
+    monkeypatch.setattr(
+        kalshi_odds, "markets_for",
+        lambda t: _dated(kalshi_markets, "2026-08-01T00:00:00Z" if t == "A" else "2026-08-02T00:00:00Z"),
+    )
+    assert kalshi_odds.latest_event("KXPGATOUR")["event_ticker"] == "B"
+    assert "2 probed" in capsys.readouterr().err
 
 
 def test_latest_event_raises_when_nothing_is_tradeable(monkeypatch, no_sleep, kalshi_markets):
@@ -241,6 +279,29 @@ def test_markets_for_follows_the_cursor(monkeypatch):
     ]
     monkeypatch.setattr(kalshi_odds, "get", lambda path, **kw: pages.pop(0))
     assert [m["ticker"] for m in kalshi_odds.markets_for("KXPGATOUR-WYC26")] == ["A", "B"]
+
+
+def test_markets_for_raises_on_a_repeated_cursor(monkeypatch):
+    """A server echoing its own cursor would otherwise loop forever and duplicate the field."""
+    monkeypatch.setattr(
+        kalshi_odds, "get",
+        lambda path, **kw: {"markets": [{"ticker": "A"}], "cursor": "stuck"},
+    )
+    with pytest.raises(RuntimeError, match="repeated cursor"):
+        kalshi_odds.markets_for("KXPGATOUR-WYC26")
+
+
+def test_markets_for_refuses_to_return_a_partial_field(monkeypatch):
+    counter = {"n": 0}
+
+    def endless(path, **kw):
+        counter["n"] += 1
+        return {"markets": [{"ticker": f"M{counter['n']}"}], "cursor": f"c{counter['n']}"}
+
+    monkeypatch.setattr(kalshi_odds, "get", endless)
+    with pytest.raises(RuntimeError, match="did not finish paging"):
+        kalshi_odds.markets_for("KXPGATOUR-WYC26", max_pages=5)
+    assert counter["n"] == 5
 
 
 # ---------------------------------------------------------------------------

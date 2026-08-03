@@ -70,6 +70,58 @@ def test_read_odds_file_round_trips(tmp_path, kalshi_odds_file):
 
 
 # ---------------------------------------------------------------------------
+# check_book -- the guards to_golfers() applies do not reach a converted file
+# ---------------------------------------------------------------------------
+
+def test_a_settled_field_is_refused(kalshi_odds_file):
+    """
+    kalshi_odds.py --include-closed writes settled markets, which quote ask=1.0000.
+    Read back, they normalize cleanly and yield a confident grouping of a tournament
+    that finished months ago. That is exactly the failure this repo has already paid for.
+    """
+    settled = {**kalshi_odds_file,
+               "golfers": [{**g, "odds": 1.0} for g in kalshi_odds_file["golfers"]]}
+    with pytest.raises(ValueError, match="settled markets"):
+        group.load_golfers(settled)
+
+
+def test_one_settled_market_is_enough_to_refuse(kalshi_odds_file):
+    poisoned = {**kalshi_odds_file, "golfers": list(kalshi_odds_file["golfers"])}
+    poisoned["golfers"][3] = {**poisoned["golfers"][3], "odds": 1.0}
+    with pytest.raises(ValueError, match="priced at or above 1.0"):
+        group.load_golfers(poisoned)
+
+
+def test_a_price_mode_mismatch_warns(kalshi_odds_file, capsys):
+    """A converted file cannot be re-priced, so --price ask on a bid file must say so."""
+    group.load_golfers({**kalshi_odds_file, "price_mode": "bid"}, price="ask")
+    assert "written with --price bid" in capsys.readouterr().out
+
+
+def test_a_matching_price_mode_is_silent(kalshi_odds_file, capsys):
+    group.load_golfers(kalshi_odds_file, price="ask")
+    assert "--price" not in capsys.readouterr().out
+
+
+def test_a_top_n_book_warns_that_it_is_not_a_probability(capsys):
+    top5 = {"golfers": [{"golfer_name": f"G{i}", "odds": 0.1} for i in range(50)]}
+    group.load_golfers(top5)
+    assert "NOT mutually" in capsys.readouterr().out
+
+
+def test_a_thin_book_warns(capsys):
+    thin = {"golfers": [{"golfer_name": f"G{i}", "odds": 0.01} for i in range(50)]}
+    group.load_golfers(thin)
+    assert "below 1.0" in capsys.readouterr().out
+
+
+def test_a_normal_winner_book_warns_about_nothing(capsys):
+    winner = {"golfers": [{"golfer_name": f"G{i}", "odds": 1.308 / 100} for i in range(100)]}
+    group.load_golfers(winner)
+    assert "WARNING" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # DraftKings legacy parser
 # ---------------------------------------------------------------------------
 
@@ -179,6 +231,33 @@ def test_excluding_the_whole_field_raises():
         group.odds_to_conditional(book, ["G0", "G1", "G2"])
 
 
+@pytest.mark.parametrize(
+    "odds",
+    [
+        [0.21, 0.11, 0.07, 0.03, 0.01],   # normalizes to 0.9999999999999999
+        [0.09, 0.044, 0.041, 0.038],
+        [1 / 3, 1 / 3, 1 / 3],
+        [0.7, 0.2, 0.1],
+    ],
+)
+def test_excluding_the_whole_field_raises_despite_float_error(odds):
+    """
+    The excluded probabilities are normalized floats, so they land just under 1.0 far
+    more often than on it. A guard written as `sum(excluded) >= 1.0` misses those and
+    returns an empty field, which then reaches the partitioners.
+    """
+    book = [{"golfer_name": f"G{i}", "odds": o} for i, o in enumerate(odds)]
+    with pytest.raises(ValueError, match="whole field"):
+        group.odds_to_conditional(book, [g["golfer_name"] for g in book])
+
+
+def test_conditional_odds_never_return_an_empty_field():
+    book = [{"golfer_name": f"G{i}", "odds": o} for i, o in enumerate([0.21, 0.11, 0.07, 0.03, 0.01])]
+    survivors = group.odds_to_conditional(book, ["G0", "G1", "G2", "G3"])
+    assert [g["golfer_name"] for g in survivors] == ["G4"]
+    assert survivors[0]["odds"] == pytest.approx(1.0)
+
+
 # ---------------------------------------------------------------------------
 # The 1/participants threshold
 # ---------------------------------------------------------------------------
@@ -226,15 +305,32 @@ def test_auto_exclusion_excludes_nobody_on_a_flat_field():
     assert group.auto_exclusions(_flat_book(1.308, n=40), 5) == []
 
 
-def test_auto_exclusion_leaves_at_least_one_group_per_participant():
-    """The cascade must stop rather than eat the field: B is still over at 0.5."""
+@pytest.mark.parametrize(
+    "odds,n_participants",
+    [
+        ([0.40, 0.35, 0.15, 0.10], 3),                    # both A and B clear 1/3
+        ([0.25, 0.24, 0.23, 0.22, 0.03, 0.03], 5),        # four clear 1/5 in sequence
+        ([0.5, 0.3, 0.2], 2),
+        ([0.9, 0.05, 0.03, 0.02], 3),
+    ],
+)
+def test_auto_exclusion_leaves_at_least_one_golfer_per_group(odds, n_participants):
+    """
+    The cascade must stop rather than eat the field. A field shorter than the group
+    count is not groupable, and dp_generate_groups does not fail gracefully on one --
+    its reconstruction loop never terminates.
+    """
+    book = [{"golfer_name": f"G{i}", "odds": o} for i, o in enumerate(odds)]
+    excluded = group.auto_exclusions(book, n_participants)
+    assert len(book) - len(excluded) >= n_participants
+
+
+def test_auto_exclusion_takes_the_heaviest_first_when_it_must_stop_short():
     book = [
-        {"golfer_name": "A", "odds": 0.4}, {"golfer_name": "B", "odds": 0.3},
-        {"golfer_name": "C", "odds": 0.2}, {"golfer_name": "D", "odds": 0.1},
+        {"golfer_name": "A", "odds": 0.40}, {"golfer_name": "B", "odds": 0.35},
+        {"golfer_name": "C", "odds": 0.15}, {"golfer_name": "D", "odds": 0.10},
     ]
-    excluded = group.auto_exclusions(book, 3)
-    assert excluded == ["A"]
-    assert len(book) - len(excluded) >= 3
+    assert group.auto_exclusions(book, 3) == ["A"]
 
 
 # ---------------------------------------------------------------------------

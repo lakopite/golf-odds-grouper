@@ -37,8 +37,13 @@ Groups are written to `output/BESTGROUPS.json`, one file per method alongside it
 3. A local `kalshi_data.json`, then a local `dk_data.json`.
 4. Otherwise, a live pull of the newest `KXPGATOUR` event that has active markets.
 
-So `python group.py` on its own works during tournament week. To capture the odds
-first and group later — useful if you want the raw payload kept:
+So `python group.py` on its own works during tournament week. Because a local file
+outranks a live pull, every run prints the event and capture time recorded in that file,
+so last week's odds cannot win silently. A file written with `--include-closed` holds
+settled markets quoting `ask=1.0000`; the grouper refuses it rather than grouping a
+tournament that has already finished.
+
+To capture the odds first and group later — useful if you want the raw payload kept:
 
 ```bash
 python kalshi_odds.py --list-events            # what golf is on right now
@@ -69,17 +74,26 @@ DraftKings `ODDS_TYPE` label. Change it with `--series`, or edit `MARKET_SERIES`
 | `KXPGAMAKECUT` | To Make the Cut |
 
 **Prefer Winner.** The old README recommended `Top 5 (Including Ties)` as "another good
-option" on DraftKings. On Kalshi that advice inverts: Winner ticks at $0.001 below 10¢
-(`price_level_structure: tapered_deci_cent`) while Top 5, Top 10 and MakeCut are flat
-$0.01 — 10× coarser exactly where a golf field lives. Top 5 still works, it is simply a
-worse signal. Top 5 / Top 10 markets also post about 21 hours later than Winner, so
-they carry a narrower pull window.
+option" on DraftKings. On Kalshi that advice inverts, for two reasons.
+
+*Granularity.* Winner ticks at $0.001 below 10¢ (`price_level_structure:
+tapered_deci_cent`) while Top 5, Top 10 and MakeCut are flat $0.01 — 10× coarser exactly
+where a golf field lives. Top 5 / Top 10 markets also post about 21 hours later than
+Winner, so they carry a narrower pull window.
+
+*Meaning.* Winner outcomes are mutually exclusive — exactly one golfer wins — which is
+what makes the de-vig a probability and makes "exclude anyone over `1/participants`" mean
+something. Top 5 outcomes are **not** mutually exclusive: five golfers finish top 5, so
+the book sums toward 5 and dividing by that sum gives share-of-five-slots, not a
+probability. Grouping still balances sensibly on those numbers, but read them as weights.
+The grouper prints a warning whenever a loaded book sums above 1.6 for this reason.
 
 `--price` picks which side of the book to read. It defaults to `ask`, and should stay
-there. Measured on a live 143-golfer field: the ask gives every golfer a real quoted
-price and sums to 1.308; the bid leaves 46 of 143 at zero and sums to 0.906, which is
-not a distribution at all. `mid` inherits the bid's hole — with a third of the field
-unbid, "mid" is usually just half the ask, a number the code invented rather than read.
+there. Measured on the live 143-golfer Wyndham field on 2026-08-03: the ask gives every
+golfer a real quoted price and sums to 1.308; the bid leaves 46 of 143 at zero and sums
+to 0.906, which is not a distribution at all. `mid` inherits the bid's hole — with a
+third of the field unbid, "mid" is usually just half the ask, a number the code invented
+rather than read. (Prices move, so those figures are a shape rather than a constant.)
 
 ## De-vig and exclusions
 
@@ -102,11 +116,12 @@ line. Every run prints who is above the threshold whether or not you act on it.
 
 ```
 python group.py [--event TICKER] [--series KXPGATOUR] [--price ask|mid|bid|last]
-                [--data-file PATH] [--participants participants.json]
+                [--data-file PATH] [--dk-odds-type "Winner"]
+                [--participants participants.json] [--output-dir output]
                 [--exclude NAME ...] [--no-exclude] [--auto-exclude]
                 [--methods backtracking,dp,sa,ga,greedy]
-                [--sa-iter N] [--ga-pop N] [--ga-generations N] [--dp-scale N]
-                [--output-dir output] [--seed N]
+                [--sa-iter N] [--ga-pop N] [--ga-generations N] [--ga-mutation F]
+                [--seed N]
 ```
 
 An archived DraftKings `dk_data.json` still parses — `list_dk_golf_odds()` and
@@ -158,10 +173,19 @@ Uses a backtracking approach to generate balanced groups of golfers. It recursiv
 **Parameters:**
 - `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
 - `n_groups`: Integer, the number of groups to divide the golfers into.
-- `scale`: Integer (default=100), the fixed-point resolution of the DP table. At 100 an odds value is quantised to whole cents, so in a 140-golfer field every golfer below 1% rounds to zero weight and the table only really packs the top of the board. Kalshi quotes the tail on a 0.1¢ tick, so `--dp-scale 1000` keeps that resolution at roughly 10× the memory.
 
 **Description:**
 Uses a dynamic programming approach to generate balanced groups of golfers. It iteratively calculates the minimum difference in total odds between groups and assigns golfers accordingly.
+
+**Known limitation (pre-dates the Kalshi migration; measured, not fixed).** The DP's
+objective is degenerate: `dp[n][n_groups][k] == k` for every feasible `k`, so the
+minimal difference it finds is always 0 and its reconstruction emits `n_groups`
+singletons. All the actual balancing is then done by the "assign each remaining golfer
+to the lightest group" fallback at the end of the function. Two consequences worth
+knowing: raising the table's fixed-point resolution changes which singletons come out
+but does not improve the partition, and the method must never be given fewer golfers
+than groups — the reconstruction loop does not terminate on that input. `group.py`
+checks the field size after exclusions to keep that state unreachable.
 
 ### 3. Simulated Annealing
 

@@ -91,7 +91,34 @@ def test_fetch_golfers_resolves_the_current_event_unaided():
     assert golfers[0]["odds"] >= golfers[-1]["odds"]
 
 
-def test_events_endpoint_returns_newest_first():
+def test_events_carry_a_ticker_but_no_usable_date():
+    """
+    Documents why latest_event() does not trust list position. If a date field ever
+    appears here, latest_event() can be simplified to read it.
+    """
     events = kalshi_odds.events_for(SERIES)
     assert len(events) > 1
     assert all(e.get("event_ticker") for e in events)
+    assert not any(e.get("strike_date") for e in events)
+
+
+def test_the_chosen_event_is_the_newest_tradeable_one():
+    """latest_event() picks on market created_time; check nothing newer is being missed."""
+    chosen = kalshi_odds.latest_event(SERIES)
+    newest = max((m.get("created_time") or "")
+                 for m in chosen["markets"] if m.get("status") == "active")
+    assert newest == chosen["newest_market"]
+
+    for e in kalshi_odds.events_for(SERIES)[:4]:
+        if e["event_ticker"] == chosen["event_ticker"]:
+            continue
+        active = [m for m in kalshi_odds.markets_for(e["event_ticker"])
+                  if m.get("status") == "active"]
+        if active:
+            assert max((m.get("created_time") or "") for m in active) <= newest
+
+
+def test_a_full_field_comes_back_in_a_single_page():
+    """limit=500 covers any golf field, so the cursor loop should never engage."""
+    chosen = kalshi_odds.latest_event(SERIES)
+    assert len(chosen["markets"]) == len(kalshi_odds.markets_for(chosen["event_ticker"], max_pages=1))

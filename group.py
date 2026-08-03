@@ -115,7 +115,7 @@ def list_kalshi_golf_odds(d, price=PRICE_MODE):
         golfers = d["golfers"]
         if not golfers:
             raise ValueError("Kalshi odds file contains an empty golfers list")
-        return [
+        out = [
             {
                 "golfer_name": g["golfer_name"],
                 "odds": float(g["odds"]),
@@ -123,6 +123,10 @@ def list_kalshi_golf_odds(d, price=PRICE_MODE):
             }
             for g in golfers
         ]
+        # This branch reads odds that were converted earlier, so none of to_golfers()'s
+        # guards ran here. Re-apply the one that matters.
+        check_book(out, price_mode=d.get("price_mode"), requested_price=price)
+        return out
 
     markets = d["markets"]
     golfers = kalshi_odds.to_golfers(markets, price=price)
@@ -131,7 +135,53 @@ def list_kalshi_golf_odds(d, price=PRICE_MODE):
             f"{len(markets)} Kalshi markets parsed to zero golfers -- every market is "
             "settled or finalized. Re-pull during tournament week."
         )
-    return kalshi_odds.clean_golfers(golfers)
+    out = kalshi_odds.clean_golfers(golfers)
+    check_book(out)
+    return out
+
+
+def check_book(_golfers, price_mode=None, requested_price=None):
+    """
+    Sanity-check a book that arrived already converted, i.e. one that never passed
+    through to_golfers() and so never met its filters.
+
+    A settled Kalshi market quotes bid=0.0000 / ask=1.0000. to_golfers() drops those on
+    the status filter, but `kalshi_odds.py --include-closed` can write them into an odds
+    file, and reading that file back produces a field where every golfer is a certainty.
+    The book sums to the field size, normalizes cleanly, and yields a confident grouping
+    of a tournament that finished months ago. Raise instead.
+    """
+    certainties = [g["golfer_name"] for g in _golfers if g["odds"] >= 1.0]
+    if certainties:
+        raise ValueError(
+            f"{len(certainties)} golfer(s) are priced at or above 1.0 "
+            f"({certainties[:3]}...): this file holds settled markets, which quote "
+            "ask=1.0000. It was almost certainly written with --include-closed. "
+            "Re-pull during tournament week."
+        )
+
+    if price_mode and requested_price and price_mode != requested_price:
+        print(
+            f"!! WARNING: this odds file was written with --price {price_mode}, but the "
+            f"run asked for {requested_price}. A converted file cannot be re-priced -- "
+            f"{price_mode} is what will be grouped. Re-pull to change it."
+        )
+
+    total = sum(g["odds"] for g in _golfers)
+    if total > 1.6:
+        print(
+            f"!! WARNING: this book sums to {total:.3f}. A Winner book runs ~1.3. A Top 5 "
+            "book runs toward 5 and a Top 10 toward 10 -- those outcomes are NOT mutually "
+            "exclusive, so the de-vig gives share-of-N-slots rather than probability, and "
+            "the 1/participants threshold does not mean what it means on a Winner book. "
+            "Groups will still balance; read the numbers as weights, not odds."
+        )
+    elif total < 0.9:
+        print(
+            f"!! WARNING: this book sums to {total:.3f}, below 1.0. A live Winner ask book "
+            "carries an overround and sums above 1.0. This field is stale, thin, or was "
+            "priced off the bid."
+        )
 
 
 def _looks_like_kalshi_markets(markets):
@@ -157,10 +207,12 @@ def load_golfers(d, price=PRICE_MODE, dk_odds_type=DK_ODDS_TYPE):
             raise ValueError("odds file is an empty list")
         if not all(isinstance(g, dict) and "golfer_name" in g and "odds" in g for g in d):
             raise ValueError("list-shaped odds file must hold {golfer_name, odds} objects")
-        return [
+        out = [
             {"golfer_name": g["golfer_name"], "odds": float(g["odds"]), "golfer_id": g.get("golfer_id")}
             for g in d
         ]
+        check_book(out)
+        return out
 
     if not isinstance(d, dict):
         raise ValueError(f"unrecognised odds file: expected an object or a list, got {type(d).__name__}")
@@ -236,10 +288,17 @@ def odds_to_conditional(_golfers, _excluded_golfers=(), _verbose=False):
     if missing:
         print(f"!! WARNING: excluded golfers not in this field, so they excluded nothing: {sorted(missing)}")
 
-    excluded_fair_prob = sum(g["odds"] for g in fair if g["golfer_name"] in excluded)
-    if excluded_fair_prob >= 1.0:
+    survivors = [g for g in fair if g["golfer_name"] not in excluded]
+    if not survivors:
         raise ValueError("the exclusion list covers the whole field -- nothing left to group")
-    scale_factor = 1 / (1 - excluded_fair_prob)
+
+    # Re-scale by what SURVIVES rather than by 1 - sum(excluded). The two are equal in
+    # exact arithmetic, but a sum of normalized floats lands on 0.9999999999999999 often
+    # enough that a "did we exclude everyone?" test against 1.0 quietly fails and returns
+    # an empty field instead of raising.
+    excluded_fair_prob = sum(g["odds"] for g in fair if g["golfer_name"] in excluded)
+    surviving_prob = sum(g["odds"] for g in survivors)
+    scale_factor = 1 / surviving_prob
 
     if _verbose:
         print("Conditional Odds Mode.. calculating VIG")
@@ -247,11 +306,7 @@ def odds_to_conditional(_golfers, _excluded_golfers=(), _verbose=False):
         print(f"Excluded Fair Probability: {excluded_fair_prob}")
         print(f"Conditional Scale Factor: {scale_factor}")
 
-    return [
-        {**g, "odds": g["odds"] * scale_factor}
-        for g in fair
-        if g["golfer_name"] not in excluded
-    ]
+    return [{**g, "odds": g["odds"] * scale_factor} for g in survivors]
 
 
 def golfers_over_threshold(_golfers, n_participants):
@@ -275,6 +330,10 @@ def auto_exclusions(_golfers, n_participants):
 
     Removing a golfer redistributes their probability over everyone left, which can
     push the next-best golfer over the line. One pass is not enough.
+
+    The cascade stops before it can leave fewer golfers than there are groups to fill.
+    A field that short is not groupable at all, and the DP partitioner does not fail
+    gracefully on one -- it fails to terminate.
     """
     excluded, remaining = [], list(_golfers)
     while len(remaining) > n_participants:
@@ -282,6 +341,16 @@ def auto_exclusions(_golfers, n_participants):
         if not over:
             break
         names = {g["golfer_name"] for g in over}
+        if len(remaining) - len(names) < n_participants:
+            # Removing the whole batch would over-shrink the field. Take them in
+            # descending order and stop at the floor.
+            room = len(remaining) - n_participants
+            names = {
+                g["golfer_name"]
+                for g in sorted(over, key=lambda g: g["odds"], reverse=True)[:room]
+            }
+            if not names:
+                break
         excluded.extend(sorted(names))
         remaining = [g for g in remaining if g["golfer_name"] not in names]
     return excluded
@@ -354,8 +423,16 @@ METHOD_LABELS = {
 
 
 def run_methods(golfers, n_groups, methods=METHODS, sa_iter=100000, ga_pop=500,
-                ga_generations=10000, ga_mutation=0.1, dp_scale=100):
-    """Run each requested partitioner and return {label: groups}."""
+                ga_generations=10000, ga_mutation=0.1):
+    """
+    Run each requested partitioner and return {label: groups}.
+
+    Every method needs at least n_groups golfers. dp_generate_groups in particular
+    does not merely return a bad answer on a short field -- its reconstruction loop
+    never terminates. main() checks the field size after exclusions for that reason.
+    """
+    if len(golfers) < n_groups:
+        raise ValueError(f"{len(golfers)} golfers cannot fill {n_groups} groups")
     out = {}
     for m in methods:
         # Each method gets its own list: greedy_redistribute_groups sorts in place,
@@ -364,7 +441,7 @@ def run_methods(golfers, n_groups, methods=METHODS, sa_iter=100000, ga_pop=500,
         if m == "backtracking":
             out[METHOD_LABELS[m]] = backtracking_generate_groups(field, n_groups)
         elif m == "dp":
-            out[METHOD_LABELS[m]] = dp_generate_groups(field, n_groups, scale=dp_scale)
+            out[METHOD_LABELS[m]] = dp_generate_groups(field, n_groups)
         elif m == "sa":
             out[METHOD_LABELS[m]] = sa_generate_groups(field, n_groups, max_iter=sa_iter)
         elif m == "ga":
@@ -385,19 +462,37 @@ def load_odds(args):
     Order: an explicit --data-file, then --event (live pull), then a local
     kalshi_data.json / dk_data.json, then a live pull of the newest event that has
     active markets. Returns (golfers, description).
-    """
-    if args.data_file:
-        return read_odds_file(args.data_file, price=args.price, dk_odds_type=args.dk_odds_type), args.data_file
 
-    if not args.event:
-        local = find_odds_file()
-        if local:
-            return read_odds_file(local, price=args.price, dk_odds_type=args.dk_odds_type), local
+    Whatever the route, the field comes back sorted by probability descending. The
+    partitioners are order-sensitive -- feeding the DP the API's own ordering rather
+    than a sorted one measurably worsens the partition -- so the sort belongs here,
+    once, rather than in whichever caller happens to remember it.
+    """
+    path = args.data_file or (None if args.event else find_odds_file())
+    if path:
+        golfers = read_odds_file(path, price=args.price, dk_odds_type=args.dk_odds_type)
+        golfers.sort(key=lambda g: g["odds"], reverse=True)
+        return golfers, f"{path}{_file_provenance(path)}"
 
     event_ticker, golfers, report = kalshi_odds.fetch_golfers(
         event_ticker=args.event, price=args.price, series=args.series
     )
+    print(f"Kalshi liquidity: {report['two_sided_quotes']}/{report['golfers']} two-sided, "
+          f"{report['spreads_over_5c']} spreads over 5c, book sums to {report['probability_sum']}")
     return kalshi_odds.clean_golfers(golfers), f"Kalshi {event_ticker} ({args.price})"
+
+
+def _file_provenance(path):
+    """When and what an odds file captured, so a stale file cannot pass unnoticed."""
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except Exception:
+        return ""
+    if not isinstance(d, dict):
+        return ""
+    bits = [str(d[k]) for k in ("event", "price_mode", "fetched_at") if d.get(k)]
+    return f" [{', '.join(bits)}]" if bits else ""
 
 
 def build_parser():
@@ -423,10 +518,6 @@ def build_parser():
     ap.add_argument("--ga-pop", type=int, default=500)
     ap.add_argument("--ga-generations", type=int, default=10000)
     ap.add_argument("--ga-mutation", type=float, default=0.1)
-    ap.add_argument("--dp-scale", type=int, default=100,
-                    help="fixed-point scale for the DP table. 100 quantises to 1c, which "
-                         "rounds most of a golf field to zero weight; 1000 matches Kalshi's "
-                         "0.1c tick at ~10x the memory.")
     ap.add_argument("--seed", type=int, help="seed the RNG so a run is reproducible")
     return ap
 
@@ -486,11 +577,20 @@ def main(argv=None):
         # De-vig anyway, so group totals are always read on the same 1.0 scale.
         golfers = normalize_probabilities(golfers)
 
+    # Re-check AFTER exclusions. The check above ran on the full field, and an
+    # exclusion list -- named or automatic -- can drop it below the group count.
+    # dp_generate_groups does not fail gracefully on a short field; it hangs.
+    if len(golfers) < n_groups:
+        raise SystemExit(
+            f"only {len(golfers)} golfers left after excluding {len(exclude_list)}, "
+            f"which cannot fill {n_groups} groups. Exclude fewer golfers or run fewer groups."
+        )
+
     print(f"Grouping {len(golfers)} golfers into {n_groups} groups...")
 
     groups_by_method = run_methods(
         golfers, n_groups, methods=methods, sa_iter=args.sa_iter, ga_pop=args.ga_pop,
-        ga_generations=args.ga_generations, ga_mutation=args.ga_mutation, dp_scale=args.dp_scale,
+        ga_generations=args.ga_generations, ga_mutation=args.ga_mutation,
     )
 
     result = {}
@@ -511,7 +611,7 @@ def main(argv=None):
         print("NO VALID GROUPS FOUND")
         return 1
 
-    print(f"Using Kalshi series: {args.series} ({args.price} price)...")
+    print(f"Odds source was {source}...")
     print(f"Best Grouping Method was {best_groups.get('method')} with a delta percentage of {best_groups.get('delta_percentage')}%")
     print("Assigning names to group...")
     # Shuffle participant names and assign groups

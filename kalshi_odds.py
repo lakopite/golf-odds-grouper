@@ -29,7 +29,9 @@ WHY WINNER, AND WHY THE ASK:
     Top 5 / Top 10 / MakeCut are linear_cent, a flat $0.01 -- 10x coarser exactly
     where a golf field lives. Winner is the better signal, not the worse one.
 
-    The ask is the price to use. Measured on a live 143-golfer field:
+    The ask is the price to use. Measured on the live 143-golfer KXPGATOUR-WYC26 field
+    on 2026-08-03 (prices move, so treat the figures as a shape, not a constant; the
+    earlier 2026-08-02 capture in kalshi-migration/START-HERE.md read 1.294 / 0.877):
         ask: 31 distinct levels, sums to 1.308, zero golfers at 0.0000
         bid: 30 distinct levels, sums to 0.906, 46 golfers at 0.0000
     A bid book that sums under 1.0 is not a distribution, and a third of the field
@@ -184,10 +186,18 @@ def list_field_events():
     return rows
 
 
-def markets_for(event_ticker):
-    """All golfer markets in an event, paging until exhausted."""
-    out, cursor = [], None
-    while True:
+def markets_for(event_ticker, max_pages=20):
+    """
+    All golfer markets in an event, paging until exhausted.
+
+    limit=500 covers any golf field in one page, so in practice this never loops. The
+    guards are for the case where it does: a server that echoes the same cursor back
+    would otherwise spin forever and duplicate the field, and a swallowed page limit
+    would silently truncate it. Both are bounded here, and exhausting max_pages raises
+    rather than returning a partial field.
+    """
+    out, cursor, seen = [], None, set()
+    for _ in range(max_pages):
         params = {"event_ticker": event_ticker, "limit": 500}
         if cursor:
             params["cursor"] = cursor
@@ -195,21 +205,35 @@ def markets_for(event_ticker):
         out.extend(data.get("markets", []))
         cursor = data.get("cursor")
         if not cursor or not data.get("markets"):
-            break
-    return out
+            return out
+        if cursor in seen:
+            raise RuntimeError(
+                f"/markets returned a repeated cursor {cursor!r} for {event_ticker}. "
+                "Paging is not advancing; the field would be duplicated."
+            )
+        seen.add(cursor)
+    raise RuntimeError(
+        f"/markets did not finish paging {event_ticker} within {max_pages} pages "
+        f"({len(out)} markets so far). Refusing to return a partial field."
+    )
 
 
 def latest_event(series_ticker=DEFAULT_SERIES, max_probe=4):
     """
-    Newest event in a series that still has at least one active market.
+    The current tournament in a series: the one whose markets were created most recently
+    and that still has at least one active market.
 
-    /events returns newest first, so this walks the head of that list and stops at
-    the first tournament that is actually tradeable. It probes at most `max_probe`
-    events, sequentially, because bursts get rate limited.
+    /events appears to return newest first, but the event objects carry no date field to
+    verify that with -- strike_date is null on every one. So rather than trusting list
+    position, this probes the `max_probe` head events and picks by the newest market
+    created_time among those that are tradeable. An old event with one stray active
+    market can therefore no longer win on position alone.
 
-    Raises if nothing tradeable is found. It never returns None -- a silent None
-    here would read exactly like "no tournament this week", which is the failure
-    mode this module exists to avoid.
+    Probing is sequential and paced, because bursts get rate limited.
+
+    Raises if nothing tradeable is found. It never returns None -- a silent None here
+    would read exactly like "no tournament this week", which is the failure mode this
+    module exists to avoid.
     """
     events = events_for(series_ticker)
     if not events:
@@ -217,7 +241,8 @@ def latest_event(series_ticker=DEFAULT_SERIES, max_probe=4):
             f"no events at all for series {series_ticker}. That is unexpected -- "
             "check the response before assuming the series is empty."
         )
-    tried = []
+
+    candidates, tried = [], []
     for e in events[:max_probe]:
         ticker = e.get("event_ticker")
         if not ticker:
@@ -225,15 +250,32 @@ def latest_event(series_ticker=DEFAULT_SERIES, max_probe=4):
         markets = markets_for(ticker)
         active = [m for m in markets if m.get("status") == "active"]
         if active:
-            return {
-                "event_ticker": ticker,
-                "title": e.get("title"),
-                "tournament": e.get("sub_title"),
-                "markets": markets,
-                "active_count": len(active),
-            }
-        tried.append(f"{ticker} ({len(markets)} markets, 0 active)")
+            candidates.append(
+                {
+                    "event_ticker": ticker,
+                    "title": e.get("title"),
+                    "tournament": e.get("sub_title"),
+                    "markets": markets,
+                    "active_count": len(active),
+                    "newest_market": max((m.get("created_time") or "") for m in active),
+                }
+            )
+        else:
+            tried.append(f"{ticker} ({len(markets)} markets, 0 active)")
         time.sleep(0.3)
+
+    if candidates:
+        best = max(candidates, key=lambda c: c["newest_market"])
+        if len(candidates) > 1:
+            others = [c["event_ticker"] for c in candidates if c is not best]
+            print(
+                f"note: {len(candidates)} probed {series_ticker} events are tradeable "
+                f"({', '.join(c['event_ticker'] for c in candidates)}); chose "
+                f"{best['event_ticker']} on newest market created_time. Pass --event "
+                f"explicitly to pick one of {others}.",
+                file=sys.stderr,
+            )
+        return best
 
     raise RuntimeError(
         f"no tradeable event in the {max_probe} newest {series_ticker} events: "
@@ -519,12 +561,21 @@ def main():
                     "source": "kalshi",
                     "event": event_ticker,
                     "price_mode": args.price,
+                    # group.py prints this back, so a file left over from last week is
+                    # visible rather than silently winning the odds-resolution order.
+                    "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     "golfers": clean_golfers(golfers),
                 },
                 f,
                 indent=2,
             )
         print(f"Wrote {args.write_odds_file}  (group.py reads this directly)")
+        if args.include_closed:
+            print(
+                "!! WARNING: written with --include-closed, so it holds settled markets "
+                "quoting ask=1.0000. group.py will refuse this file.",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":
