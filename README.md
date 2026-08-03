@@ -228,10 +228,14 @@ its own with:
 python espn_leaderboard.py --season 2026 --event 401811961 --match build/result.json
 ```
 
-**Kalshi will not answer a browser.** Its API allowlists request origins — `kalshi.com`
-gets a 200, every other origin including `localhost` and `file://` gets a 403 with no
-CORS headers. So the exported page always carries the odds snapshot, and shows live
-odds only when `--kalshi-proxy` gives it a relay.
+**Kalshi will not answer a browser, so the page does not ask it.** Its API allowlists
+request origins — `kalshi.com` gets a 200, every other origin including `localhost` and
+`file://` gets a 403 with no CORS headers. The exported page therefore fetches exactly
+one thing, the ESPN leaderboard, and carries its odds baked in and time-stamped as of
+the draw. There are no live odds and no relay to configure. The one way to show prices
+moving is to rebuild with `--refresh-odds`, which re-reads Kalshi server-side and bakes
+a second reading in beside the first; the page shows the movement since the draw and
+says it is frozen until the next rebuild.
 
 ## Tests
 

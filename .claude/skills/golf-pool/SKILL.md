@@ -91,7 +91,6 @@ Useful flags:
 | `--seed 42` | reproducible deal of groups to teams |
 | `--exclude "Scottie Scheffler"` | drop a named golfer; repeatable |
 | `--no-auto-exclude` | keep golfers over the fair-share threshold |
-| `--kalshi-proxy "https://relay/?u={url}"` | enable live odds in the page (§6) |
 | `--update-aliases` | save newly learned golfer name aliases to the repo |
 | `--espn-history-events N` | how far back to look for golfer identities (default 4) |
 
@@ -143,8 +142,8 @@ Short. The groups are in the file; do not paste 150 golfers into chat. Say:
 - each team's total odds, so they can see the draw was even;
 - anything odd — a fuzzy tournament match, a short field, unresolved golfers.
 
-Mention that live odds are snapshot-only unless a relay is configured (§6) — once, not
-every time.
+If odds come up, say once that the page's odds are the snapshot from the draw and never
+change on their own (§6). Do not offer live odds; there are none.
 
 ---
 
@@ -228,9 +227,11 @@ markets quote nothing, so a `--regroup` at that point fails by design.
 
 **`--refresh-odds`.** Also re-reads Kalshi and records what the market says now, in
 `odds_snapshot.refreshed` and `golfers[].odds.current`. The odds at creation do not
-move. This is the only way the exported page shows prices changing without a relay
-(§6) — the page presents them as movement since the draw. It also names golfers priced
-after the draw who are in nobody's group, and drawn golfers whose market has gone.
+move. This is the **only** way the exported page ever shows prices changing (§6) — the
+page presents them as movement since the draw, frozen until the next rebuild. It also
+names golfers priced after the draw who are in nobody's group, and drawn golfers whose
+market has gone. Re-send the page afterwards; a copy somebody already has will not
+update itself.
 
 **`--regroup`.** Pulls fresh odds and partitions again. **Every team gets a different
 group.** Only do this if they have asked for a redraw and nobody is holding the old
@@ -284,16 +285,17 @@ those sum to 1.0 across every grouped golfer.
 
 ## 6. Two facts that shape every answer
 
-**Kalshi will not answer a browser.** Its API allowlists request origins: `kalshi.com`
-gets a 200, and every other origin — localhost, GitHub Pages, `file://` — gets a 403
-with no CORS headers, preflight included. So the exported page cannot fetch live odds.
-It always carries the snapshot, which is real and time-stamped, and shows live odds
-only if `--kalshi-proxy` gave it a relay. Never promise live odds without one.
+**Kalshi will not answer a browser, so the page has no live odds — by design.** Its API
+allowlists request origins: `kalshi.com` gets a 200, and every other origin — localhost,
+GitHub Pages, `file://` — gets a 403 with no CORS headers, preflight included. The
+exported page therefore fetches **one** thing, the ESPN leaderboard, and carries its
+odds baked in: real, time-stamped, and fixed as of the draw. There is no relay flag and
+no live-odds setting to look for. **Never offer or promise live odds.**
 
-Without a relay there is still one honest way to show prices moving: rebuild with
-`--refresh-odds` (§4) and re-send the page. That bakes a second reading in beside the
-first, and the page shows the movement since the draw. It is a new page each time, not
-a feed — say that rather than calling it live.
+There is one honest way to show prices moving: rebuild with `--refresh-odds` (§4) and
+re-send the page. That bakes a second reading in beside the first, and the page shows
+the movement since the draw. It is a new page each time, not a feed — say that rather
+than calling it live.
 
 **ESPN publishes no field before the tournament starts.** A `pre` event returns zero
 competitors, so there is no leaderboard to join against on Wednesday night. The build

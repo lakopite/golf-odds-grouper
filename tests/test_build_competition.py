@@ -149,8 +149,7 @@ def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
     order = list(range(n_teams))
     team_groups = {teams[i]["team_id"]: groups[order[i]] for i in range(n_teams)}
 
-    args = types.SimpleNamespace(price="ask", espn_league="pga", poll_interval=60,
-                                 kalshi_proxy=None)
+    args = types.SimpleNamespace(price="ask", espn_league="pga", poll_interval=60)
     return bc.assemble(
         now="2026-08-03T00:00:00+00:00", args=args,
         league={"league_id": "L", "league_name": "Test", "league_slug": "test",
@@ -255,7 +254,17 @@ def test_the_result_says_kalshi_is_unreachable_from_a_browser():
     result = make_result()
     assert result["sources"]["kalshi"]["browser_reachable"] is False
     assert result["sources"]["espn"]["browser_reachable"] is True
-    assert result["live"]["kalshi_proxy_url_template"] is None
+
+
+def test_the_file_offers_the_page_no_kalshi_endpoint_to_fetch():
+    """
+    `live` is what the page does while it is open, and since 1.2 that is ESPN and
+    nothing else. A Kalshi URL or a relay slot in here is an invitation to write a
+    fetch that can only 403, which is the panel this simplification removed.
+    """
+    live = make_result()["live"]
+    assert set(live) == {"espn_leaderboard_url", "poll_interval_seconds", "name_match"}
+    assert "espn.com" in live["espn_leaderboard_url"]
 
 
 def test_the_result_carries_the_grouping_certificate():

@@ -80,8 +80,13 @@ import league as league_mod
 # 1.1 added, all additive: `rebuilt_from`, `odds_snapshot.refreshed`,
 # `odds_snapshot.auto_exclude`, `golfers[].odds.current`, and `golfers[].espn` gaining
 # source / from_event / in_field.
-# A 1.0 reader still works on a 1.1 file -- every 1.0 key means exactly what it did.
-SCHEMA_VERSION = "1.1"
+# 1.2 REMOVED `live.kalshi_markets_url` and `live.kalshi_proxy_url_template`. Kalshi
+# 403s every browser origin, so a page could only read them through a relay somebody
+# had to run; nothing does, and a slot for a thing that never happens is a promise the
+# page kept having to explain. Odds are baked, full stop. Every remaining key means
+# exactly what it did, and `sources.kalshi.markets_endpoint` still says where the
+# numbers came from.
+SCHEMA_VERSION = "1.2"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -98,7 +103,7 @@ ALIAS_FILE = "data/espn_aliases.json"
 # line, by argparse dest. See apply_result_defaults.
 REBUILD_INPUTS = ("tournament", "kalshi_event", "odds", "price", "espn_event",
                   "espn_league", "season", "seed", "exclude", "auto_exclude",
-                  "poll_interval", "kalshi_proxy")
+                  "poll_interval")
 
 # Local logos are inlined so the exported bundle is one portable file. A logo bigger
 # than this is a mistake rather than a choice -- a 2 MB PNG lands in every copy of the
@@ -260,8 +265,9 @@ def refresh_odds(event_ticker, price, field, now):
     Re-read Kalshi at today's prices, without touching the groups.
 
     This is the only way a scoreboard gets a moving number: Kalshi will not answer a
-    browser (see the CORS note in docs/FRONTEND-SPEC.md), so short of running a relay,
-    "current odds" means somebody re-ran the build and re-sent the page.
+    browser at all (see the CORS note in docs/FRONTEND-SPEC.md), so the page never
+    fetches odds and "current odds" means somebody re-ran the build and re-sent the
+    page. A second snapshot, not a feed.
 
     Returns (by_name, report), or (None, None) if there is nothing live to read -- a
     settled tournament quotes no active markets, and that is a reason to carry the
@@ -715,7 +721,8 @@ def assemble(**k):
 
     Grouped by what a reader is asking. `league` / `teams` / `golfers` answer "who has
     whom". `odds_snapshot` and `grouping` answer "why". `sources` answers "where did
-    this come from and can I check it". `live` answers "what may the page fetch".
+    this come from and can I check it". `live` answers "what does the page fetch while
+    it runs", which since 1.2 is ESPN and nothing else.
     """
     field, devigged, weighted = k["field"], k["devigged"], k["weighted"]
     weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
@@ -864,8 +871,9 @@ def assemble(**k):
                     "Kalshi allowlists request origins: a GET carrying "
                     "Origin: https://kalshi.com returns 200, every other origin returns 403 "
                     "with no CORS headers (localhost, GitHub Pages and file:// all measured "
-                    "2026-08-03). A static page cannot read live odds from Kalshi directly; "
-                    "it needs a relay. See live.kalshi_proxy_url_template."
+                    "2026-08-03). The scoreboard therefore never fetches odds: the prices "
+                    "the groups were drawn on are baked in, and a rebuild with "
+                    "--refresh-odds bakes in a second reading beside them."
                 ),
             },
             "espn": {
@@ -932,11 +940,12 @@ def assemble(**k):
             "summary": grouper_cli.describe_partition(k["report"]),
         },
 
+        # What the page does while it is open. ESPN, on a timer, and nothing else --
+        # Kalshi 403s every browser origin, so the odds are baked rather than fetched
+        # and there is no second endpoint here to configure. See sources.kalshi.
         "live": {
             "espn_leaderboard_url": leaderboard,
             "poll_interval_seconds": k["args"].poll_interval,
-            "kalshi_markets_url": markets_endpoint,
-            "kalshi_proxy_url_template": k["args"].kalshi_proxy or None,
             "name_match": {
                 "strategy": ["alias", "normalized_exact", "first_initial_and_last_name"],
                 "normalization": ("NFKD, drop combining marks, lowercase, hyphen and apostrophe "
@@ -1084,10 +1093,6 @@ def build_parser():
                     help="write newly learned golfer name aliases back to the alias file")
     ap.add_argument("--poll-interval", type=int, default=60,
                     help="seconds the scoreboard should wait between ESPN polls (default 60)")
-    ap.add_argument("--kalshi-proxy", metavar="URL_TEMPLATE",
-                    help="CORS relay for live odds, with {url} where the encoded Kalshi URL goes. "
-                         "Without one the scoreboard shows the snapshot only -- Kalshi will not "
-                         "answer a browser.")
     return ap
 
 
@@ -1154,7 +1159,6 @@ def apply_result_defaults(args, result, typed=()):
                     if e["reason"] == "named"] or None,
         "auto_exclude": result["odds_snapshot"].get("auto_exclude"),
         "poll_interval": (result.get("live") or {}).get("poll_interval_seconds"),
-        "kalshi_proxy": (result.get("live") or {}).get("kalshi_proxy_url_template"),
     }
     filled = []
     for name in REBUILD_INPUTS:
