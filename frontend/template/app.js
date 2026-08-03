@@ -6,7 +6,8 @@
  * checked against the Python implementation by tests/test_frontend_parity.py.
  *
  * No framework, no build step, no network on load. The competition data is baked into
- * the page; the only fetch is ESPN, which is the only host that will answer a browser.
+ * the page, and ESPN is the ONLY host it ever fetches -- the only one that will answer
+ * a browser at all.
  */
 'use strict';
 
@@ -19,7 +20,7 @@ DATA.golfers.forEach(function (g) {
   GOLFERS_BY_TEAM.get(g.team_id).push(g);
 });
 
-var STATE = { players: [], meta: null, index: null, live: null, error: null, lastPoll: null };
+var STATE = { players: [], meta: null, index: null, error: null, lastPoll: null };
 
 function $(sel) { return document.querySelector(sel); }
 
@@ -36,70 +37,34 @@ function resolvePlayer(golfer) {
 }
 
 /* ------------------------------------------------------------------ *
- * Live odds.
+ * Movement since the draw.
  *
- * Kalshi allowlists request origins: a GET carrying Origin: https://kalshi.com
- * returns 200, and every other origin -- localhost, GitHub Pages, file:// -- gets a
- * 403 with no CORS headers at all, preflight included (measured 2026-08-03). So a
- * static page cannot read live odds unless the result file names a relay. Without
- * one this reports why and the page shows the snapshot, which is always present and
- * always correct as of the time it states.
+ * The page never fetches odds, and there is no state in which it might. Kalshi
+ * allowlists request origins: a GET carrying Origin: https://kalshi.com returns 200,
+ * and every other origin -- localhost, GitHub Pages, file:// -- gets a 403 with no
+ * CORS headers at all, preflight included (measured 2026-08-03). The odds here are
+ * the ones baked into the file, and they are correct as of the time they state.
  *
- * There is a second way for prices to move without a relay: somebody re-ran the build
- * with --refresh-odds and re-sent the page. That re-read is baked in the same way the
- * original snapshot is, so it needs no network at all -- and it is compared against
- * the price the groups were DRAWN on rather than against the raw ask, because those
- * differ on any price mode but the default.
+ * Prices do still move between two copies of the page: somebody re-ran the build with
+ * --refresh-odds and re-sent it. That re-read is baked in exactly as the original
+ * snapshot is, so it costs no network -- and it is compared against the price the
+ * groups were DRAWN on rather than against the raw ask, because those differ on any
+ * price mode but the default.
+ *
+ * Computed once, at load, because it is a pure function of the baked data.
  * ------------------------------------------------------------------ */
 
-function bakedOdds() {
+var MOVEMENT = (function () {
   var refreshed = DATA.odds_snapshot.refreshed;
   if (!refreshed) return null;
   var byId = new Map();
   DATA.golfers.forEach(function (g) {
     if (g.golfer_id && g.odds.current !== null && g.odds.current !== undefined) {
-      byId.set(g.golfer_id, { ask: g.odds.current });
+      byId.set(g.golfer_id, g.odds.current);
     }
   });
-  return {
-    ok: true, byId: byId, sum: refreshed.raw_book_sum,
-    at: new Date(refreshed.at), basis: 'drawn_price', source: 'rebuild'
-  };
-}
-
-function fetchLiveOdds() {
-  var template = DATA.live.kalshi_proxy_url_template;
-  if (!template) {
-    return Promise.resolve(bakedOdds() || { ok: false, reason: 'no-proxy' });
-  }
-  var url = template.replace('{url}', encodeURIComponent(DATA.live.kalshi_markets_url));
-  return fetch(url, { headers: { Accept: 'application/json' } })
-    .then(function (r) {
-      if (!r.ok) throw new Error('http-' + r.status);
-      return r.json();
-    })
-    .then(function (body) {
-      // A relay may hand back the payload verbatim or wrapped in a string field.
-      var markets = body.markets ||
-        (typeof body.contents === 'string' ? (JSON.parse(body.contents).markets) : null);
-      if (!markets) return { ok: false, reason: 'unrecognised relay response shape' };
-      var byId = new Map(), sum = 0;
-      markets.forEach(function (m) {
-        if (m.status !== 'active') return;
-        var ask = parseFloat(m.yes_ask_dollars || '0');
-        sum += ask;
-        var id = (m.custom_strike || {}).golf_competitor;
-        if (id) byId.set(id, { ask: ask, bid: parseFloat(m.yes_bid_dollars || '0') });
-      });
-      return { ok: true, byId: byId, sum: sum, at: new Date(), basis: 'kalshi_ask',
-               source: 'relay' };
-    })
-    .catch(function (err) {
-      // A relay that is down does not make a baked re-read wrong; it just makes it
-      // the freshest thing left.
-      return bakedOdds() || { ok: false, reason: String(err.message || err) };
-    });
-}
+  return { byId: byId, sum: refreshed.raw_book_sum, at: new Date(refreshed.at) };
+})();
 
 /* ------------------------------------------------------------------ *
  * Render
@@ -108,16 +73,15 @@ function fetchLiveOdds() {
 function pct(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
 
 /* Movement, not a second column of levels. The number beside it is what the golfer was
- * worth when the groups were drawn; repeating today's price next to it reads as a jump
- * even when nothing has moved, because one is de-vigged and the other is not. What is
- * actually interesting is "shorter than when you drafted him", in points of the same
+ * worth when the groups were drawn; repeating the re-read price next to it reads as a
+ * jump even when nothing has moved, because one is de-vigged and the other is not. What
+ * is actually interesting is "shorter than when you drafted him", in points of the same
  * price. Under half a point is not a move worth an arrow. */
-function liveCell(golfer) {
-  if (!STATE.live || !STATE.live.ok) return '';
-  var hit = STATE.live.byId.get(golfer.golfer_id);
-  if (!hit) return '';
-  var base = STATE.live.basis === 'drawn_price' ? golfer.odds.raw : (golfer.kalshi.ask || 0);
-  var delta = (hit.ask - (base || 0)) * 100;
+function moveCell(golfer) {
+  if (!MOVEMENT) return '';
+  var now = MOVEMENT.byId.get(golfer.golfer_id);
+  if (now === undefined) return '';
+  var delta = (now - (golfer.odds.raw || 0)) * 100;
   if (Math.abs(delta) < 0.05) return '→';
   return (delta > 0 ? '↑ +' : '↓ −') + Math.abs(delta).toFixed(1);
 }
@@ -140,7 +104,7 @@ function golferRow(golfer, player) {
   tr.append(el('td', 'gscore', player ? GolfPool.fmtPar(player.toPar) : '—'));
   tr.append(el('td', 'gthru', player ? String(player.thru || player.statusShort || '') : ''));
   tr.append(el('td', 'godds', pct(golfer.odds.grouping_weight)));
-  tr.append(el('td', 'glive', liveCell(golfer)));
+  tr.append(el('td', 'gmove', moveCell(golfer)));
   return tr;
 }
 
@@ -261,35 +225,35 @@ function renderOdds() {
       return e.golfer_name + ' (' + e.reason.replace(/_/g, ' ') + ')';
     }).join(', ') + '.');
   }
-  if (!STATE.live) parts.push('Live odds: checking…');
-  else if (STATE.live.ok && STATE.live.source === 'rebuild') {
+  if (MOVEMENT) {
     // Not a feed. Somebody re-ran the build against Kalshi and re-sent this page, and
     // that re-read is baked in exactly as the snapshot is. Saying "live" would promise
     // a number that will not change until the next rebuild.
-    parts.push('Odds re-read ' + STATE.live.at.toLocaleString() + ' when this page was '
-      + 'rebuilt, book then summing to ' + STATE.live.sum.toFixed(3)
+    parts.push('Odds re-read ' + MOVEMENT.at.toLocaleString() + ' when this page was '
+      + 'rebuilt, book then summing to ' + MOVEMENT.sum.toFixed(3)
       + '. The arrows are movement since the draw; they will not change again until the '
       + 'next rebuild.');
-    if (snap.refreshed && snap.refreshed.priced_since_the_draw.length) {
+    if (snap.refreshed.priced_since_the_draw.length) {
       parts.push(snap.refreshed.priced_since_the_draw.length + ' golfer(s) were added to the '
         + 'market after the draw and are in nobody’s group: '
         + snap.refreshed.priced_since_the_draw.join(', ') + '.');
     }
-  } else if (STATE.live.ok) {
-    parts.push('Live odds updated ' + STATE.live.at.toLocaleTimeString()
-      + ', book now sums to ' + STATE.live.sum.toFixed(3) + '.');
-  } else if (STATE.live.reason === 'no-proxy') {
-    parts.push('Live odds unavailable: Kalshi’s API allowlists request origins and returns 403 '
-      + 'to a browser. Set live.kalshi_proxy_url_template in the result file to enable them.');
   } else {
-    parts.push('Live odds unavailable (' + STATE.live.reason + '). The snapshot above still holds.');
+    // Not an apology for a missing feature -- a statement of what these numbers are.
+    // There is no fetch that could make them newer, so there is nothing to promise.
+    parts.push('These are the prices the groups were drawn on. They do not move while '
+      + 'this page is open: Kalshi’s API returns 403 to a browser, so no odds are ever '
+      + 'fetched here. A rebuilt page carries a second reading and shows how far each '
+      + 'price moved.');
   }
   $('#odds-note').textContent = parts.join(' ');
 }
 
+/* Provenance, not a list of what gets fetched -- only the first of these two is ever
+ * requested, and the wording has to keep saying so. */
 function renderFooter() {
-  $('#sources').textContent = 'scores ' + DATA.sources.espn.leaderboard_endpoint
-    + ' · odds ' + DATA.sources.kalshi.markets_endpoint;
+  $('#sources').textContent = 'scores polled from ' + DATA.sources.espn.leaderboard_endpoint
+    + ' · odds captured from ' + DATA.sources.kalshi.markets_endpoint;
   $('#poll').textContent = STATE.lastPoll ? 'last poll ' + STATE.lastPoll.toLocaleTimeString() : '';
 }
 
@@ -331,19 +295,11 @@ function poll() {
     });
 }
 
+/* One loop, one endpoint. Everything else on the page is already in the page. */
 function start() {
   render();
-  poll().then(function () {
-    return fetchLiveOdds().then(function (live) { STATE.live = live; render(); });
-  });
-
-  var interval = (DATA.live.poll_interval_seconds || 60) * 1000;
-  setInterval(poll, interval);
-  if (DATA.live.kalshi_proxy_url_template) {
-    setInterval(function () {
-      fetchLiveOdds().then(function (live) { STATE.live = live; render(); });
-    }, Math.max(interval, 120000));
-  }
+  poll();
+  setInterval(poll, (DATA.live.poll_interval_seconds || 60) * 1000);
 }
 
 start();

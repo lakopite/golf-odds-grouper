@@ -62,12 +62,12 @@ table.golfers { width: 100%; border-collapse: collapse; margin-top: 0.6rem; font
 table.golfers td { padding: 0.2rem 0.35rem; border-top: 1px solid var(--line); }
 table.golfers tr.out { color: var(--muted); }
 .gpos { width: 3.5rem; }
-.gscore, .gthru, .godds, .glive { text-align: right; width: 4.5rem; font-variant-numeric: tabular-nums; }
+.gscore, .gthru, .godds, .gmove { text-align: right; width: 4.5rem; font-variant-numeric: tabular-nums; }
 .gname { width: auto; }
 
 footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8em; word-break: break-all; }
 
 @media (max-width: 34rem) {
-  .gthru, .glive { display: none; }
+  .gthru, .gmove { display: none; }
   .team-head { flex-wrap: wrap; }
 }

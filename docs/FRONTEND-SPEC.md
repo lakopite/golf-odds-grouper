@@ -11,9 +11,11 @@ A working reference implementation lives in `frontend/template/`. It is delibera
 plain — it exists to prove the contract, not to be the design. Read it for *what*, and
 ignore it for *how*.
 
-> **The one thing to read first.** §4. Kalshi will not answer a browser. Any design
-> that treats "live odds" as a thing the page can just fetch is designing a panel that
-> is permanently empty for every user.
+> **The one thing to read first.** §4. Kalshi will not answer a browser, so **the page
+> fetches exactly one thing: the ESPN leaderboard.** There is no live-odds panel, no
+> relay, no setting that turns one on. Odds are baked in and stated as of the moment
+> they were captured. Any design that treats "live odds" as a thing the page can fetch
+> is designing a panel that is permanently empty for every user.
 
 ---
 
@@ -43,10 +45,12 @@ other and the interesting information is the *margin*, not the standings.
 |---|---|---|
 | Teams, logos, rosters | ✅ | — |
 | Odds when the groups were drawn | ✅ | — |
+| Odds re-read at a later rebuild | ✅ when present — see §4 | — |
 | Which endpoints produced the numbers | ✅ | — |
 | Grouping quality certificate | ✅ | — |
 | Live scores and positions | — | ✅ ESPN |
-| Live odds | ✅ snapshot only | ⚠️ needs a relay — see §4 |
+
+**ESPN is the only row on the right, and that is the whole of the page's network.**
 
 Everything baked in is one JSON object embedded in the page:
 
@@ -129,7 +133,7 @@ appear.
 
 ---
 
-## 4. Kalshi — live odds, and why they are hard
+## 4. Kalshi — why the page never fetches odds
 
 **Kalshi's API allowlists request origins.** Measured 2026-08-03:
 
@@ -145,43 +149,45 @@ appear.
 | `OPTIONS` preflight from any other origin | **403** |
 
 A browser always sends `Origin` on a cross-origin `fetch`. So **a static page cannot
-read live odds from Kalshi**, on any host, ever, without something in between.
+read odds from Kalshi**, on any host, ever, without something in between.
 
-This is not a bug to route around later. It is a fixed property of the design.
+This is not a bug to route around later. It is a fixed property of the design, and the
+design answers it by not fetching odds at all.
 
 ### What this means for the page
 
-**The snapshot is always there and is always the primary display.** Every golfer's
-price at the moment the groups were drawn is in `DATA.golfers[].odds`, along with the
-book it came from and the time it was captured. That is a real, checkable, permanent
-number. Show it.
+**The page has one network dependency: ESPN.** There is no odds request, no relay
+setting, no "live odds unavailable" state to design, and no empty panel to fill. The
+result file carries no Kalshi URL for the page to try, because trying it can only fail.
 
-**Live odds are an enhancement that is off by default.** If
-`DATA.live.kalshi_proxy_url_template` is null — the normal case — the page must not
-show an empty panel, a spinner, or a silent zero. It states that live odds are
-unavailable and why. Design that sentence; it is the state most users will see.
+**The snapshot is the odds display.** Every golfer's price at the moment the groups
+were drawn is in `DATA.golfers[].odds`, along with the book it came from and the time
+it was captured. That is a real, checkable, permanent number, and it is the honest
+answer to "what was he worth?" — the question the pool is actually asking. Show it,
+and show `odds_snapshot.captured_at` beside it so it is never mistaken for a price
+that is moving.
 
-If a relay *is* configured, the template carries `{url}` where the encoded Kalshi URL
-goes, and live prices become available. Present them as **movement against the
-snapshot** — an arrow and a delta — rather than as a second column of raw numbers.
-"Cameron Young is shorter than when you drafted him" is the interesting fact. A raw
-level beside `grouping_weight` is actively misleading: one is de-vigged and the other
-is not, so an unmoved golfer reads as a jump.
+### Prices do still move — between builds
 
-Setting a relay up is ten lines of Cloudflare Worker, and the result file has a slot
-for it, but nothing in the page may depend on it existing.
-
-### The other way prices move
-
-`build_competition.py --from-result <file> --refresh-odds` re-reads Kalshi server-side
-and bakes the result in: `odds_snapshot.refreshed` describes the re-read, and every
-golfer gains `odds.current`. It needs no relay and no network at load, because it is not
-a feed — it is a second snapshot, taken when somebody rebuilt and re-sent the page.
+`build_competition.py --from-result <file> --refresh-odds` re-reads Kalshi
+**server-side**, where it answers fine, and bakes the result in:
+`odds_snapshot.refreshed` describes the re-read, and every golfer gains `odds.current`.
+No network at load, because it is not a feed — it is a second snapshot, taken when
+somebody rebuilt and re-sent the page.
 
 Show it as movement against `odds.raw` (the price the groups were drawn on — **not**
-`kalshi.ask`, which is a different number on any price mode but the default), and say
-what it is: the arrows will not change again until the next rebuild. `refreshed` is
-`null` on a page that was never rebuilt, and `odds.current` is then `null` throughout.
+`kalshi.ask`, which is a different number on any price mode but the default): an arrow
+and a delta, never a second column of raw levels. "Cameron Young is shorter than when
+you drafted him" is the interesting fact; a raw level beside `grouping_weight` is
+actively misleading, because one is de-vigged and the other is not, so an unmoved
+golfer reads as a jump.
+
+Say what it is, too: the arrows will not change again until the next rebuild. Calling
+it live would promise a number that cannot arrive.
+
+`refreshed` is `null` on a page that was never rebuilt — the common case — and
+`odds.current` is then `null` throughout, so the movement column is simply absent.
+That is the default state and it needs no apology.
 
 `refreshed.priced_since_the_draw` names golfers who were added to the market after the
 draw and are therefore in nobody's group; `refreshed.no_longer_priced` names drawn
@@ -214,8 +220,8 @@ One row or card per team, in finishing order. Each carries:
 
 Expanded, drilled into, or always visible — a design decision. Each golfer needs:
 
-position · name · score to par · thru · what they were worth at creation · (live
-movement, if a relay is configured)
+position · name · score to par · thru · what they were worth at creation · (movement
+since the draw, on a rebuilt page — §4)
 
 Sorted by the rank key (§6), so the golfer carrying the team is always first. Cut,
 withdrawn and absent golfers stay listed — a team's roster does not shrink — but must
@@ -228,7 +234,8 @@ be visibly out of it.
   `over_fair_share`). A golfer worth more than a whole group's fair share cannot be
   balanced around, so they were dropped — that is a fact the pool will argue about and
   the page should be able to settle.
-- The live-odds state (§4), whatever it is.
+- On a rebuilt page, the re-read: when it happened, what the book summed to then, and
+  that the movement it implies is frozen until the next rebuild (§4).
 - If `sources.kalshi.mutually_exclusive_outcomes` is **false** (Top 5 / Top 10 /
   MakeCut), the numbers are *share of N slots*, not probabilities, and the book sums
   toward N rather than 1. Do not label them "win probability".
@@ -318,7 +325,8 @@ for a complete one.
 
 ```jsonc
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",   // 1.2 dropped live.kalshi_markets_url and
+                             // live.kalshi_proxy_url_template. See §4.
   "competition_id": "uuid5, stable for this league+event+market",
   "generated_at": "2026-08-03T20:41:00+00:00",
   "generator": { "tool": "...", "git_commit": "e581c23", "seed": 42 },
@@ -377,6 +385,8 @@ for a complete one.
                 "market_label": "Outright Winner",
                 "mutually_exclusive_outcomes": true,   // false for top5/top10/makecut
                 "price_mode": "ask", "price_level_structure": ["tapered_deci_cent"],
+                // false, always. The page never requests this endpoint; it is here so a
+                // reader can check the numbers server-side.
                 "browser_reachable": false, "browser_note": "…403…" },
     "espn":   { "event_id": "401811961", "leaderboard_endpoint": "https://…",
                 "browser_reachable": true,
@@ -414,11 +424,11 @@ for a complete one.
     "summary": "Delta 0.000858 (1 tick, 0.09% of the field) -- PROVEN OPTIMAL: …"
   },
 
+  // What the page does while it is open. One endpoint, on a timer, and the name join
+  // it needs to read the answer. There is no odds endpoint here — see §4.
   "live": {
     "espn_leaderboard_url": "https://…&event=401811961",
     "poll_interval_seconds": 60,
-    "kalshi_markets_url": "https://…",
-    "kalshi_proxy_url_template": null,     // "https://relay.example/?u={url}" enables live odds
     "name_match": { "strategy": ["alias", "normalized_exact", "first_initial_and_last_name"],
                     "normalization": "…", "aliases": { "Zachary Bauchou": "Zach Bauchou" } }
   },
@@ -542,9 +552,10 @@ number is lying about the rules.
 **Refresh honestly.** Show when the board was last updated. When ESPN fails, keep the
 last-known board and mark it stale rather than blanking or silently freezing.
 
-**Design the empty states.** Before the field is posted, after ESPN goes down, when
-live odds are unavailable (which is the default), when a team's golfers have all been
-cut, when a logo is null. Every one of these happens in a normal week.
+**Design the empty states.** Before the field is posted, after ESPN goes down, when a
+team's golfers have all been cut, when a logo is null. Every one of these happens in a
+normal week. What is *not* on that list any more is live odds: there is no such state,
+because there is no such fetch — the odds are simply there, dated.
 
 **Accessibility.** Position and score must not be conveyed by colour alone — a page
 read across a room is exactly where that fails. Support both colour schemes; the
@@ -557,6 +568,7 @@ reference honours `prefers-color-scheme`.
 - [ ] Reads its data from `#competition-data`; fetches nothing on load
 - [ ] Contains `/*__COMPETITION_JSON__*/` inside that script tag
 - [ ] No CDN, no external module, no build step
+- [ ] **ESPN is the only host it ever requests** — no odds fetch, no relay, at all
 - [ ] Polls ESPN on `live.poll_interval_seconds`, with the pinned `event` id
 - [ ] Refuses a leaderboard whose event id is not the pinned one
 - [ ] Live total summed from `linescores`, never `score.displayValue`
@@ -564,9 +576,10 @@ reference honours `prefers-color-scheme`.
 - [ ] Ties shown as ties; `decided_at` surfaced
 - [ ] Cut / WD / not-in-field golfers listed and visibly out
 - [ ] Snapshot odds shown with capture time; exclusions shown with reasons
-- [ ] Live-odds-unavailable is a designed state, not a blank
 - [ ] A rebuilt page shows `odds.current` as movement against `odds.raw`, and says the
       arrows are from a rebuild rather than a feed
+- [ ] A page that was never rebuilt (`refreshed` null) simply has no movement column —
+      not a blank one, not a spinner, not an apology
 - [ ] Handles `pre` (zero competitors), ESPN down, null logos
 - [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
 - [ ] Readable on a phone; works in light and dark

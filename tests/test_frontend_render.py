@@ -3,8 +3,8 @@ Render the bundled page in a real browser.
 
 The parity test proves the rules agree. This proves the page built from them actually
 works: that it opens from a file:// URL with no server, that the only host it touches
-is ESPN, that the standings it draws are the ones standings.py computes, and that when
-live odds are unavailable it says so instead of showing a blank panel.
+is ESPN -- odds are baked in and never fetched, because Kalshi 403s a browser -- and
+that the standings it draws are the ones standings.py computes.
 
 Skipped without Playwright and a browser. Chromium is pre-installed in this
 environment; elsewhere, `pip install playwright && playwright install chromium`.
@@ -178,20 +178,28 @@ def test_the_snapshot_odds_are_stated_with_their_capture_time(page, competition)
     assert competition["result"]["odds_snapshot"]["captured_at"] in note
 
 
-def test_it_says_why_live_odds_are_missing_rather_than_showing_nothing(page):
-    note = page["page"].locator("#odds-note").text_content()
-    assert "Live odds unavailable" in note
-    assert "allowlists request origins" in note
-
-
-def test_a_rebuilt_page_shows_the_odds_moving_without_any_relay(browser, competition,
-                                                                espn_final_payload, tmp_path):
+def test_it_never_asks_kalshi_for_anything(page):
     """
-    The only way prices move on a page nobody has put a relay behind: somebody re-ran
-    the build with --refresh-odds and re-sent it. That re-read is baked in exactly as
-    the original snapshot is, so it needs no network -- and it must be presented as
-    movement since the draw rather than as a second column of levels, because the two
-    columns are on different scales and would read as a jump when nothing had moved.
+    The simplification, held to account. Kalshi 403s every browser origin, so a page
+    that requests it can only ever show an empty panel; the odds are baked in instead
+    and the page says so rather than promising a number that cannot arrive.
+    """
+    remote = [u for u in page["requests"] if not u.startswith(("file://", "data:"))]
+    assert not [u for u in remote if "kalshi" in u.lower()], remote
+    note = page["page"].locator("#odds-note").text_content()
+    assert "Odds at creation" in note
+    assert "no odds are ever fetched here" in note
+    assert "Live odds" not in note
+
+
+def test_a_rebuilt_page_shows_the_odds_moving_with_no_network_at_all(browser, competition,
+                                                                     espn_final_payload, tmp_path):
+    """
+    The only way prices move on this page: somebody re-ran the build with
+    --refresh-odds and re-sent it. That re-read is baked in exactly as the original
+    snapshot is, so it needs no network -- and it must be presented as movement since
+    the draw rather than as a second column of levels, because the two columns are on
+    different scales and would read as a jump when nothing had moved.
     """
     result = json.loads(json.dumps(competition["result"]))
     for i, golfer in enumerate(result["golfers"]):
@@ -213,13 +221,13 @@ def test_a_rebuilt_page_shows_the_odds_moving_without_any_relay(browser, competi
     p = ctx.new_page()
     p.goto("file://" + paths[0])
     p.wait_for_selector("#standings article.team", timeout=15000)
-    p.wait_for_function("document.querySelector('td.glive').textContent !== ''", timeout=15000)
+    p.wait_for_function("document.querySelector('td.gmove').textContent !== ''", timeout=15000)
 
     note = p.locator("#odds-note").text_content()
     assert "re-read" in note and "1.310" in note
     assert "in nobody" in note and "Monday Qualifier" in note
 
-    cells = [c for c in p.locator("td.glive").all_text_contents() if c]
+    cells = [c for c in p.locator("td.gmove").all_text_contents() if c]
     assert any(c.startswith("↑ +1.0") for c in cells), cells[:5]
     assert any(c == "→" for c in cells), "an unmoved golfer is not an arrow up"
     assert all("espn.com" in u for u in seen if not u.startswith(("file://", "data:")))
