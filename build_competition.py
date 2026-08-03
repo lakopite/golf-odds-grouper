@@ -16,6 +16,30 @@ later is in it too: which endpoints were read, when, at what prices, who was
 excluded and why, and how good the partition was. Nothing in the frontend re-derives
 a number that this file already states.
 
+REBUILDING ONE
+--------------
+Because the result file describes the whole competition, it is also the input to the
+next build of it:
+
+    python build_competition.py --from-result build/result.json
+
+That reads the league, the tournament on both APIs, the market, the price mode, the
+hand-picked exclusions and the seed out of the file, carries the groups and the odds
+at creation forward untouched, and redoes the parts that have a "now" -- above all
+the ESPN join, which a Wednesday build cannot finish and a Thursday one can. Add
+`--refresh-odds` to record what the market says today alongside (never instead of)
+the prices the groups were drawn on. `--regroup` is the one that deals again, and it
+says so.
+
+MATCHING GOLFERS TO ESPN BEFORE THE TOURNAMENT STARTS
+-----------------------------------------------------
+ESPN publishes no field until the first tee time, so a Wednesday build has nothing to
+join its Kalshi names against. It does not need one: those golfers played last week.
+The join falls back to the season's earlier tournaments and takes IDENTITY from them
+-- athlete id, display name, headshot -- and never scores, because those tournaments
+are over. Measured on the 2026 Wyndham with no field published at all: 146 of 150
+golfers identified, in 3.5 seconds. See espn_leaderboard.match_history.
+
 WHY IT ALL GOES IN ONE FILE
 ---------------------------
 The scoreboard is a static page with no backend, so at runtime it can reach exactly
@@ -44,6 +68,7 @@ import sys
 import time
 import urllib.parse
 import uuid
+import zipfile
 from datetime import datetime, timezone
 
 import espn_leaderboard
@@ -52,7 +77,11 @@ import groupers
 import kalshi_odds
 import league as league_mod
 
-SCHEMA_VERSION = "1.0"
+# 1.1 added, all additive: `rebuilt_from`, `odds_snapshot.refreshed`,
+# `odds_snapshot.auto_exclude`, `golfers[].odds.current`, and `golfers[].espn` gaining
+# source / from_event / in_field.
+# A 1.0 reader still works on a 1.1 file -- every 1.0 key means exactly what it did.
+SCHEMA_VERSION = "1.1"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -64,6 +93,12 @@ ODDS_TYPES = {
 }
 DEFAULT_ODDS_TYPE = "winner"
 ALIAS_FILE = "data/espn_aliases.json"
+
+# Everything a rebuild reads back out of a result file rather than off the command
+# line, by argparse dest. See apply_result_defaults.
+REBUILD_INPUTS = ("tournament", "kalshi_event", "odds", "price", "espn_event",
+                  "espn_league", "season", "seed", "exclude", "auto_exclude",
+                  "poll_interval", "kalshi_proxy")
 
 # Local logos are inlined so the exported bundle is one portable file. A logo bigger
 # than this is a mistake rather than a choice -- a 2 MB PNG lands in every copy of the
@@ -129,6 +164,71 @@ def resolve_espn_event(query, season, league="pga"):
 
 
 # ---------------------------------------------------------------------------
+# The ESPN join
+# ---------------------------------------------------------------------------
+
+def espn_join(args, espn_event, season, names, aliases):
+    """
+    Resolve every Kalshi golfer to an ESPN athlete, started or not.
+
+    Returns (meta, players, matches, report). `players` is this week's field and is
+    empty until the first tee time; `matches` covers the whole Kalshi field either way,
+    because whoever this week's leaderboard cannot answer for is looked up in the
+    season's earlier tournaments instead (see espn_leaderboard.match_history).
+
+    The two halves stay distinguishable in what comes back. A match from this week's
+    field carries live scoring. A match from history carries identity only -- an
+    athlete id, a display name, a headshot -- which is exactly what is knowable on
+    Wednesday night and exactly what the scoreboard needs to show a roster before
+    anyone has hit a shot.
+    """
+    meta, players = None, []
+    if espn_event:
+        try:
+            payload = espn_leaderboard.fetch_leaderboard(espn_event["event_id"], args.espn_league)
+            meta, players = espn_leaderboard.parse_leaderboard(payload)
+        except Exception as exc:                   # noqa: BLE001 -- reported, not fatal
+            print(f"!! could not read the ESPN leaderboard: {exc}", file=sys.stderr)
+
+    state = (meta or {}).get("state") or (espn_event or {}).get("state") or "unknown"
+    if players:
+        print(f"ESPN:    {len(players)} competitors in the field [{state}]")
+    else:
+        print(f"ESPN:    no field published [{state}] -- this is normal before the first tee "
+              "time. Matching names against the season's earlier tournaments instead.")
+
+    matches, report = espn_leaderboard.match_field_and_history(
+        names, players, season, args.espn_league, aliases=aliases,
+        max_events=args.espn_history,
+        cutoff=(meta or {}).get("start") or (espn_event or {}).get("start"),
+        exclude_ids=[espn_event["event_id"]] if espn_event else (),
+        log=print,
+    )
+
+    print(f"ESPN join: {report['matched']}/{report['requested']} matched "
+          f"({report['matched_exact']} exact, {report['matched_initial_last']} initial+last, "
+          f"{report['matched_alias']} alias)")
+    history = report.get("history") or {}
+    if report.get("from_history"):
+        print(f"  {report['from_history']} identified from "
+              + ", ".join(e["name"] for e in history.get("scanned") or [])
+              + " -- identity only, no scores: those tournaments are over.")
+    if report.get("not_in_field"):
+        print(f"  priced by Kalshi but not in this week's ESPN field "
+              f"({len(report['not_in_field'])}): " + ", ".join(report["not_in_field"][:8])
+              + (" ..." if len(report["not_in_field"]) > 8 else ""))
+    if report["unresolved"]:
+        print(f"  unresolved ({len(report['unresolved'])}): "
+              + ", ".join(report["unresolved"][:8])
+              + (" ..." if len(report["unresolved"]) > 8 else "")
+              + ". The scoreboard retries these by name once the field is posted.")
+        if history.get("unscanned_events"):
+            print(f"  {history['unscanned_events']} earlier tournament(s) were not read. "
+                  f"Raise --espn-history-events above {args.espn_history} to look further back.")
+    return meta, players, matches, report
+
+
+# ---------------------------------------------------------------------------
 # Odds
 # ---------------------------------------------------------------------------
 
@@ -153,6 +253,65 @@ def pull_odds(event_ticker, price):
         )
     tick = {m.get("price_level_structure") for m in markets if m.get("price_level_structure")}
     return markets, grouper_cli.sort_field(golfers), sorted(tick)
+
+
+def refresh_odds(event_ticker, price, field, now):
+    """
+    Re-read Kalshi at today's prices, without touching the groups.
+
+    This is the only way a scoreboard gets a moving number: Kalshi will not answer a
+    browser (see the CORS note in docs/FRONTEND-SPEC.md), so short of running a relay,
+    "current odds" means somebody re-ran the build and re-sent the page.
+
+    Returns (by_name, report), or (None, None) if there is nothing live to read -- a
+    settled tournament quotes no active markets, and that is a reason to carry the
+    snapshot forward rather than to fail a rebuild that is otherwise fine.
+
+    A golfer whose market is still there but quoting nothing keeps no current price --
+    a zero would render as a price that collapsed to nothing, which is a lie about a
+    market that simply is not quoting. They are not reported as gone either: still
+    listed and still unquoted are different things, and only `bid` produces the second
+    in bulk.
+    """
+    try:
+        markets = kalshi_odds.markets_for(event_ticker)
+        current = kalshi_odds.to_golfers(markets, price=price, strict=False)
+    except Exception as exc:                       # noqa: BLE001 -- a rebuild survives this
+        print(f"!! could not refresh the odds: {exc}. Carrying the snapshot forward.",
+              file=sys.stderr)
+        return None, None
+
+    if not current:
+        print("!! no active Kalshi markets for this event -- it has settled. Carrying the "
+              "snapshot forward; the odds at creation are still the odds at creation.")
+        return None, None
+
+    by_id = {g["golfer_id"]: g for g in current if g.get("golfer_id")}
+    by_name = {g["golfer_name"]: g for g in current}
+    matched, drawn, still_listed = {}, set(), set()
+    for g in field:
+        hit = by_id.get(g.get("golfer_id")) or by_name.get(g["golfer_name"])
+        drawn.add(g["golfer_name"])
+        if hit:
+            still_listed.add(g["golfer_name"])
+            if hit["odds"] > 0:
+                matched[g["golfer_name"]] = hit
+
+    report = {
+        "at": now,
+        "price_mode": price,
+        "field_size": len(current),
+        "raw_book_sum": round(sum(g["odds"] for g in current), 6),
+        "matched": len(matched),
+        # Two facts the pool will want. A golfer in the draw with no live market has
+        # been pulled from the board -- usually a withdrawal. A golfer on the board who
+        # is in nobody's group was added after the draw and belongs to no team, which is
+        # a rule question rather than a bug.
+        "no_longer_priced": sorted(drawn - still_listed),
+        "priced_since_the_draw": sorted(g["golfer_name"] for g in current
+                                        if g["golfer_name"] not in drawn),
+    }
+    return matched, report
 
 
 def resolve_exclusions(golfers, n_groups, named, auto):
@@ -184,11 +343,11 @@ def resolve_exclusions(golfers, n_groups, named, auto):
 # The build
 # ---------------------------------------------------------------------------
 
-def build(args):
+def build(args, league=None, rebuilt_from=None):
     started = time.time()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    league = league_mod.load_league(args.league)
+    league = league or league_mod.load_league(args.league)
     teams = league["teams"]
     n_groups = len(teams)
     print(f"League: {league['league_name']} -- {n_groups} teams")
@@ -235,8 +394,11 @@ def build(args):
             print(f"note: ESPN matched {espn_event['event_id']} ({espn_event['name']}) on a "
                   f"partial name match. Pass --espn-event to override.")
     if espn_event:
-        print(f"ESPN:    {espn_event['event_id']}  {espn_event.get('name')}  "
-              f"[{espn_event.get('state', '?')}]")
+        # A pinned event was never looked up, so it has no state to report. The join
+        # below prints the state it actually finds either way.
+        state = espn_event.get("state")
+        print(f"ESPN:    {espn_event['event_id']}  {espn_event.get('name')}"
+              + (f"  [{state}]" if state else ""))
 
     # -- odds ----------------------------------------------------------------
     markets, field, tick_structures = pull_odds(event_ticker, args.price)
@@ -289,27 +451,8 @@ def build(args):
 
     # -- ESPN join -----------------------------------------------------------
     aliases = load_aliases(args.alias_file)
-    espn_players, espn_meta, match_report, matches = [], None, None, {}
-    if espn_event:
-        try:
-            payload = espn_leaderboard.fetch_leaderboard(espn_event["event_id"], args.espn_league)
-            espn_meta, espn_players = espn_leaderboard.parse_leaderboard(payload)
-        except Exception as exc:                   # noqa: BLE001
-            print(f"!! could not read the ESPN leaderboard: {exc}", file=sys.stderr)
-    if espn_players:
-        matches, match_report = espn_leaderboard.match_field(
-            [g["golfer_name"] for g in field], espn_players, aliases)
-        print(f"ESPN join: {match_report['matched']}/{match_report['requested']} matched "
-              f"({match_report['matched_exact']} exact, {match_report['matched_initial_last']} "
-              f"initial+last, {match_report['matched_alias']} alias); "
-              f"{len(match_report['unresolved'])} unresolved")
-        if match_report["unresolved"]:
-            print("  not in the ESPN field: " + ", ".join(match_report["unresolved"][:8])
-                  + (" ..." if len(match_report["unresolved"]) > 8 else ""))
-    else:
-        print("ESPN join: deferred -- the field is not posted yet "
-              f"({(espn_meta or {}).get('state', 'unknown')}). The scoreboard matches by name "
-              "at runtime using the same two tiers.")
+    espn_meta, espn_players, matches, match_report = espn_join(
+        args, espn_event, season, [g["golfer_name"] for g in field], aliases)
 
     # -- assemble ------------------------------------------------------------
     result = assemble(
@@ -320,12 +463,28 @@ def build(args):
         espn_field_size=len(espn_players),
         field=field, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity=liquidity, raw_sum=raw_sum, tick_structures=tick_structures,
+        auto_exclude=args.auto_exclude,
         report=report, groups=groups, order=order, seed=seed, aliases=aliases,
+        rebuilt_from=rebuilt_from,
     )
 
-    # Logos last, and against the league file's own directory: a logo path in a league
-    # file is relative to that file, not to wherever the build was run from.
-    league_dir = os.path.dirname(os.path.abspath(args.league))
+    finish(result, args, matches, aliases, started)
+    return result
+
+
+def finish(result, args, matches, aliases, started):
+    """
+    Inline the logos, write the file, learn what the run learned, and show the groups.
+
+    Shared by build() and rebuild() because it is the same ending either way: the only
+    thing that differs between the two is how the numbers above it were arrived at.
+    """
+    # Logos are resolved against the league file's own directory: a logo path in a
+    # league file is relative to that file, not to wherever the build was run from. A
+    # rebuild has no league file -- its logos are already data: URIs and pass straight
+    # through -- so anything still relative there is resolved against the result file.
+    base = args.league or args.from_result or "."
+    league_dir = os.path.dirname(os.path.abspath(base))
     for team in result["teams"]:
         team["team_logo"] = inline_logo(team.get("team_logo"), league_dir)
 
@@ -346,7 +505,208 @@ def build(args):
 
     print_groups(result)
     print(f"\nBuilt in {time.time() - started:.1f}s")
+
+
+# ---------------------------------------------------------------------------
+# Rebuilding from a result file
+# ---------------------------------------------------------------------------
+
+def load_result(path):
+    """
+    Read a result file, refusing anything that is not one.
+
+    An exported `.zip` is accepted directly, because that is usually the copy a user
+    still has: the page is for reading and the JSON inside the zip is for re-running,
+    and making somebody unzip it first to get at the second is a step with no thought
+    in it. bundle_frontend.py writes it as `result.json`.
+    """
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as z:
+                if "result.json" not in z.namelist():
+                    raise SystemExit(f"{path} is a zip with no result.json in it. An export from "
+                                     "bundle_frontend.py has one; unzip it and check.")
+                result = json.loads(z.read("result.json").decode("utf-8"))
+        else:
+            with open(path, encoding="utf-8") as f:
+                result = json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"{path} not found. --from-result takes a result JSON written by "
+                         "this tool (build/result.json), or an exported .zip holding one.")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}")
+
+    # Every block a rebuild goes on to dereference. Checking six of them and then dying
+    # on a KeyError in the seventh is the same damaged file reported twice as badly.
+    missing = [k for k in ("schema_version", "generated_at", "generator", "league", "teams",
+                           "golfers", "tournament", "sources", "odds_snapshot", "grouping")
+               if k not in result]
+    if missing:
+        raise SystemExit(f"{path} is missing {', '.join(missing)}, so it is not a result file "
+                         "from this tool. Pass the result.json, not the league file or the "
+                         "Kalshi capture.")
     return result
+
+
+def league_from_result(result):
+    """
+    The league, back out of a result file.
+
+    A rebuild does not need the original league file and should not depend on it: the
+    result carries every team with the id it was dealt under, and those ids are what the
+    groups are keyed on. Re-reading the league file instead would silently mint new ids
+    the moment somebody had renamed a team, and hand every player a different group.
+    """
+    league = result["league"]
+    derived = ("group_index", "golfer_ids", "golfer_names", "total_odds", "golfer_count")
+    return {
+        "league_id": league["league_id"],
+        "league_name": league["league_name"],
+        "league_slug": league.get("league_slug") or league_mod.slugify(league["league_name"]),
+        "source_file": league.get("source_file"),
+        "teams": [{k: v for k, v in t.items() if k not in derived} for t in result["teams"]],
+    }
+
+
+def rebuild(args, result):
+    """
+    A new build of an existing competition: same teams, same groups, same odds at
+    creation -- everything else brought up to date.
+
+    What moves between two runs of the same competition is what the world did, not what
+    the pool decided. So the draw is carried forward verbatim and the run re-reads the
+    parts that have a "now": the ESPN join (a Wednesday build has no field to join
+    against and a Thursday one does), the tournament's state, and -- with
+    --refresh-odds -- the current Kalshi prices alongside, never instead of, the ones
+    the groups were drawn on.
+
+    Re-partitioning is deliberately NOT what this does. Rebuilding a live competition
+    and quietly dealing everyone new golfers is the single most destructive thing this
+    tool could do; --regroup asks for it explicitly and goes through build().
+    """
+    started = time.time()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    league = league_mod.load_league(args.league) if args.league else league_from_result(result)
+    recorded = {t["team_id"]: t for t in result["teams"]}
+    if len(league["teams"]) != len(recorded) or any(
+            t["team_id"] not in recorded for t in league["teams"]):
+        raise SystemExit(
+            f"{args.league} does not describe the league in {args.from_result}: the team ids "
+            "do not line up, so there is no way to say which team holds which group. Team ids "
+            "are derived from team names, so a renamed team is a new team. Rebuild without "
+            "--league to use the teams recorded in the result file.")
+    teams = league["teams"]
+    print(f"League: {league['league_name']} -- {len(teams)} teams "
+          f"(from {args.from_result}, built {result['generated_at']})")
+
+    kalshi = result["sources"]["kalshi"]
+    espn_source = result["sources"].get("espn") or {}
+    tournament = result["tournament"]
+    print(f"Kalshi:  {kalshi['event_ticker']}  {tournament['name']}  [{kalshi['market_label']}]")
+
+    # -- the draw, carried forward -------------------------------------------
+    field = [{"golfer_name": g["name"], "odds": g["odds"]["raw"], "golfer_id": g.get("golfer_id"),
+              "_bid": (g.get("kalshi") or {}).get("bid"),
+              "_ask": (g.get("kalshi") or {}).get("ask"),
+              "_spread": (g.get("kalshi") or {}).get("spread"),
+              "_ticker": (g.get("kalshi") or {}).get("ticker")}
+             for g in result["golfers"]]
+    devigged = {g["name"]: g["odds"]["devigged"] for g in result["golfers"]}
+    weighted = [{"golfer_name": g["name"], "odds": g["odds"]["grouping_weight"],
+                 "golfer_id": g.get("golfer_id")}
+                for g in result["golfers"] if g["odds"].get("grouping_weight") is not None]
+    weight_of = {g["golfer_name"]: g["odds"] for g in weighted}
+    excluded = [{"golfer_name": e["golfer_name"], "reason": e["reason"]}
+                for e in result["odds_snapshot"]["excluded"]]
+
+    team_groups, order, orphans = {}, [], []
+    for team in teams:
+        row = recorded[team["team_id"]]
+        orphans += [n for n in row["golfer_names"] if n not in weight_of]
+        team_groups[team["team_id"]] = [
+            {"golfer_name": name, "golfer_id": gid, "odds": weight_of.get(name, 0.0)}
+            for name, gid in zip(row["golfer_names"], row["golfer_ids"])]
+        order.append(row["group_index"])
+    if orphans:
+        # Silently weighting them zero would rebuild a file whose team totals no longer
+        # add up to 1.0 and whose draw no longer looks even -- on evidence that is
+        # simply missing rather than wrong.
+        raise SystemExit(
+            f"{args.from_result} puts {len(orphans)} golfer(s) in a team who carry no "
+            f"grouping weight in golfers[]: {', '.join(sorted(set(orphans))[:5])}. The file has "
+            "been edited or truncated; rebuilding from it would report totals that are not "
+            "the totals anybody was dealt.")
+
+    print(f"Draw:    {len(weighted)} golfers in {len(teams)} groups, "
+          f"{len(excluded)} excluded, carried forward unchanged")
+
+    # -- what has moved since ------------------------------------------------
+    current, refreshed = None, None
+    if args.refresh_odds:
+        current, refreshed = refresh_odds(kalshi["event_ticker"], args.price, field, now)
+        if refreshed:
+            print(f"Odds:    refreshed -- {refreshed['matched']}/{len(field)} of the drawn field "
+                  f"still priced, book now sums to {refreshed['raw_book_sum']:.4f} "
+                  f"(was {result['odds_snapshot']['raw_book_sum']})")
+            if refreshed["no_longer_priced"]:
+                print("  no longer priced (withdrawn, most likely): "
+                      + ", ".join(refreshed["no_longer_priced"][:8]))
+            if refreshed["priced_since_the_draw"]:
+                print(f"  {len(refreshed['priced_since_the_draw'])} golfer(s) were added to the "
+                      "market after the draw and are in nobody's group: "
+                      + ", ".join(refreshed["priced_since_the_draw"][:8]))
+
+    season = args.season or tournament["season"]
+    espn_event = None
+    if args.espn_event:
+        espn_event = {"event_id": str(args.espn_event), "name": tournament["name"]}
+    elif espn_source.get("event_id"):
+        espn_event = {"event_id": str(espn_source["event_id"]), "name": tournament["name"],
+                      "start": tournament.get("start")}
+    else:
+        espn_event, _ = resolve_espn_event(tournament["name"], season, args.espn_league)
+        if not espn_event:
+            print(f"!! still no ESPN {args.espn_league} event in {season} matching "
+                  f"{tournament['name']!r}. Pass --espn-event <id>.", file=sys.stderr)
+
+    aliases = {**((result.get("live") or {}).get("name_match") or {}).get("aliases", {}),
+               **load_aliases(args.alias_file)}
+    espn_meta, espn_players, matches, match_report = espn_join(
+        args, espn_event, season, [g["golfer_name"] for g in field], aliases)
+
+    # -- assemble ------------------------------------------------------------
+    rebuilt_from = {
+        "source_file": args.from_result,
+        "source_generated_at": result["generated_at"],
+        "source_schema_version": result.get("schema_version"),
+        "mode": "refresh-odds" if refreshed else "refresh",
+        "rebuild_count": ((result.get("rebuilt_from") or {}).get("rebuild_count") or 0) + 1,
+        "first_built_at": ((result.get("rebuilt_from") or {}).get("first_built_at")
+                           or result["generated_at"]),
+    }
+    out = assemble(
+        now=now, captured_at=result["odds_snapshot"]["captured_at"], args=args, league=league,
+        teams=teams, team_groups=team_groups,
+        odds_type=kalshi["odds_type"], series=kalshi["series_ticker"],
+        market_label=kalshi["market_label"], exclusive=kalshi["mutually_exclusive_outcomes"],
+        event_ticker=kalshi["event_ticker"], tournament_name=tournament["name"], season=season,
+        espn_event=espn_event, espn_meta=espn_meta, matches=matches, match_report=match_report,
+        espn_field_size=len(espn_players),
+        field=field, devigged=devigged, weighted=weighted, excluded=excluded,
+        liquidity=result["odds_snapshot"]["liquidity"],
+        raw_sum=result["odds_snapshot"]["raw_book_sum"],
+        price_mode=kalshi["price_mode"],
+        auto_exclude=result["odds_snapshot"].get("auto_exclude", args.auto_exclude),
+        tick_structures=kalshi.get("price_level_structure") or [],
+        report=result["grouping"], order=order,
+        seed=result["generator"].get("seed"), aliases=aliases,
+        tournament_prior=tournament,
+        current=current, refreshed=refreshed, rebuilt_from=rebuilt_from,
+    )
+
+    finish(out, args, matches, aliases, started)
+    return out
 
 
 def assemble(**k):
@@ -360,6 +720,14 @@ def assemble(**k):
     field, devigged, weighted = k["field"], k["devigged"], k["weighted"]
     weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
     excluded_names = {e["golfer_name"] for e in k["excluded"]}
+    current = k.get("current") or {}
+    captured_at = k.get("captured_at") or k["now"]
+    # The price mode the CARRIED snapshot was captured at, which is not this run's
+    # --price: a rebuild may re-read the book at the mid without making Wednesday's ask
+    # prices retroactively mids.
+    price_mode = k.get("price_mode") or k["args"].price
+    prior = k.get("tournament_prior") or {}
+    prior_course = prior.get("course") or {}
     team_of = {}
     for team_id, golfers in k["team_groups"].items():
         for g in golfers:
@@ -370,6 +738,7 @@ def assemble(**k):
         name = g["golfer_name"]
         hit = (k["matches"] or {}).get(name)
         player = hit["player"] if hit else None
+        live_price = current.get(name)
         golfers_out.append({
             "golfer_id": g.get("golfer_id"),
             "name": name,
@@ -386,6 +755,9 @@ def assemble(**k):
                 "devigged": round(devigged.get(name, 0.0), WEIGHT_PRECISION),
                 "grouping_weight": (round(weight_by_name[name], WEIGHT_PRECISION)
                                     if name in weight_by_name else None),
+                # What the same market quotes now, if this run re-read it. Never feeds
+                # the grouping -- the groups were drawn on `raw` and stay drawn on it.
+                "current": live_price["odds"] if live_price else None,
             },
             "espn": {
                 "athlete_id": player["athlete_id"] if player else None,
@@ -398,6 +770,16 @@ def assemble(**k):
                 # and this golfer is not in it -- they withdrew.
                 "match": hit["match"] if hit else (
                     "unresolved" if k["espn_field_size"] else "deferred"),
+                # Where the identity came from. "history" is an earlier tournament: an
+                # athlete id and a headshot, with no scoring attached, because that
+                # tournament is over. Anything the page ranks has to come from the live
+                # leaderboard it fetches itself.
+                "source": hit.get("source") if hit else None,
+                "from_event": hit.get("event") if hit else None,
+                # Whether this golfer is in THIS week's ESPN field. None while the field
+                # is unpublished -- unknown is not the same as no.
+                "in_field": (None if not k["espn_field_size"]
+                             else bool(hit) and hit.get("source") == "field"),
             },
         })
     golfers_out.sort(key=lambda g: -g["odds"]["raw"])
@@ -433,6 +815,9 @@ def assemble(**k):
             "git_commit": _git_commit(),
             "seed": k["seed"],
         },
+        # Null on a first build. On a rebuild, what it was rebuilt from and how -- so a
+        # file that carries Wednesday's odds and Sunday's leaderboard says so itself.
+        "rebuilt_from": k.get("rebuilt_from"),
 
         "league": {
             "league_id": k["league"]["league_id"],
@@ -444,15 +829,22 @@ def assemble(**k):
         "teams": teams_out,
         "golfers": golfers_out,
 
+        # Dates and course are static facts about the tournament, so a rebuild that
+        # could not reach ESPN keeps the ones it was given rather than nulling them --
+        # the scoreboard's "first round <date>" line is the pre-tournament state this
+        # whole file exists to serve. `state_at_build` is NOT static and gets no such
+        # fallback: if this run could not read the state, it does not know it.
         "tournament": {
             "name": k["tournament_name"],
             "season": int(k["season"]),
-            "start": espn_event.get("start") or (k["espn_meta"] or {}).get("start"),
-            "end": espn_event.get("end") or (k["espn_meta"] or {}).get("end"),
+            "start": (espn_event.get("start") or (k["espn_meta"] or {}).get("start")
+                      or prior.get("start")),
+            "end": (espn_event.get("end") or (k["espn_meta"] or {}).get("end")
+                    or prior.get("end")),
             "state_at_build": espn_event.get("state") or (k["espn_meta"] or {}).get("state"),
             "course": {
-                "name": (k["espn_meta"] or {}).get("course"),
-                "par": (k["espn_meta"] or {}).get("par"),
+                "name": (k["espn_meta"] or {}).get("course") or prior_course.get("name"),
+                "par": (k["espn_meta"] or {}).get("par") or prior_course.get("par"),
             },
         },
 
@@ -465,7 +857,7 @@ def assemble(**k):
                 "odds_type": k["odds_type"],
                 "market_label": k["market_label"],
                 "mutually_exclusive_outcomes": k["exclusive"],
-                "price_mode": k["args"].price,
+                "price_mode": price_mode,
                 "price_level_structure": k["tick_structures"],
                 "browser_reachable": False,
                 "browser_note": (
@@ -486,15 +878,22 @@ def assemble(**k):
                 "field_available_at_build": bool(k["espn_field_size"]),
                 "field_size_at_build": k["espn_field_size"],
                 "match_report": k["match_report"],
+                # Identities recovered from earlier tournaments because this one had
+                # published no field yet. See sources.espn.match_report.history for
+                # which tournaments answered.
+                "identities_from_history": (k["match_report"] or {}).get("from_history", 0),
             },
         },
 
         "odds_snapshot": {
-            "captured_at": k["now"],
-            "price_mode": k["args"].price,
+            "captured_at": captured_at,
+            "price_mode": price_mode,
             "field_size": len(field),
             "raw_book_sum": round(k["raw_sum"], 6),
             "liquidity": k["liquidity"],
+            # A later re-read of the same market. The snapshot above is the one the
+            # groups were drawn on and never changes; this is what the book says now.
+            "refreshed": k.get("refreshed"),
             "normalization": {
                 "method": "divide by the observed book sum, then rescale over survivors",
                 "basis": "probability" if k["exclusive"] else "share_of_n_slots",
@@ -503,6 +902,10 @@ def assemble(**k):
                     "devigged is the same de-vig over the WHOLE field, before exclusions."
                 ),
             },
+            # Recorded because it is a decision this run made and the next one cannot
+            # infer: a file with no over_fair_share exclusions either had nobody over
+            # the line or had the rule switched off, and those rebuild differently.
+            "auto_exclude": bool(k["auto_exclude"]),
             "excluded": [
                 {**e,
                  "raw_odds": next((g["odds"] for g in field if g["golfer_name"] == e["golfer_name"]), None),
@@ -639,13 +1042,34 @@ def print_groups(result):
 
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--league", required=True, help="path to the league JSON")
+    ap.add_argument("--league", help="path to the league JSON (not needed with --from-result)")
+    ap.add_argument("--from-result", metavar="PATH",
+                    help="rebuild an existing competition from its result JSON. Every input "
+                         "is taken from the file -- league, tournament, market, price, "
+                         "exclusions, seed -- and anything given on the command line wins. "
+                         "The groups and the odds at creation are carried forward untouched; "
+                         "the ESPN join is redone.")
+    ap.add_argument("--refresh-odds", action="store_true",
+                    help="with --from-result: also re-read Kalshi and record what the market "
+                         "says now, alongside the odds the groups were drawn on")
+    ap.add_argument("--regroup", action="store_true",
+                    help="with --from-result: pull fresh odds and PARTITION AGAIN. Every team "
+                         "gets a different group. Not what you want mid-tournament.")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="allow --regroup to write over the result file it read")
     ap.add_argument("--tournament", help="tournament name or Kalshi event code, e.g. 'Wyndham' or WYC26")
     ap.add_argument("--odds", default=DEFAULT_ODDS_TYPE,
                     help=f"{'/'.join(ODDS_TYPES)} or a raw Kalshi series ticker (default {DEFAULT_ODDS_TYPE})")
     ap.add_argument("--kalshi-event", help="pin the Kalshi event ticker and skip the name lookup")
     ap.add_argument("--espn-event", help="pin the ESPN event id and skip the name lookup")
     ap.add_argument("--espn-league", default=espn_leaderboard.DEFAULT_LEAGUE)
+    ap.add_argument("--espn-history-events", dest="espn_history", type=int, default=4,
+                    metavar="N",
+                    help="earlier tournaments to match golfer names against when this week's "
+                         "ESPN field is not posted yet, or does not cover the whole Kalshi "
+                         "field (default 4, which resolved 146 of 150 on the measured field; "
+                         "0 disables it)")
+    ap.add_argument("--no-espn-history", dest="espn_history", action="store_const", const=0)
     ap.add_argument("--season", type=int, help="season for the ESPN lookup (default: this year)")
     ap.add_argument("--price", default=kalshi_odds.DEFAULT_PRICE, choices=list(kalshi_odds.PRICE_MODES))
     ap.add_argument("--exclude", action="append", metavar="NAME", help="golfer to exclude; repeatable")
@@ -667,10 +1091,131 @@ def build_parser():
     return ap
 
 
+def typed_options(argv, args):
+    """
+    Which of a rebuild's inputs were actually typed, by dest name.
+
+    argparse cannot tell `--price ask` from a `--price` nobody passed that defaulted to
+    "ask", and here the difference decides an outcome: a rebuild fills every unset
+    option from the result file, so without this, somebody rebuilding a Top 5
+    competition and typing `--odds winner` would silently get Top 5 back -- their
+    instruction dropped because it happened to equal the default.
+
+    Only the four inputs whose default is a value somebody might type need asking
+    about, and they are found by parsing a second time with those defaults replaced by
+    a sentinel. Everything else a rebuild fills defaults to None, which nobody types.
+
+    Probing narrowly is not just economy. `--exclude` is an `append` option, and
+    argparse appends to whatever the default is -- hand it a sentinel and the parser
+    itself raises AttributeError the moment somebody excludes a golfer.
+    """
+    ambiguous = [dest for dest in REBUILD_INPUTS
+                 if build_parser().get_default(dest) is not None]
+    probe, sentinel = build_parser(), object()
+    probe.set_defaults(**{dest: sentinel for dest in ambiguous})
+    probed = vars(probe.parse_args(argv))
+    return ({dest for dest in ambiguous if probed[dest] is not sentinel}
+            | {dest for dest in REBUILD_INPUTS
+               if dest not in ambiguous and getattr(args, dest) is not None})
+
+
+def apply_result_defaults(args, result, typed=()):
+    """
+    Fill in every argument the result file already answers.
+
+    A result file is a complete description of a competition: which league, which
+    tournament on both APIs, which market at which price, who was excluded by hand,
+    which seed dealt the groups. Re-typing all of that to rebuild is how a rebuild turns
+    into a different competition -- so it is read rather than re-typed.
+
+    Only arguments the user did not type are filled (`typed`, from typed_options).
+    Anything given on the command line wins, which is what makes a rebuild-with-one-
+    change a one-flag operation.
+    """
+    kalshi = result["sources"]["kalshi"]
+    espn = result["sources"].get("espn") or {}
+    # Keyed by REBUILD_INPUTS, and read back through it below, so the two cannot drift
+    # apart without raising.
+    defaults = {
+        "tournament": result["tournament"]["name"],
+        "kalshi_event": kalshi["event_ticker"],
+        # A custom series was given as a raw ticker; the label is the ticker itself.
+        "odds": kalshi["series_ticker"] if kalshi["odds_type"] == "custom" else kalshi["odds_type"],
+        "price": kalshi["price_mode"],
+        "espn_event": espn.get("event_id"),
+        "espn_league": espn.get("league"),
+        "season": result["tournament"]["season"],
+        "seed": result["generator"].get("seed"),
+        # Only the named ones. `over_fair_share` is a rule, not a decision, and it is
+        # re-derived against whatever field this run reads -- but WHETHER the rule was
+        # on is a decision, and it comes back too. A 1.0 file does not record it and
+        # falls through to the flag's own default, which is what it was built under.
+        "exclude": [e["golfer_name"] for e in result["odds_snapshot"]["excluded"]
+                    if e["reason"] == "named"] or None,
+        "auto_exclude": result["odds_snapshot"].get("auto_exclude"),
+        "poll_interval": (result.get("live") or {}).get("poll_interval_seconds"),
+        "kalshi_proxy": (result.get("live") or {}).get("kalshi_proxy_url_template"),
+    }
+    filled = []
+    for name in REBUILD_INPUTS:
+        value = defaults[name]
+        if value is None or name in typed:
+            continue
+        setattr(args, name, value)
+        filled.append(name)
+
+    # --exclude is an append option and a typed one replaces the recorded list rather
+    # than adding to it, which is the same rule every other option follows. Silently
+    # re-admitting golfers the pool had already excluded by hand is not, so it is said.
+    if "exclude" in typed and defaults["exclude"]:
+        print(f"note: --exclude replaces the {len(defaults['exclude'])} exclusion(s) recorded "
+              f"in the file ({', '.join(defaults['exclude'])}). Name them again to keep them.")
+    return filled
+
+
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.from_result:
+        result = load_result(args.from_result)
+        apply_result_defaults(args, result, typed_options(argv, args))
+        same_file = os.path.abspath(args.output) == os.path.abspath(args.from_result)
+        if args.regroup and same_file and not args.overwrite:
+            parser.error(
+                f"--regroup would overwrite {args.from_result} with a different draw, and that "
+                "file is the record of the groups people already have. Give --output a new "
+                "path, or --overwrite if replacing it is the point.")
+        try:
+            if args.regroup:
+                if args.refresh_odds:
+                    print("note: --regroup pulls fresh odds and re-partitions on them, so "
+                          "--refresh-odds adds nothing here and is ignored.")
+                build(args, league=(league_mod.load_league(args.league) if args.league
+                                    else league_from_result(result)),
+                      rebuilt_from={
+                          "source_file": args.from_result,
+                          "source_generated_at": result["generated_at"],
+                          "source_schema_version": result.get("schema_version"),
+                          "mode": "regroup",
+                          "rebuild_count": ((result.get("rebuilt_from") or {})
+                                            .get("rebuild_count") or 0) + 1,
+                          "first_built_at": ((result.get("rebuilt_from") or {})
+                                             .get("first_built_at") or result["generated_at"]),
+                      })
+            else:
+                rebuild(args, result)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
+        return 0
+
+    if not args.league:
+        parser.error("give --league PATH, or --from-result PATH to rebuild an existing one")
     if not args.tournament and not args.kalshi_event:
-        build_parser().error("give --tournament NAME or --kalshi-event TICKER")
+        parser.error("give --tournament NAME or --kalshi-event TICKER")
+    for flag in ("refresh_odds", "regroup"):
+        if getattr(args, flag):
+            parser.error(f"--{flag.replace('_', '-')} only means something with --from-result")
 
     try:
         build(args)

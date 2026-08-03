@@ -1,6 +1,6 @@
 ---
 name: golf-pool
-description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file.
+description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file, to rebuild or refresh an existing competition from its result.json ("update the scoreboard", "refresh the odds", "the tournament has started", "redraw the groups"), or to match Kalshi golfer names to ESPN athletes.
 ---
 
 # Golf pool
@@ -30,8 +30,12 @@ the same file baked into a static page.
 | A competition built and exported | §1 |
 | A new league defined, or an existing one checked | §2 |
 | To know what tournaments are available | §3 |
-| Something rebuilt with a change | §4 |
+| An existing competition updated, refreshed or re-drawn | §4 |
 | To understand a number in an existing result file | §5 |
+
+**If they have a `result.json` already, §4 is almost always the answer, not §1.**
+Rebuilding from it keeps the groups people have been told about; building again from
+scratch does not.
 
 ---
 
@@ -89,6 +93,7 @@ Useful flags:
 | `--no-auto-exclude` | keep golfers over the fair-share threshold |
 | `--kalshi-proxy "https://relay/?u={url}"` | enable live odds in the page (§6) |
 | `--update-aliases` | save newly learned golfer name aliases to the repo |
+| `--espn-history-events N` | how far back to look for golfer identities (default 4) |
 
 **Read the output before moving on.** It reports:
 
@@ -102,8 +107,11 @@ Useful flags:
   If it is not optimal, the run names the golfer responsible — someone worth more than
   a whole group's fair share, whom no partition can balance around. The fix is to
   exclude them, not to search harder;
-- the ESPN join, or `deferred` if the field is not posted yet, which is normal before
-  Thursday and is handled at runtime by the page.
+- the ESPN join. Before Thursday it reports "no field published" and then matches the
+  names against the season's earlier tournaments instead — expect ~146 of 150 on a full
+  field. The handful left over are golfers with no start this season; the page retries
+  them by name once the field posts. A join that resolves almost nothing means something
+  is wrong (wrong season, ESPN unreachable), not that the golfers are unknown.
 
 ### 1.4 Bundle and hand over
 
@@ -187,22 +195,68 @@ Both are unauthenticated. Kalshi rate-limits bursts, so do not loop these.
 
 ---
 
-## 4. Rebuild with a change
+## 4. Update an existing competition
 
-Re-run §1.3 with the change and §1.4 again. Two things to keep in mind:
+The result file describes the whole competition, so it is the input to the next build of
+it. **Rebuild from it rather than building again from scratch** — a fresh build re-pulls
+odds and re-partitions, and everyone gets different golfers from the ones they were told
+about.
 
-- **The deal is random unless seeded.** Rebuilding without `--seed` gives every team a
-  different group. If they wanted the same groups with a different frontend, pass the
-  seed from the old file (`generator.seed`) — or skip the rebuild entirely and just
-  re-bundle the existing `result.json` against the new template.
-- **The odds move.** A rebuild on Thursday is a different snapshot from Wednesday's and
-  will produce different groups. Say so before doing it.
+```bash
+python build_competition.py --from-result build/result.json --output build/thursday.json
+```
 
-To re-bundle without re-pulling:
+Everything comes back out of the file: league, both events, market, price mode, named
+exclusions, seed. The groups and the odds at creation are carried forward untouched, and
+anything typed on the command line overrides what was recorded. `--from-result` also
+takes an exported `.zip` directly — that is usually the copy the user still has.
+
+| They want | Add |
+|---|---|
+| The golfers matched to ESPN now the field is up | *(nothing — this is the default)* |
+| Today's prices shown against the drawn ones | `--refresh-odds` |
+| A genuinely new draw | `--regroup` |
+| The same groups, a new frontend | nothing — re-bundle (below) |
+
+### 4.1 Which one they actually want
+
+**Default (`--from-result` alone).** Reads no odds at all. Redoes the ESPN join, updates
+the tournament state, and rewrites the file. This is the Thursday-morning run: the field
+is posted, so every golfer gets an athlete id and a headshot, and withdrawals are named.
+It also works after the tournament has finished, which a fresh build does not — settled
+markets quote nothing, so a `--regroup` at that point fails by design.
+
+**`--refresh-odds`.** Also re-reads Kalshi and records what the market says now, in
+`odds_snapshot.refreshed` and `golfers[].odds.current`. The odds at creation do not
+move. This is the only way the exported page shows prices changing without a relay
+(§6) — the page presents them as movement since the draw. It also names golfers priced
+after the draw who are in nobody's group, and drawn golfers whose market has gone.
+
+**`--regroup`.** Pulls fresh odds and partitions again. **Every team gets a different
+group.** Only do this if they have asked for a redraw and nobody is holding the old
+groups. It refuses to overwrite the file it read unless given `--overwrite`.
+
+### 4.2 After any of them
+
+Re-bundle and re-send, exactly as §1.4. To re-bundle with no rebuild at all — a new
+template against the same competition:
 
 ```bash
 python bundle_frontend.py --result <existing result.json> --template <dir> --out dist/
 ```
+
+### 4.3 Matching golfer names to ESPN on its own
+
+The join runs inside every build, but it is also a step you can run and read:
+
+```bash
+python espn_leaderboard.py --season 2026 --event 401811961 --match build/result.json
+```
+
+It prints each Kalshi name, the ESPN athlete it resolved to, the tier that found it, and
+— when the field is not posted — which earlier tournament answered. It also reads a
+Kalshi odds file, a JSON list of names, or one name per line. Use it when a build
+reports unresolved golfers and the question is why.
 
 ---
 
@@ -215,8 +269,11 @@ Everything is in there; read it rather than recomputing.
 | Why did I get this group? | `grouping.summary`, `grouping.optimal`, `generator.seed` |
 | Was the draw fair? | `teams[].total_odds` — all ≈ 1/n |
 | Why is X missing? | `odds_snapshot.excluded[]`, with a reason each |
-| What was X worth? | `golfers[].odds` — `raw`, `devigged`, `grouping_weight` |
+| What was X worth? | `golfers[].odds` — `raw`, `devigged`, `grouping_weight`, `current` |
+| Is X actually playing? | `golfers[].espn.in_field`, and `sources.espn.match_report.not_in_field` |
+| Who is X on ESPN, and how do we know? | `golfers[].espn.source` / `.from_event` — `history` means the identity came from an earlier tournament, with no scores attached |
 | Where did the numbers come from? | `sources.kalshi` / `sources.espn`, plus `odds_snapshot.captured_at` |
+| Has this file been rebuilt? | `rebuilt_from` — null on a first build, else the mode and the count |
 | How is the winner decided? | `standings_rules`, and docs/FRONTEND-SPEC.md §6 |
 
 `raw` is the quoted price, `devigged` divides the whole field by the observed book
@@ -233,10 +290,22 @@ with no CORS headers, preflight included. So the exported page cannot fetch live
 It always carries the snapshot, which is real and time-stamped, and shows live odds
 only if `--kalshi-proxy` gave it a relay. Never promise live odds without one.
 
+Without a relay there is still one honest way to show prices moving: rebuild with
+`--refresh-odds` (§4) and re-send the page. That bakes a second reading in beside the
+first, and the page shows the movement since the draw. It is a new page each time, not
+a feed — say that rather than calling it live.
+
 **ESPN publishes no field before the tournament starts.** A `pre` event returns zero
-competitors, so a Wednesday-night build cannot finish the golfer→athlete join. That is
-expected: the page redoes the join at runtime by name (three tiers, measured to resolve
-every golfer ESPN actually lists). `deferred` in the build output is not a problem.
+competitors, so there is no leaderboard to join against on Wednesday night. The build
+matches the names against the season's finished tournaments instead and takes identity
+from them — athlete id, display name, headshot — and never scores, because those
+tournaments are over. Measured on a real 150-golfer field with nothing published: 146
+identified. The rest come out `deferred`, which is not a problem: the page redoes the
+join by name at runtime once the field exists.
+
+So a page built on Wednesday already knows who everybody is, and shows every roster with
+its odds at creation. What it does not show is a ranking, because there is nothing to
+rank on yet.
 
 ---
 
@@ -244,10 +313,10 @@ every golfer ESPN actually lists). `deferred` in the build output is not a probl
 
 | File | What |
 |---|---|
-| `build_competition.py` | the pipeline → result JSON |
+| `build_competition.py` | the pipeline → result JSON, and the rebuild of one (§4) |
 | `bundle_frontend.py` | result JSON + template → self-contained page + zip |
 | `league.py` | league file loading, validation, team ids |
-| `espn_leaderboard.py` | ESPN event resolution, leaderboard parsing, the name join |
+| `espn_leaderboard.py` | ESPN event resolution, leaderboard parsing, the name join — including the fallback to earlier tournaments when this week's field is empty |
 | `standings.py` | the standings rule, in Python, for testing |
 | `frontend/template/` | the reference scoreboard — `lib.js` holds the rules |
 | `docs/FRONTEND-SPEC.md` | the design brief and the full result-JSON schema |

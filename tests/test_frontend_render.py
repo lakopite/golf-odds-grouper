@@ -184,6 +184,48 @@ def test_it_says_why_live_odds_are_missing_rather_than_showing_nothing(page):
     assert "allowlists request origins" in note
 
 
+def test_a_rebuilt_page_shows_the_odds_moving_without_any_relay(browser, competition,
+                                                                espn_final_payload, tmp_path):
+    """
+    The only way prices move on a page nobody has put a relay behind: somebody re-ran
+    the build with --refresh-odds and re-sent it. That re-read is baked in exactly as
+    the original snapshot is, so it needs no network -- and it must be presented as
+    movement since the draw rather than as a second column of levels, because the two
+    columns are on different scales and would read as a jump when nothing had moved.
+    """
+    result = json.loads(json.dumps(competition["result"]))
+    for i, golfer in enumerate(result["golfers"]):
+        # A third of the field drifts up by a cent, the rest does not move at all.
+        golfer["odds"]["current"] = round(golfer["odds"]["raw"] + (0.01 if i % 3 == 0 else 0), 4)
+    result["odds_snapshot"]["refreshed"] = {
+        "at": "2026-08-06T12:00:00+00:00", "price_mode": "ask", "field_size": len(result["golfers"]),
+        "raw_book_sum": 1.31, "matched": len(result["golfers"]),
+        "no_longer_priced": [], "priced_since_the_draw": ["Monday Qualifier"],
+    }
+    paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "refreshed"))
+
+    ctx = browser.new_context(viewport={"width": 900, "height": 800})
+    seen = []
+    ctx.on("request", lambda r: seen.append(r.url))
+    ctx.route(LEADERBOARD_GLOB, lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"access-control-allow-origin": "*"}, body=json.dumps(espn_final_payload)))
+    p = ctx.new_page()
+    p.goto("file://" + paths[0])
+    p.wait_for_selector("#standings article.team", timeout=15000)
+    p.wait_for_function("document.querySelector('td.glive').textContent !== ''", timeout=15000)
+
+    note = p.locator("#odds-note").text_content()
+    assert "re-read" in note and "1.310" in note
+    assert "in nobody" in note and "Monday Qualifier" in note
+
+    cells = [c for c in p.locator("td.glive").all_text_contents() if c]
+    assert any(c.startswith("↑ +1.0") for c in cells), cells[:5]
+    assert any(c == "→" for c in cells), "an unmoved golfer is not an arrow up"
+    assert all("espn.com" in u for u in seen if not u.startswith(("file://", "data:")))
+    ctx.close()
+
+
 def test_the_header_names_the_tournament_and_the_market(page, competition):
     text = page["page"].locator("header.page").text_content()
     assert competition["result"]["tournament"]["name"] in text
@@ -209,7 +251,13 @@ def test_it_refuses_a_leaderboard_for_a_different_tournament(browser, competitio
     p.wait_for_selector("#standings p", timeout=15000)
     text = p.locator("#standings").text_content()
     assert "expected " + ESPN_EVENT_ID in text
-    assert p.locator("#standings article.team").count() == 0
+
+    # The rosters and the odds are baked in and stay on screen -- the page is still
+    # worth looking at. What must not survive is a POSITION: every one of those would
+    # have come from the wrong tournament.
+    assert p.locator("#standings article.team").count() == len(competition["result"]["teams"])
+    assert set(p.locator("#standings article.team header .pos").all_text_contents()) == {"—"}
+    assert set(p.locator("#standings td.gpos").all_text_contents()) == {"—"}
     ctx.close()
 
 
@@ -228,7 +276,9 @@ def test_it_survives_espn_being_down(browser, competition):
     ctx.close()
 
 
-def test_a_pre_tournament_field_says_so_rather_than_showing_an_empty_board(browser, competition):
+@pytest.fixture
+def pre_tournament(browser, competition):
+    """The page as it exists for its first twelve hours: ESPN answering with no field."""
     ctx = browser.new_context()
     empty = {"events": [{"id": ESPN_EVENT_ID, "name": "Rocket Classic",
                          "status": {"type": {"state": "pre"}},
@@ -236,7 +286,45 @@ def test_a_pre_tournament_field_says_so_rather_than_showing_an_empty_board(brows
     ctx.route(LEADERBOARD_GLOB, lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(empty)))
     p = ctx.new_page()
+    errors = []
+    p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto("file://" + competition["html"])
-    p.wait_for_selector("#standings p", timeout=15000)
-    assert "not posted yet" in p.locator("#standings").text_content()
+    p.wait_for_selector("#standings article.team", timeout=15000)
+    yield {"page": p, "errors": errors}
     ctx.close()
+
+
+def test_a_pre_tournament_field_says_so(pre_tournament):
+    assert "Not started" in pre_tournament["page"].locator("#standings").text_content()
+    assert pre_tournament["errors"] == []
+
+
+def test_a_pre_tournament_page_still_shows_the_groups(pre_tournament, competition):
+    """
+    The state the page spends its first night in. ESPN publishes no competitors until
+    play starts, and everything the pool actually cares about at that point -- who
+    holds whom, what each golfer was worth, that the draw came out even -- was decided
+    on Wednesday and is baked into the file. An empty div throws all of it away.
+    """
+    page, result = pre_tournament["page"], competition["result"]
+    assert page.locator("#standings article.team").count() == len(result["teams"])
+    assert page.locator("#standings article.team table.golfers tbody tr").count() == sum(
+        t["golfer_count"] for t in result["teams"])
+
+    text = page.locator("#standings").text_content()
+    for team in result["teams"]:
+        assert team["team_name"] in text
+    assert "%" in text, "the odds at creation are the point of the pre-tournament board"
+
+
+def test_a_pre_tournament_page_ranks_nobody(pre_tournament):
+    """
+    Nothing to rank on, so nothing is ranked. Running the standings rule over an empty
+    leaderboard would order the teams by roster size -- every golfer tier 2, the longer
+    vector winning on padding -- and print it as a leaderboard, which is a worse answer
+    than "not started".
+    """
+    page = pre_tournament["page"]
+    assert set(page.locator("#standings article.team header .pos").all_text_contents()) == {"—"}
+    assert page.locator("#standings article.team.leader").count() == 0
+    assert page.locator("#standings tr.out").count() == 0
