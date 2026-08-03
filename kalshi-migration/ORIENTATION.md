@@ -5,6 +5,10 @@
 Written 2026-08-02. If you are an agent or a human picking this up cold, read this
 file before touching anything else in `kalshi-migration/`.
 
+> **THE MIGRATION IS DONE (2026-08-03).** `kalshi_odds.py` now lives in the repo
+> root as production code and `../group.py` reads Kalshi. The §7 open questions and
+> the §4 integration gap are all closed — see the banner on `START-HERE.md`.
+>
 > **START AT `START-HERE.md`, NOT HERE.** This file is the first exploration
 > pass. It remains the best API reference in the folder, but two of its
 > conclusions were reversed by later evidence.
@@ -203,7 +207,7 @@ any automated workflow.
 
 | File | What it is |
 |---|---|
-| `kalshi_odds.py` | Working client: discovery, pagination, 429 backoff, mid/last/bid/ask pricing, liquidity report. Emits the grouper's `{golfer_name, odds}` shape. |
+| `kalshi_odds.py` | Working client: discovery, pagination, 429 backoff, mid/last/bid/ask pricing, liquidity report. Emits the grouper's `{golfer_name, odds}` shape. **Moved to the repo root when the migration was executed — it is no longer in this folder.** |
 | `api_exploration.json` | Raw findings: verified endpoints, ticker inventory, captured prices, and a `CORRECTION_NOTICE` documenting the false-negative bug. |
 | `ORIENTATION.md` | This file. |
 
@@ -221,9 +225,12 @@ python kalshi_odds.py --event KXPGATOP5-ROC26 --price mid
 Writes raw payloads and a grouper-ready odds file to `captures/`.
 
 The pure functions (`to_golfers`, `liquidity_report`, `get` backoff) have been
-unit-tested offline. **The live network path has not been run end-to-end** — the
-sandbox where this was written had no outbound access to Kalshi. Run it once
-against a real event before trusting it.
+unit-tested offline. **The live network path had not been run end-to-end** when this
+was written — the sandbox had no outbound access to Kalshi.
+
+That gap is now closed. The live path was run against `KXPGATOUR-WYC26` on 2026-08-03
+and every claim in these documents held. `../tests/test_live.py` re-checks them on
+demand (`KALSHI_LIVE=1 python -m pytest tests/test_live.py`).
 
 ### Quick manual check
 

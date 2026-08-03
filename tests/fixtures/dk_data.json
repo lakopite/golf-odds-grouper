@@ -1,0 +1,125 @@
+{
+  "_fixture_note": "Hand-built DraftKings eventgroup envelope. The legacy path must keep working so an archived dk_data.json still runs and so a DK payload can be compared against Kalshi if one is ever captured by hand.",
+  "markets": [
+    {
+      "id": "m-winner",
+      "name": "Winner"
+    },
+    {
+      "id": "m-top5",
+      "name": "Top 5 (Including Ties)"
+    }
+  ],
+  "selections": [
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Cameron Young"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "9/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Jackson Koivun"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "22/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Hideki Matsuyama"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "24/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Patrick Cantlay"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "26/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Ryan Gerard"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "31/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Si Woo Kim"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "40/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Scottie Scheffler"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "4/1"
+      }
+    },
+    {
+      "marketId": "m-winner",
+      "participants": [
+        {
+          "name": "Rory McIlroy"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "6/1"
+      }
+    },
+    {
+      "marketId": "m-top5",
+      "participants": [
+        {
+          "name": "Cameron Young"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "2/1"
+      }
+    },
+    {
+      "marketId": "m-top5",
+      "participants": [
+        {
+          "name": "Hideki Matsuyama"
+        }
+      ],
+      "displayOdds": {
+        "fractional": "5/1"
+      }
+    }
+  ]
+}

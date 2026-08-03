@@ -1,21 +1,39 @@
 # Kalshi Migration — Start Here
 
-**Read this file first.** It is the entry point for the session that does the
+> **MIGRATION EXECUTED 2026-08-03. This folder is now a research record, not a
+> work order.** Everything §3 lists as remaining work is done and tested:
+>
+> - `kalshi_odds.py` moved to the repo root — it is production code now, not a probe.
+>   `--price` defaults to `ask`, `custom_strike.golf_competitor` is carried through as
+>   `golfer_id`, and a missing ask on an active market raises instead of defaulting to
+>   zero (§2, §3.1).
+> - `../group.py` gained `list_kalshi_golf_odds()` and a shape dispatcher, and can pull
+>   live from the API. The DraftKings parser still works on an archived payload (§3.2).
+> - `odds_to_conditional()` de-vigs by the observed field sum, so it is correct at 1.30
+>   and at 5.0 alike. The `1/participants` threshold is measured after the de-vig, and
+>   `--auto-exclude` iterates it to a fixed point (§3.3).
+> - `../README.md`'s "Hidden Option" section no longer recommends Top 5 (§1).
+>
+> Every trap in §4 is covered by a test in `../tests/`. Everything in §5 is still open.
+>
+> Read the rest for *why* those decisions were made. Do not read it as a to-do list.
+
+**Read this file first.** It is the entry point for the session that did the
 actual migration. Written 2026-08-03.
 
-Status: **research complete, decision made, no production code written yet.**
-The grouper still reads DraftKings. Nothing in this folder is wired into
+Status at the time of writing: **research complete, decision made, no production code
+written yet.** The grouper still read DraftKings. Nothing in this folder was wired into
 `../group.py`.
 
 ## The three documents, in reading order
 
 | File | What it is | Trust level |
 |---|---|---|
-| `START-HERE.md` | This file. Decisions, remaining work, traps. | Current |
+| `START-HERE.md` | This file. Decisions, remaining work, traps. | Current; §3 is now done |
 | `SPORTSBOOK-OPTIONS.md` | Why Kalshi over ESPN / Polymarket / The Odds API / DataGolf. Evidence and measurements. | Current (2026-08-03) |
 | `ORIENTATION.md` | First exploration pass. Still the best API reference. **Carries a SUPERSEDED banner — two of its conclusions were reversed.** | Read the banner before the body |
 
-Code: `kalshi_odds.py` (working client, needs two changes — see §3).
+Code: `kalshi_odds.py` — **moved to the repo root**; the two changes in §3.1 are applied.
 Raw findings: `api_exploration.json`.
 
 ---
