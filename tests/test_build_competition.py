@@ -162,6 +162,7 @@ def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
         espn_meta=None, matches={}, match_report=None, espn_field_size=0,
         field=raw, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity={"golfers": n_golfers}, raw_sum=sum(g["odds"] for g in raw),
+        auto_exclude=True,
         tick_structures=["tapered_deci_cent"], report=report, groups=groups,
         order=order, seed=7, aliases={},
     )

@@ -78,7 +78,8 @@ import kalshi_odds
 import league as league_mod
 
 # 1.1 added, all additive: `rebuilt_from`, `odds_snapshot.refreshed`,
-# `golfers[].odds.current`, and `golfers[].espn` gaining source / from_event / in_field.
+# `odds_snapshot.auto_exclude`, `golfers[].odds.current`, and `golfers[].espn` gaining
+# source / from_event / in_field.
 # A 1.0 reader still works on a 1.1 file -- every 1.0 key means exactly what it did.
 SCHEMA_VERSION = "1.1"
 
@@ -92,6 +93,12 @@ ODDS_TYPES = {
 }
 DEFAULT_ODDS_TYPE = "winner"
 ALIAS_FILE = "data/espn_aliases.json"
+
+# Everything a rebuild reads back out of a result file rather than off the command
+# line, by argparse dest. See apply_result_defaults.
+REBUILD_INPUTS = ("tournament", "kalshi_event", "odds", "price", "espn_event",
+                  "espn_league", "season", "seed", "exclude", "auto_exclude",
+                  "poll_interval", "kalshi_proxy")
 
 # Local logos are inlined so the exported bundle is one portable file. A logo bigger
 # than this is a mistake rather than a choice -- a 2 MB PNG lands in every copy of the
@@ -456,6 +463,7 @@ def build(args, league=None, rebuilt_from=None):
         espn_field_size=len(espn_players),
         field=field, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity=liquidity, raw_sum=raw_sum, tick_structures=tick_structures,
+        auto_exclude=args.auto_exclude,
         report=report, groups=groups, order=order, seed=seed, aliases=aliases,
         rebuilt_from=rebuilt_from,
     )
@@ -528,7 +536,10 @@ def load_result(path):
     except json.JSONDecodeError as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}")
 
-    missing = [k for k in ("schema_version", "league", "teams", "golfers", "sources", "grouping")
+    # Every block a rebuild goes on to dereference. Checking six of them and then dying
+    # on a KeyError in the seventh is the same damaged file reported twice as badly.
+    missing = [k for k in ("schema_version", "generated_at", "generator", "league", "teams",
+                           "golfers", "tournament", "sources", "odds_snapshot", "grouping")
                if k not in result]
     if missing:
         raise SystemExit(f"{path} is missing {', '.join(missing)}, so it is not a result file "
@@ -685,9 +696,12 @@ def rebuild(args, result):
         field=field, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity=result["odds_snapshot"]["liquidity"],
         raw_sum=result["odds_snapshot"]["raw_book_sum"],
+        price_mode=kalshi["price_mode"],
+        auto_exclude=result["odds_snapshot"].get("auto_exclude", args.auto_exclude),
         tick_structures=kalshi.get("price_level_structure") or [],
         report=result["grouping"], order=order,
         seed=result["generator"].get("seed"), aliases=aliases,
+        tournament_prior=tournament,
         current=current, refreshed=refreshed, rebuilt_from=rebuilt_from,
     )
 
@@ -708,6 +722,12 @@ def assemble(**k):
     excluded_names = {e["golfer_name"] for e in k["excluded"]}
     current = k.get("current") or {}
     captured_at = k.get("captured_at") or k["now"]
+    # The price mode the CARRIED snapshot was captured at, which is not this run's
+    # --price: a rebuild may re-read the book at the mid without making Wednesday's ask
+    # prices retroactively mids.
+    price_mode = k.get("price_mode") or k["args"].price
+    prior = k.get("tournament_prior") or {}
+    prior_course = prior.get("course") or {}
     team_of = {}
     for team_id, golfers in k["team_groups"].items():
         for g in golfers:
@@ -809,15 +829,22 @@ def assemble(**k):
         "teams": teams_out,
         "golfers": golfers_out,
 
+        # Dates and course are static facts about the tournament, so a rebuild that
+        # could not reach ESPN keeps the ones it was given rather than nulling them --
+        # the scoreboard's "first round <date>" line is the pre-tournament state this
+        # whole file exists to serve. `state_at_build` is NOT static and gets no such
+        # fallback: if this run could not read the state, it does not know it.
         "tournament": {
             "name": k["tournament_name"],
             "season": int(k["season"]),
-            "start": espn_event.get("start") or (k["espn_meta"] or {}).get("start"),
-            "end": espn_event.get("end") or (k["espn_meta"] or {}).get("end"),
+            "start": (espn_event.get("start") or (k["espn_meta"] or {}).get("start")
+                      or prior.get("start")),
+            "end": (espn_event.get("end") or (k["espn_meta"] or {}).get("end")
+                    or prior.get("end")),
             "state_at_build": espn_event.get("state") or (k["espn_meta"] or {}).get("state"),
             "course": {
-                "name": (k["espn_meta"] or {}).get("course"),
-                "par": (k["espn_meta"] or {}).get("par"),
+                "name": (k["espn_meta"] or {}).get("course") or prior_course.get("name"),
+                "par": (k["espn_meta"] or {}).get("par") or prior_course.get("par"),
             },
         },
 
@@ -830,7 +857,7 @@ def assemble(**k):
                 "odds_type": k["odds_type"],
                 "market_label": k["market_label"],
                 "mutually_exclusive_outcomes": k["exclusive"],
-                "price_mode": k["args"].price,
+                "price_mode": price_mode,
                 "price_level_structure": k["tick_structures"],
                 "browser_reachable": False,
                 "browser_note": (
@@ -860,7 +887,7 @@ def assemble(**k):
 
         "odds_snapshot": {
             "captured_at": captured_at,
-            "price_mode": k["args"].price,
+            "price_mode": price_mode,
             "field_size": len(field),
             "raw_book_sum": round(k["raw_sum"], 6),
             "liquidity": k["liquidity"],
@@ -875,6 +902,10 @@ def assemble(**k):
                     "devigged is the same de-vig over the WHOLE field, before exclusions."
                 ),
             },
+            # Recorded because it is a decision this run made and the next one cannot
+            # infer: a file with no over_fair_share exclusions either had nobody over
+            # the line or had the rule switched off, and those rebuild differently.
+            "auto_exclude": bool(k["auto_exclude"]),
             "excluded": [
                 {**e,
                  "raw_odds": next((g["odds"] for g in field if g["golfer_name"] == e["golfer_name"]), None),
@@ -1062,21 +1093,30 @@ def build_parser():
 
 def typed_options(argv, args):
     """
-    The options actually typed on the command line, by dest name.
+    Which of a rebuild's inputs were actually typed, by dest name.
 
     argparse cannot tell `--price ask` from a `--price` nobody passed that defaulted to
     "ask", and here the difference decides an outcome: a rebuild fills every unset
     option from the result file, so without this, somebody rebuilding a Top 5
     competition and typing `--odds winner` would silently get Top 5 back -- their
-    instruction lost because it happened to equal the default.
+    instruction dropped because it happened to equal the default.
 
-    Parsing a second time with every default replaced by a sentinel answers the
-    question argparse does not.
+    Only the four inputs whose default is a value somebody might type need asking
+    about, and they are found by parsing a second time with those defaults replaced by
+    a sentinel. Everything else a rebuild fills defaults to None, which nobody types.
+
+    Probing narrowly is not just economy. `--exclude` is an `append` option, and
+    argparse appends to whatever the default is -- hand it a sentinel and the parser
+    itself raises AttributeError the moment somebody excludes a golfer.
     """
-    probe = build_parser()
-    sentinel = object()
-    probe.set_defaults(**{dest: sentinel for dest in vars(args)})
-    return {dest for dest, value in vars(probe.parse_args(argv)).items() if value is not sentinel}
+    ambiguous = [dest for dest in REBUILD_INPUTS
+                 if build_parser().get_default(dest) is not None]
+    probe, sentinel = build_parser(), object()
+    probe.set_defaults(**{dest: sentinel for dest in ambiguous})
+    probed = vars(probe.parse_args(argv))
+    return ({dest for dest in ambiguous if probed[dest] is not sentinel}
+            | {dest for dest in REBUILD_INPUTS
+               if dest not in ambiguous and getattr(args, dest) is not None})
 
 
 def apply_result_defaults(args, result, typed=()):
@@ -1094,6 +1134,8 @@ def apply_result_defaults(args, result, typed=()):
     """
     kalshi = result["sources"]["kalshi"]
     espn = result["sources"].get("espn") or {}
+    # Keyed by REBUILD_INPUTS, and read back through it below, so the two cannot drift
+    # apart without raising.
     defaults = {
         "tournament": result["tournament"]["name"],
         "kalshi_event": kalshi["event_ticker"],
@@ -1105,18 +1147,29 @@ def apply_result_defaults(args, result, typed=()):
         "season": result["tournament"]["season"],
         "seed": result["generator"].get("seed"),
         # Only the named ones. `over_fair_share` is a rule, not a decision, and it is
-        # re-derived against whatever field this run reads.
+        # re-derived against whatever field this run reads -- but WHETHER the rule was
+        # on is a decision, and it comes back too. A 1.0 file does not record it and
+        # falls through to the flag's own default, which is what it was built under.
         "exclude": [e["golfer_name"] for e in result["odds_snapshot"]["excluded"]
                     if e["reason"] == "named"] or None,
+        "auto_exclude": result["odds_snapshot"].get("auto_exclude"),
         "poll_interval": (result.get("live") or {}).get("poll_interval_seconds"),
         "kalshi_proxy": (result.get("live") or {}).get("kalshi_proxy_url_template"),
     }
     filled = []
-    for name, value in defaults.items():
+    for name in REBUILD_INPUTS:
+        value = defaults[name]
         if value is None or name in typed:
             continue
         setattr(args, name, value)
         filled.append(name)
+
+    # --exclude is an append option and a typed one replaces the recorded list rather
+    # than adding to it, which is the same rule every other option follows. Silently
+    # re-admitting golfers the pool had already excluded by hand is not, so it is said.
+    if "exclude" in typed and defaults["exclude"]:
+        print(f"note: --exclude replaces the {len(defaults['exclude'])} exclusion(s) recorded "
+              f"in the file ({', '.join(defaults['exclude'])}). Name them again to keep them.")
     return filled
 
 

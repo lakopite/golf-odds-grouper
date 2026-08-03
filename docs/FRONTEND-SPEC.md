@@ -400,6 +400,9 @@ for a complete one.
     "normalization": { "basis": "probability | share_of_n_slots", "note": "…" },
     "excluded": [{ "golfer_name": "…", "reason": "named | over_fair_share",
                    "raw_odds": 0.21, "devigged_odds": 0.18 }],
+    // Whether the 1/n fair-share rule ran. An empty `excluded` means nobody was over
+    // the line OR the rule was off, and only this says which.
+    "auto_exclude": true,
     "fair_share_threshold": 0.2
   },
 

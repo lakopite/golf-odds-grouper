@@ -580,3 +580,139 @@ def test_a_zip_without_a_result_in_it_says_so(tmp_path):
     with pytest.raises(SystemExit) as exc:
         bc.load_result(str(path))
     assert "no result.json" in str(exc.value)
+
+
+def test_excluding_a_golfer_on_a_rebuild_does_not_crash_the_parser(result_file, espn_field,
+                                                                   tmp_path):
+    """
+    --exclude is an `append` option, so argparse appends to whatever its default is.
+    Probing for typed options by replacing defaults with a sentinel made the parser
+    itself raise AttributeError the moment anybody used it.
+    """
+    path, result = result_file
+    args = hydrate(["--from-result", path, "--exclude", result["golfers"][0]["name"]], result)
+    assert args.exclude == [result["golfers"][0]["name"]]
+
+    # And end to end, through main().
+    run(["--from-result", path, "--exclude", result["golfers"][0]["name"],
+         "--output", str(tmp_path / "out.json")])
+
+
+def test_the_rebuild_inputs_and_the_file_they_are_read_from_stay_in_step(result_file):
+    """
+    REBUILD_INPUTS is the list of what a rebuild reads back, and both the probe and the
+    fill iterate it. A key added to one and not the other should raise here rather than
+    silently stop being carried.
+    """
+    args = hydrate(["--from-result", result_file[0]], result_file[1])
+    for dest in bc.REBUILD_INPUTS:
+        assert hasattr(args, dest), dest
+
+
+# ---------------------------------------------------------------------------
+# What a rebuild must not quietly lose
+# ---------------------------------------------------------------------------
+
+def test_the_tournaments_dates_and_course_survive_an_espn_outage(result_file, monkeypatch,
+                                                                 tmp_path):
+    """
+    Start, end and course are static facts about the tournament -- ESPN being down does
+    not un-schedule it. Nulling them costs the page its "Not started -- first round
+    <date>" line, which is exactly the state a rebuild is usually run to serve.
+    """
+    path, before = result_file
+    before["tournament"].update(start="2026-08-06T07:00Z", end="2026-08-09T07:00Z",
+                                course={"name": "Sedgefield CC", "par": 70})
+    (tmp_path / "with-dates.json").write_text(json.dumps(before))
+
+    def down(*a, **kw):
+        raise RuntimeError("ESPN returned HTTP 503")
+
+    monkeypatch.setattr(espn, "fetch_leaderboard", down)
+    monkeypatch.setattr(espn, "season_calendar", lambda *a, **k: [])
+
+    out = str(tmp_path / "after.json")
+    run(["--from-result", str(tmp_path / "with-dates.json"), "--output", out])
+    after = rebuilt(out)["tournament"]
+
+    assert after["start"] == "2026-08-06T07:00Z"
+    assert after["end"] == "2026-08-09T07:00Z"
+    assert after["course"] == {"name": "Sedgefield CC", "par": 70}
+    # But not the state: this run could not read it, so it does not claim to know it.
+    assert after["state_at_build"] is None
+
+
+def test_a_rebuild_at_a_different_price_does_not_relabel_the_drawn_snapshot(result_file,
+                                                                            espn_field,
+                                                                            moving_market,
+                                                                            tmp_path):
+    """
+    `--price mid --refresh-odds` is a legitimate request: read today's book at the mid.
+    It must not make Wednesday's ask prices retroactively mids -- the page would print
+    "mid book summing to 1.31, captured <Wednesday>", which is simply false.
+    """
+    path, before = result_file
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--refresh-odds", "--price", "mid", "--output", out])
+    after = rebuilt(out)
+
+    assert after["odds_snapshot"]["price_mode"] == before["odds_snapshot"]["price_mode"] == "ask"
+    assert after["sources"]["kalshi"]["price_mode"] == "ask"
+    assert after["odds_snapshot"]["refreshed"]["price_mode"] == "mid"
+
+
+def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, espn_field,
+                                                                   monkeypatch):
+    """
+    A file with no over_fair_share exclusions either had nobody over the line or had the
+    rule switched off, and those two rebuild differently. Without recording which, a
+    --regroup of a --no-auto-exclude competition drops the favourite out of the pool
+    altogether -- not to another team, out.
+    """
+    result = make_result(n_teams=4, n_golfers=12)
+    # One golfer worth more than a quarter of the field, kept deliberately.
+    result["golfers"][0]["odds"].update(raw=0.4, devigged=0.4, grouping_weight=0.4)
+    result["odds_snapshot"]["auto_exclude"] = False
+    path = tmp_path / "kept.json"
+    path.write_text(json.dumps(result))
+
+    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
+        kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]])
+    out = str(tmp_path / "out.json")
+    run(["--from-result", str(path), "--regroup", "--time-limit", "0.3", "--output", out])
+
+    after = rebuilt(out)
+    assert after["odds_snapshot"]["excluded"] == []
+    assert all(g["team_id"] for g in after["golfers"]), "nobody was dropped from the pool"
+    assert after["odds_snapshot"]["auto_exclude"] is False, "and the decision is still recorded"
+
+
+def test_a_fresh_build_records_whether_the_fair_share_rule_ran():
+    from test_build_competition import make_result as fresh
+
+    assert fresh()["odds_snapshot"]["auto_exclude"] is True
+
+
+def test_replacing_the_recorded_exclusions_is_said_out_loud(result_file, capsys):
+    """Silently re-admitting a golfer the pool excluded by hand is not on."""
+    _, result = result_file
+    result["odds_snapshot"]["excluded"] = [
+        {"golfer_name": "Adam Ash", "reason": "named", "raw_odds": 0.1, "devigged_odds": 0.1}]
+    hydrate(["--from-result", "x.json", "--exclude", "Ben Ash"], result)
+    assert "replaces the 1 exclusion(s) recorded" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("dropped", ["odds_snapshot", "tournament", "generator", "generated_at"])
+def test_a_result_file_missing_a_block_the_rebuild_reads_is_refused(result_file, tmp_path,
+                                                                    dropped):
+    """
+    Checking six blocks and then dying on a KeyError in the seventh reports the same
+    damaged file twice, once badly.
+    """
+    _, result = result_file
+    result.pop(dropped)
+    path = tmp_path / "broken.json"
+    path.write_text(json.dumps(result))
+    with pytest.raises(SystemExit) as exc:
+        bc.load_result(str(path))
+    assert dropped in str(exc.value)
