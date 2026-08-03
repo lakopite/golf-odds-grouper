@@ -1,0 +1,108 @@
+{
+  "explored_at": "2026-08-02",
+  "source": "live calls against the official Kalshi public REST API, run from a kalshi.com page context",
+  "base_url": "https://api.elections.kalshi.com/trade-api/v2",
+  "auth": "none required for market data reads",
+  "cors": "api.elections.kalshi.com allows fetch from a kalshi.com origin but NOT from arbitrary origins (example.com fetch failed). Server-side clients are unaffected.",
+
+  "CORRECTION_NOTICE": {
+    "what_i_got_wrong": "An earlier pass in this session concluded Kalshi has no PGA Tour outright winner market. That was WRONG. The winner market exists: KXPGATOUR-ROC26.",
+    "root_cause": "The discovery sweep fired ~112 concurrent /events requests. Kalshi rate-limited them: 99 of 112 returned HTTP 429. The code read responses as `(r.events || [])` inside a `catch(e){}`, so rate-limited series silently yielded 'no events' instead of raising. Absence of data was reported as evidence of absence.",
+    "compounding_error": "The follow-up 'independent verification' used the same broken sweep, so it reproduced the same false negative and made the wrong conclusion look confirmed.",
+    "how_it_was_caught": "Reading the actual kalshi.com golf category page, which links to /markets/kxpgatour/pga-tour/kxpgatour-roc26.",
+    "lesson_for_the_scraper": "Never swallow non-200s. Check response.ok explicitly, throttle to small concurrency, and retry on 429."
+  },
+
+  "rate_limits_observed": {
+    "symptom": "HTTP 429 on burst reads",
+    "measured": "8-wide concurrency across 112 series -> 99 x HTTP 429",
+    "safe_pattern": "small sequential batches with backoff; single-event reads never rate-limited",
+    "browser_caveat": "setTimeout is throttled to ~1/min in a background tab, so sleep-based pacing stalls when driving this from a non-focused browser tab. Pace server-side instead."
+  },
+
+  "endpoints_verified": {
+    "series_discovery": "/series?category=Sports  -> 3077 series, 112 tagged 'Golf', single page (cursor null)",
+    "single_series": "/series/<TICKER>  -> e.g. /series/KXPGATOUR",
+    "events_by_series": "/events?series_ticker=<TICKER>&limit=200  -> KXPGATOUR has 69 events, one page",
+    "markets_by_event": "/markets?event_ticker=<TICKER>&limit=500  -> one market per golfer; paginate via `cursor`"
+  },
+
+  "rocket_classic_2026": {
+    "event_ticker_suffix": "ROC26",
+    "winner_market": {
+      "series": "KXPGATOUR",
+      "series_title": "PGA Tour",
+      "series_tags": ["Golf"],
+      "event_ticker": "KXPGATOUR-ROC26",
+      "event_title": "Rocket Classic Winner",
+      "sub_title": "2026 Rocket Classic",
+      "web_url": "https://kalshi.com/markets/kxpgatour/pga-tour/kxpgatour-roc26",
+      "markets": 151,
+      "active_at_capture": 73,
+      "two_sided_quotes": 15,
+      "sum_of_last_prices": 1.161,
+      "overround_note": "16% overround on the winner book. Comparable to or tighter than a typical sportsbook golf outright, which often runs 20-40%.",
+      "price_granularity": "sub-cent -- observed 0.099, 0.065, 0.074, so this is finer than the 1c grid older Kalshi docs describe"
+    },
+    "other_full_field_events": [
+      { "event_ticker": "KXPGATOP5-ROC26", "title": "Rocket Classic: Top 5 Finishers", "markets": 151, "active_at_capture": 73 },
+      { "event_ticker": "KXPGATOP10-ROC26", "title": "Rocket Classic: Top 10 Finishers", "markets": 151, "active_at_capture": 73 },
+      { "event_ticker": "KXPGAMAKECUT-ROC26", "title": "Rocket Classic: To Make the Cut", "markets": 151, "active_at_capture": 0 },
+      { "event_ticker": "KXPGAR3LEAD-ROC26", "title": "Rocket Classic: Round 3 Leader", "markets": 151, "active_at_capture": 0 },
+      { "event_ticker": "KXPGAR3TOP10-ROC26", "title": "Rocket Classic: Round 3 Top 10 Finishers", "markets": 151, "active_at_capture": 0 },
+      { "event_ticker": "KXPGAR1TOP5-ROC26", "title": "Rocket Classic: Round 1 Top 5 Finishers", "markets": 151, "active_at_capture": 0 }
+    ],
+    "head_to_head": {
+      "series": "KXPGAH2H",
+      "pattern": "KXPGAH2H-ROC26R<round><P1><P2>",
+      "note": "two-golfer markets, not useful for field-wide grouping"
+    },
+    "verdict": "Winner, Top 5, and Top 10 are ALL available for a single tournament, each with the full 151-golfer field. This is feature-parity with the DraftKings markets the grouper already uses."
+  },
+
+  "winner_prices_KXPGATOUR_ROC26": {
+    "caveat": "captured with the tournament nearly complete -- prices have collapsed toward settlement and are NOT representative of pre-tournament pricing",
+    "rows": [
+      { "golfer": "Michael Brennan", "bid": 0.56, "ask": 0.57, "last": 0.57 },
+      { "golfer": "Davis Riley", "bid": 0.099, "ask": 0.11, "last": 0.11 },
+      { "golfer": "Michael Thorbjornsen", "bid": 0.065, "ask": 0.074, "last": 0.074 },
+      { "golfer": "Chris Kirk", "bid": 0.055, "ask": 0.06, "last": 0.06 },
+      { "golfer": "Kris Ventura", "bid": 0.044, "ask": 0.049, "last": 0.049 },
+      { "golfer": "Xander Schauffele", "bid": 0.038, "ask": 0.041, "last": 0.041 },
+      { "golfer": "Rickie Fowler", "bid": 0.026, "ask": 0.032, "last": 0.031 },
+      { "golfer": "Rasmus Hojgaard", "bid": 0.024, "ask": 0.028, "last": 0.025 },
+      { "golfer": "Cameron Young", "bid": 0.018, "ask": 0.021, "last": 0.021 },
+      { "golfer": "Michael Kim", "bid": 0.018, "ask": 0.021, "last": 0.018 }
+    ]
+  },
+
+  "market_shape": {
+    "field_count_matches_dk": true,
+    "field_count": 151,
+    "prices_are_probabilities": true,
+    "prices_note": "YES contracts settle at $1.00, so yes_bid_dollars / yes_ask_dollars ARE implied probabilities. No fractional-odds conversion needed, unlike DK's displayOdds.fractional.",
+    "key_fields": [
+      "ticker", "event_ticker", "yes_sub_title (golfer name)",
+      "yes_bid_dollars", "yes_ask_dollars", "last_price_dollars",
+      "no_bid_dollars", "no_ask_dollars",
+      "volume_fp", "open_interest_fp", "liquidity_dollars",
+      "status (active | finalized)", "result (yes | no | '')"
+    ],
+    "naming_caution": "This API version suffixes money fields with `_dollars` and fixed-point counters with `_fp`. Older Kalshi docs show integer-cent fields named `yes_bid` / `yes_ask` / `volume`. Code written against the old names silently reads undefined.",
+    "settled_market_caution": "finalized markets quote bid=0.0000 ask=1.0000. Filter on status=='active' or these will poison any probability sum."
+  },
+
+  "series_tickers_of_interest": {
+    "KXPGATOUR": "PGA Tour -- OUTRIGHT WINNER, per tournament. 69 events. This is the DK 'Winner' equivalent.",
+    "KXPGATOP5": "PGA Top 5 Finishers -- full field",
+    "KXPGATOP10": "PGA Top 10 Finisher -- full field",
+    "KXPGAMAKECUT": "PGA To Make Cut -- full field",
+    "KXPGAR3LEAD": "PGA Round 3 Leader",
+    "KXPGAR3TOP10": "PGA Round 3 Top 10",
+    "KXPGAR1TOP5": "PGA Round 1 Top 5",
+    "KXPGAH2H": "PGA head-to-head matchups",
+    "KXDPWORLDTOUR": "DP World Tour Tournament Winner",
+    "KXTHEOPEN": "The Open Championship",
+    "KXGOLFH2H": "Golf Head-to-Head"
+  }
+}
