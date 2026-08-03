@@ -28,26 +28,52 @@ python bundle_frontend.py --result build/result.json --out dist/
 `build/result.json` is the source of truth for that competition: the teams and their
 groups, the odds at the moment they were drawn, both API endpoints, who was excluded
 and why, and the partition's optimality certificate. `dist/*.html` is that file baked
-into a single static page — it opens from disk, needs no server, and polls ESPN for
-live scores. The `.zip` beside it carries the page, the result JSON and a manifest.
+into a single static page — it opens from disk and needs no server. Whether it polls
+ESPN for scores is not a setting anybody chooses; it is decided below. The `.zip`
+beside it carries the page, the result JSON and a manifest.
 
 Neither is written back into the repository. `build/` and `dist/` are gitignored.
 
-Because that file describes the whole competition, it is also the input to the next
-build of it:
+### Two builds, and the ESPN leaderboard decides which
+
+ESPN publishes **zero competitors** until the first tee time. That one fact splits this
+program in half, and the split is read off the leaderboard payload rather than off a
+flag — the result file records which half it is in `build_mode`:
+
+| `build_mode` | When | What the file says, and what the page does |
+|---|---|---|
+| `groups` | ESPN has published no field — Wednesday night | no name join is attempted at all: `live` is null and every `golfers[].espn` is null. The exported page fetches nothing, from anywhere, and ranks nothing. It shows the rosters, the odds the groups were drawn on, and the optimality certificate |
+| `live` | ESPN has published a field | the Kalshi names are joined against **this week's** actual competitors, every golfer that resolves carries an ESPN athlete id, and the page polls ESPN and ranks on that id |
+
+(Three unrelated things in here are called "live": that build mode, the `live` block
+inside the result file, and the test suites that hit the real APIs. This README always
+says which one it means.)
+
+A `groups` build is not a degraded scoreboard waiting for a fetch to succeed. It is the
+groups sheet — the thing that actually exists on Wednesday — and it is complete,
+deployable and honest on its own terms. So a normal week is two runs against one
+competition, and the second one is a rebuild:
 
 ```bash
+python build_competition.py --league leagues/my-league.json --tournament "Wyndham"
 python build_competition.py --from-result build/result.json --output build/thursday.json
 ```
 
-The league, the tournament on both APIs, the market, the price mode, the hand-picked
-exclusions and the seed all come back out of the file. The groups and the odds they
-were drawn on are carried forward untouched — **a rebuild never re-deals**, because
-people have already been told which golfers they own — and the parts that have a "now"
-are redone: the ESPN join above all, which a Wednesday build cannot finish and a
-Thursday one can. Add `--refresh-odds` to record what the market says today alongside
-the prices the groups were drawn on, or `--regroup` to pull fresh odds and partition
-again, which is the one that deals everybody new golfers and says so.
+Because the result file describes the whole competition, it is the input to the next
+build of it. The league, the tournament on both APIs, the market, the price mode, the
+hand-picked exclusions, the seed and any reviewed golfer-name decisions all come back
+out of the file. The groups and the odds they were drawn on are carried forward
+untouched — **a rebuild never re-deals**, because people have already been told which
+golfers they own — and the parts that have a "now" are redone: above all the ESPN side,
+which on Wednesday had no field to work with and on Thursday has one. Add
+`--refresh-odds` to record what the market says today alongside the prices the groups
+were drawn on, or `--regroup` to pull fresh odds and partition again, which is the one
+that deals everybody new golfers and says so.
+
+A rebuild that finds no field where the last one found 150 competitors is refused
+rather than written: ESPN does not unpublish a field, so that is a failed read, and
+writing it would turn a working scoreboard back into a groups sheet with no sign that
+anything went wrong.
 
 Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
 sentence: *"build this week's pool for my-league at the Wyndham"*.
@@ -199,40 +225,99 @@ unauthenticated leaderboard, and the rule is:
 browser, because the browser is where it actually runs. `tests/test_frontend_parity.py`
 feeds both the same payloads and fails if they disagree — two implementations of a rule
 are one implementation and one rumour unless something checks them against each other.
+The standings rule is the *only* thing that is implemented twice. `lib.js` used to carry
+a second copy of the golfer-name matcher as well, mirrored character for character
+against Python; it joins on a baked ESPN athlete id now, so that copy is gone and the
+parity test has one less subtle string algorithm to keep in step.
 
 Three things about the ESPN payload are measured rather than assumed, and all three
 have bitten:
 
 - `competitors[]` is not in rank order.
 - `score.displayValue` counts completed rounds only, so mid-round it was wrong for 42
-  of 147 players. The live total is the sum of the linescores.
-- `sortOrder` *is* the live rank — zero inversions — and it already puts every cut
+  of 147 players. The running total is the sum of the linescores.
+- `sortOrder` *is* the in-play rank — zero inversions — and it already puts every cut
   player below every player who made the cut.
 
-Kalshi's golfer UUID is stable across events and market series but is not an ESPN id,
-so the join is by name: normalised exact, then first-initial-plus-last-name. Measured
-on a real field, that resolves 147 of 147 golfers ESPN lists, with zero ambiguous keys.
-See `espn_leaderboard.py` and `docs/FRONTEND-SPEC.md` §8.
+### Joining the two fields, once, at build time
 
-**ESPN publishes no field until the first tee time**, so on the night the groups are
-drawn there is nothing to join against. There does not need to be: those golfers played
-last week. The join walks back through the season's finished tournaments and takes
-**identity** from them — athlete id, display name, headshot — and never scores, because
-those tournaments are over and the standings rule ranks on exactly the fields it drops.
-Measured on the 2026 Wyndham with no field published at all: 146 of 150 golfers
-identified in 3.5 seconds, from four earlier leaderboards. The four it misses have no
-PGA Tour start this season, so they are absent from ESPN rather than missed. Run it on
-its own with:
+Kalshi's golfer UUID is stable across events and market series but is not an ESPN id, so
+the two fields have to be joined by name. That happens once, in a `live`-mode build,
+against the competitors ESPN published for **this** tournament — there is no runtime
+join any more, and no browser-side copy of the matcher. Three tiers, tried in order, all
+three exact or explicit:
+
+| Tier | What it is |
+|---|---|
+| `decision` | a binding somebody reviewed and recorded for this competition — or a note that the golfer is genuinely not in the field |
+| `alias` | an explicit Kalshi-name → ESPN-display-name entry from `data/espn_aliases.json`, reusable every week |
+| `exact` | the two normalised display names are equal |
+
+**There is deliberately no fuzzy tier.** Measured on the Rocket Classic — 151 Kalshi
+markets against the 147 competitors ESPN listed — `exact` alone resolves 139. Eight of
+the twelve it leaves are formal-vs-familiar first names (Zachary/Zach Bauchou,
+Cameron/Cam Davis, Nicolas/Nico Echavarria, Matthew/Matt McCarty and four more), and a
+first-initial-plus-last-name rule binds all eight correctly. That rule was also measured
+collision-free inside that 147-player field, which is exactly the kind of measurement
+that does not generalise: the week a field holds two J. Smiths, or a Cameron and a
+Carson Young, it binds one of them to the wrong person and nothing downstream can tell
+the two cases apart. So it survives as a **suggestion** and never as a match —
+`suggest_matches` ranks the right athlete first and says why, and a person settles it.
+
+The other four — Daniel Brown, Taylor Moore, Brooks Koepka, Jason Day — were genuinely
+absent, withdrawn before play. "Confirmed absent" and "we could not find him" both score
+nothing and are completely different facts, and only the first is knowable by looking,
+so the report keeps them in separate piles: `absent` and `unresolved`. Only the second
+is a reason to do anything.
+
+Two more things make a build report fewer matches than it had names, and both are
+refusals rather than failures:
+
+- **Two Kalshi names that resolve to one athlete.** One ESPN athlete cannot be on two
+  teams, so the second name is left unresolved and the report says who already holds
+  them. Reviewed decisions are applied in a first pass, so which name counts as
+  "second" never depends on how Kalshi happened to sort its markets.
+- **One normalised name shared by two athletes in the same field.** The name is dropped
+  from the index and *both* golfers come back unresolved. It has not happened in a
+  measured field; the day it does, a coin flip is the wrong way to decide which of two
+  people is on somebody's team.
+
+Run the join on its own against a published field — `--match` takes a result file, a
+Kalshi odds file, a JSON list of names or one name per line:
 
 ```bash
-python espn_leaderboard.py --season 2026 --event 401811961 --match build/result.json
+python espn_leaderboard.py --season 2026 --find "wyndham"     # the ESPN event id
+python espn_leaderboard.py --event 401811961 --match build/result.json
 ```
+
+`--match` requires `--event`, because the join is against one published field and before
+the first tee time there is no field to join against.
+
+### Settling the leftovers, and why it is load-bearing
+
+A `live` build writes every name it would not guess at to `match-review.json` beside the
+result file: each unmatched Kalshi name, what it is worth, whose team it is in, the ESPN
+athletes nobody claimed, and two or three ranked suggestions with the reason for each.
+Somebody — in practice Claude, driving `.claude/skills/golf-pool/` — fills in
+`decisions`, binding an athlete id or recording an absence, and the next build reads it
+back. `--match-review PATH` points at a different file; `--update-aliases` promotes the
+name bindings (never the absences: a withdrawal is true of one week) into
+`data/espn_aliases.json`, where next month's build resolves them with nobody looking.
+
+**A golfer left unresolved at build time is unscoreable for the life of that page.**
+They carry no athlete id, so the page has nothing to look up, and no amount of polling
+will change that — every refresh re-reads the same leaderboard and finds the same
+nothing. The fix is a rebuild, not a refresh. That is the price of deleting the runtime
+name match, and it is worth paying: the join is now checkable, once, by a person, before
+it takes effect, instead of being re-guessed in every browser on every poll. See
+`espn_leaderboard.py`, `match_review.py` and `docs/FRONTEND-SPEC.md` §8.
 
 **Kalshi will not answer a browser, so the page does not ask it.** Its API allowlists
 request origins — `kalshi.com` gets a 200, every other origin including `localhost` and
-`file://` gets a 403 with no CORS headers. The exported page therefore fetches exactly
-one thing, the ESPN leaderboard, and carries its odds baked in and time-stamped as of
-the draw. There are no live odds and no relay to configure. The one way to show prices
+`file://` gets a 403 with no CORS headers. The exported page therefore fetches at most
+one thing — the ESPN leaderboard, and in `groups` mode not even that — and carries its
+odds baked in and time-stamped as of the draw. There are no live odds and no relay to
+configure, in either mode. The one way to show prices
 moving is to rebuild with `--refresh-odds`, which re-reads Kalshi server-side and bakes
 a second reading in beside the first; the page shows the movement since the draw and
 says it is frozen until the next rebuild.
@@ -246,12 +331,15 @@ KALSHI_LIVE=1 python -m pytest tests/test_live.py -v        # hits the real Kals
 ESPN_LIVE=1 python -m pytest tests/test_live_espn.py -v     # hits the real ESPN API
 ```
 
-The offline suite proves the code is self-consistent. The live suites prove the
-endpoints still behave the way the code was measured against: that Kalshi still answers,
-still sends money fields as strings and still quotes an ask on every active market; and
-that ESPN still returns a whole season's calendar for a one-day request (12 KB, against
-35 MB for the year) and still publishes no field for a tournament that has not started.
-Run them before trusting a season's first pull.
+The offline suite proves the code is self-consistent. The two real-API suites — the ones
+gated on `KALSHI_LIVE` and `ESPN_LIVE`, which have nothing to do with `live` build mode
+— prove the endpoints still behave the way the code was measured against: that Kalshi
+still answers, still sends money fields as strings and still quotes an ask on every
+active market; and that ESPN still returns a whole season's calendar for a one-day
+request (12 KB, against 35 MB for the year) and still publishes no field for a
+tournament that has not started. That last one is the fact `build_mode` is read off, so
+it is worth knowing the day it stops being true. Run them before trusting a season's
+first pull.
 
 Two suites need a runtime beyond Python and skip cleanly without it:
 `test_frontend_parity.py` needs `node`, and `test_frontend_render.py` drives the

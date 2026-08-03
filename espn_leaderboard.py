@@ -609,9 +609,16 @@ def match_field(names, players, aliases=None, decisions=None):
 # Suggesting, for the names the join will not guess at
 # ---------------------------------------------------------------------------
 
-# Below this, a suggestion is noise. Two unrelated golfers routinely score 0.4 on
-# spelling alone, and a review file padded with those is a review file nobody reads.
+# Below this, a suggestion is noise, and a review file padded with noise is a review
+# file nobody reads.
 SUGGESTION_FLOOR = 0.45
+
+# Spelling similarity ALONE has to clear a much higher bar than a structural signal
+# does. Measured against the 147-player field: "Xavier Quetzalcoatl" scores 0.47 on
+# letters against "Daniel Azallion", who shares not one thing with it. Two unrelated
+# golfers land in the 0.4-0.55 range routinely, so anything that shares no part of a
+# name has to look like a typo of it -- not merely have some letters in common.
+SPELLING_FLOOR = 0.75
 
 
 def _score_suggestion(query, candidate):
@@ -642,7 +649,12 @@ def _score_suggestion(query, candidate):
     shared = sorted(set(qp) & set(cp))
     if shared:
         return round(max(0.50, ratio), 3), "shares " + ", ".join(shared)
-    return round(ratio, 3), "similar spelling"
+    if ratio >= SPELLING_FLOOR:
+        return round(ratio, 3), "similar spelling"
+    # Nothing in common and it does not even look like a typo. Scoring it zero is how a
+    # golfer who is simply not in this field comes back with an EMPTY suggestion list,
+    # which is the clearest thing the review file can say about them.
+    return 0.0, "nothing in common"
 
 
 def suggest_matches(name, candidates, limit=3, floor=SUGGESTION_FLOOR):

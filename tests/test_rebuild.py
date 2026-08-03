@@ -7,8 +7,9 @@ the market, the price mode, the hand-picked exclusions and the seed straight bac
 
 What these tests are really holding shut is the thing a rebuild must never do. People
 have already been told which golfers they own. A rebuild refreshes what the world did
--- the ESPN join above all, which a Wednesday build cannot finish -- and leaves the
-draw exactly where it was. Re-dealing is `--regroup`, it is opt-in, and it says so.
+-- the ESPN join above all, which is the entire difference between the groups sheet
+drawn on Wednesday and the scoreboard built on Thursday -- and leaves the draw exactly
+where it was. Re-dealing is `--regroup`, it is opt-in, and it says so.
 """
 
 import json
@@ -17,6 +18,7 @@ import pytest
 
 import build_competition as bc
 import espn_leaderboard as espn
+import match_review
 from test_build_competition import make_result
 
 
@@ -24,10 +26,10 @@ from test_build_competition import make_result
 # Fixtures: a built competition, and an ESPN that answers without a network
 # ---------------------------------------------------------------------------
 
-# make_result() labels its synthetic field "Golfer 00".. "Golfer 39", which normalises
-# to one token for all of them -- every name identical, every tier-2 key absent. That is
-# fine for arithmetic and useless for a name join, so the field is relabelled with names
-# shaped like the real thing: two words, distinct first initials within a surname.
+# make_result() labels its synthetic field "Golfer Zero".."Golfer Thirty Nine", which is
+# distinct enough to match but shares a first token with all of it. A real field does
+# not, so the field is relabelled with names shaped like the real thing: two words, with
+# distinct first initials inside any one surname.
 FIRST = ["Adam", "Ben", "Cal", "Dan", "Eli", "Fin", "Gus", "Hal", "Ian", "Jon", "Kit", "Lee",
          "Max", "Ned", "Otto", "Pat", "Quin", "Rob", "Sam", "Tom", "Uri", "Vic", "Walt", "Xan",
          "Yves", "Zed"]
@@ -77,8 +79,9 @@ def espn_field(monkeypatch, result_file):
     """
     ESPN with this week's field posted: every golfer in the draw is playing.
 
-    Returns the list of event ids fetched, so a test can assert that history was not
-    walked when the field could answer for everyone.
+    Returns the list of event ids fetched. Every test that uses this fixture asserts the
+    list is non-empty, because a stub that silently stops being reached does not turn the
+    suite red -- it turns it slow, and starts hammering the real ESPN API from CI.
     """
     _, result = result_file
     names = [g["name"] for g in result["golfers"]]
@@ -89,32 +92,25 @@ def espn_field(monkeypatch, result_file):
         return leaderboard(names)
 
     monkeypatch.setattr(espn, "fetch_leaderboard", fake_fetch)
-    monkeypatch.setattr(espn, "season_calendar", lambda *a, **k: [
-        {"event_id": "401811960", "name": "Rocket Classic",
-         "start": "2026-07-30T07:00Z", "end": "2026-08-02T07:00Z"}])
     return fetched
 
 
 @pytest.fixture
-def espn_pre(monkeypatch, result_file):
+def espn_no_field(monkeypatch):
     """
-    ESPN as it is the night the groups are drawn: this week's event returns nothing,
-    and last week's tournament has the whole field in it.
+    ESPN as it is the night the groups are drawn: the event exists and lists nobody.
+
+    There is nothing else to stub. A build that finds no field does not go looking
+    anywhere else -- not at last week's leaderboard, not at the season calendar. It
+    writes the groups and says so.
     """
-    _, result = result_file
-    names = [g["name"] for g in result["golfers"]]
     fetched = []
 
     def fake_fetch(event_id, league=espn.DEFAULT_LEAGUE):
         fetched.append(str(event_id))
-        if str(event_id) == "401811961":
-            return leaderboard([], state="pre")
-        return leaderboard(names, event_id="401811960")
+        return leaderboard([], state="pre")
 
     monkeypatch.setattr(espn, "fetch_leaderboard", fake_fetch)
-    monkeypatch.setattr(espn, "season_calendar", lambda *a, **k: [
-        {"event_id": "401811960", "name": "Rocket Classic",
-         "start": "2026-07-30T07:00Z", "end": "2026-08-02T07:00Z"}])
     return fetched
 
 
@@ -308,84 +304,295 @@ def test_a_league_file_for_a_different_league_is_refused(result_file, espn_field
 def test_a_rebuild_finishes_the_espn_join_the_first_build_could_not(result_file, espn_field,
                                                                     tmp_path):
     """
-    The reason to rebuild at all. A build run before the first tee time has no field to
-    join against and every golfer comes out `deferred`; the same competition rebuilt on
-    Thursday has athlete ids for all of them.
+    The reason to rebuild at all, and the whole shape of a normal week in one test.
+
+    The first build ran before the first tee time. ESPN listed nobody, so it made no
+    claim about anybody: `build_mode` is groups, `live` is null and every golfer's `espn`
+    block is null. The same competition rebuilt on Thursday has an athlete id for every
+    one of them and a `live` block telling the page where to poll.
     """
     path, before = result_file
-    assert all(g["espn"]["match"] == "deferred" for g in before["golfers"])
+    assert before["build_mode"] == "groups"
+    assert before["live"] is None
+    assert all(g["espn"] is None for g in before["golfers"])
 
     out = str(tmp_path / "after.json")
     run(["--from-result", path, "--output", out])
     after = rebuilt(out)
 
+    assert espn_field == ["401811961"], "the stub must be what answered"
+    assert after["build_mode"] == "live"
+    assert set(after["live"]) == {"espn_leaderboard_url", "espn_event_id",
+                                  "poll_interval_seconds"}
     assert all(g["espn"]["athlete_id"] for g in after["golfers"])
     assert all(g["espn"]["match"] == "exact" for g in after["golfers"])
-    assert all(g["espn"]["source"] == "field" for g in after["golfers"])
     assert all(g["espn"]["in_field"] is True for g in after["golfers"])
-    assert after["sources"]["espn"]["field_available_at_build"] is True
+    assert after["sources"]["espn"]["field_size_at_build"] == len(after["golfers"])
 
 
-def test_a_rebuild_before_the_field_exists_still_identifies_the_golfers(result_file, espn_pre,
-                                                                       tmp_path):
+def test_a_rebuild_before_the_field_exists_stays_a_groups_sheet(result_file, espn_no_field,
+                                                                tmp_path):
     """
     The Wednesday case, which is most of the life of a result file. ESPN answers with no
-    competitors, so the join falls back to the tournaments that are over -- and takes
-    identity from them and nothing else.
+    competitors, so the rebuild claims nothing about anybody and asks nowhere else.
+
+    It used to go looking through the season's finished tournaments for an athlete id.
+    That recovered an identity the page could not score with, at the cost of a join whose
+    correctness nothing could check -- so it does not, and the file says so plainly
+    instead.
     """
     path, _ = result_file
     out = str(tmp_path / "after.json")
     run(["--from-result", path, "--output", out])
     after = rebuilt(out)
 
-    assert after["sources"]["espn"]["field_available_at_build"] is False
-    assert after["sources"]["espn"]["identities_from_history"] == len(after["golfers"])
-    for g in after["golfers"]:
-        assert g["espn"]["athlete_id"] and g["espn"]["headshot"]
-        assert g["espn"]["source"] == "history"
-        assert g["espn"]["from_event"]["name"] == "Rocket Classic"
-        # Unknown, not false: this week's field has not been published.
-        assert g["espn"]["in_field"] is None
+    assert espn_no_field == ["401811961"], "one request, and no reason for a second"
+    assert after["build_mode"] == "groups"
+    assert after["live"] is None
+    assert after["sources"]["espn"]["field_size_at_build"] == 0
+    assert after["sources"]["espn"]["match_report"] is None
+    assert all(g["espn"] is None for g in after["golfers"])
 
 
-def test_history_is_not_walked_when_this_weeks_field_answers(result_file, espn_field, tmp_path):
-    path, _ = result_file
-    run(["--from-result", path, "--output", str(tmp_path / "after.json")])
-    assert espn_field == ["401811961"], "no reason to read last week's leaderboard"
-
-
-def test_history_can_be_switched_off(result_file, espn_pre, tmp_path):
-    path, _ = result_file
-    out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--no-espn-history", "--output", out])
-    assert espn_pre == ["401811961"]
-    assert all(g["espn"]["match"] == "deferred" for g in rebuilt(out)["golfers"])
-
-
-def test_a_golfer_who_withdrew_is_identified_but_marked_out_of_the_field(result_file, espn_pre,
-                                                                        monkeypatch, tmp_path):
+def test_a_golfer_missing_from_a_posted_field_is_unresolved_until_somebody_looks(
+        result_file, monkeypatch, tmp_path):
     """
-    History can hand back a withdrawn golfer's headshot; it cannot make them a starter.
-    Both facts land in the file, because the pool will ask about both.
+    Half of the fact, honestly stated. This golfer is not in the leaderboard the build
+    read -- but "not in the field" and "the join could not spell their name" are the same
+    silence, and only one of them is a withdrawal.
+
+    So the build says what it actually knows: no athlete id, `unresolved`, and `in_field`
+    None rather than False. It also writes them into the review file, because the
+    difference between the two is exactly what a review settles.
     """
     path, result = result_file
     names = [g["name"] for g in result["golfers"]]
     absent = names[0]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(names[1:], state="in"))
 
-    def fake_fetch(event_id, league=espn.DEFAULT_LEAGUE):
-        if str(event_id) == "401811961":
-            return leaderboard(names[1:], state="in")
-        return leaderboard(names, event_id="401811960")
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--output", out])
+    after = rebuilt(out)
 
-    monkeypatch.setattr(espn, "fetch_leaderboard", fake_fetch)
+    golfer = next(g for g in after["golfers"] if g["name"] == absent)
+    assert golfer["espn"]["athlete_id"] is None
+    assert golfer["espn"]["match"] == "unresolved"
+    assert golfer["espn"]["in_field"] is None, "nobody has looked yet"
+    assert after["sources"]["espn"]["match_report"]["unresolved"] == [absent]
+    assert after["sources"]["espn"]["match_report"]["absent"] == []
+
+    review = json.loads((tmp_path / "match-review.json").read_text())
+    assert [row["kalshi_name"] for row in review["pending"]] == [absent]
+
+
+def test_a_reviewed_withdrawal_stops_being_a_question(result_file, monkeypatch, tmp_path):
+    """
+    The other half. Once somebody has looked at the leaderboard and confirmed this golfer
+    is not in it, the file stops calling it unresolved -- and the next rebuild does not
+    re-ask, because the decision travels in the result file.
+
+    The golfer still scores nothing. That was already true. What changes is that the
+    build is now finished rather than merely stuck.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    absent = names[0]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(names[1:], state="in"))
+
     out = str(tmp_path / "after.json")
     run(["--from-result", path, "--output", out])
 
-    golfer = next(g for g in rebuilt(out)["golfers"] if g["name"] == absent)
-    assert golfer["espn"]["athlete_id"], "we know who they are"
-    assert golfer["espn"]["source"] == "history"
-    assert golfer["espn"]["in_field"] is False, "and we know they are not playing"
-    assert rebuilt(out)["sources"]["espn"]["match_report"]["not_in_field"] == [absent]
+    review_path = tmp_path / "match-review.json"
+    review = json.loads(review_path.read_text())
+    review["decisions"] = {absent: {"absent": True, "note": "withdrew before the first round"}}
+    review_path.write_text(json.dumps(review))
+
+    again = str(tmp_path / "again.json")
+    run(["--from-result", out, "--output", again])
+    settled = rebuilt(again)
+
+    golfer = next(g for g in settled["golfers"] if g["name"] == absent)
+    assert golfer["espn"]["match"] == "absent"
+    assert golfer["espn"]["in_field"] is False, "checked, and not playing"
+    assert settled["sources"]["espn"]["match_report"]["unresolved"] == []
+    assert settled["sources"]["espn"]["match_report"]["absent"] == [absent]
+    assert settled["sources"]["espn"]["match_decisions"] == {
+        absent: {"absent": True, "note": "withdrew before the first round"}}
+
+
+def test_a_reviewed_binding_is_applied_and_then_carried_without_re_asking(
+        result_file, monkeypatch, tmp_path):
+    """
+    The round trip that replaced the fuzzy tier. ESPN spells one golfer differently, the
+    build refuses to guess, a decision binds them by athlete id, and the decision comes
+    back out of the result file on the run after that.
+
+    The carry is the part worth holding shut. Re-asking the same question every time
+    somebody rebuilds on Friday, Saturday and Sunday is how a review step stops being
+    done at all.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    misspelled = names[0]
+    espn_names = ["Adam Ashe"] + names[1:]          # ESPN writes "Ashe", Kalshi wrote "Ash"
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(espn_names, state="in"))
+
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--output", out])
+    review_path = tmp_path / "match-review.json"
+    review = json.loads(review_path.read_text())
+    pending = next(row for row in review["pending"] if row["kalshi_name"] == misspelled)
+    assert pending["suggestions"][0]["espn_name"] == "Adam Ashe", "the answer is offered"
+
+    review["decisions"] = {misspelled: {"athlete_id": pending["suggestions"][0]["athlete_id"]}}
+    review_path.write_text(json.dumps(review))
+
+    again = str(tmp_path / "again.json")
+    run(["--from-result", out, "--output", again])
+    settled = rebuilt(again)
+    golfer = next(g for g in settled["golfers"] if g["name"] == misspelled)
+    assert golfer["espn"]["match"] == "decision"
+    assert golfer["espn"]["display_name"] == "Adam Ashe"
+    assert golfer["espn"]["in_field"] is True
+
+    # And again, with the review file deleted: the decision is in the result file now.
+    review_path.unlink()
+    third = str(tmp_path / "third.json")
+    run(["--from-result", again, "--output", third])
+    golfer = next(g for g in rebuilt(third)["golfers"] if g["name"] == misspelled)
+    assert golfer["espn"]["match"] == "decision"
+    assert golfer["espn"]["display_name"] == "Adam Ashe"
+
+
+def test_a_review_file_for_another_tournament_binds_nobody(result_file, espn_field, tmp_path):
+    """
+    Its athlete ids are ids in somebody else's field. Applying them would attach real
+    people to the wrong tournament, which is the exact failure the whole review path
+    exists to prevent -- so the file is refused whole rather than filtered.
+    """
+    path, result = result_file
+    stale = tmp_path / "match-review.json"
+    stale.write_text(json.dumps({
+        "schema": match_review.SCHEMA,
+        "espn": {"event_id": "999999", "league": "pga"},
+        "decisions": {result["golfers"][0]["name"]: {"absent": True}},
+    }))
+
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--output", out])
+    after = rebuilt(out)
+    assert after["sources"]["espn"]["match_decisions"] == {}
+    assert after["sources"]["espn"]["match_report"]["absent"] == []
+
+
+def test_an_alias_that_fired_is_recorded_so_a_rebuild_elsewhere_still_resolves_it(
+        result_file, monkeypatch, tmp_path):
+    """
+    A result file gets exported, mailed and rebuilt on a machine with no alias file. The
+    aliases that actually fired travel with it, so the same golfers resolve the same way.
+
+    Only the ones that fired. The whole alias file is repo state, not a fact about this
+    competition, and copying it in would make every result file a snapshot of somebody
+    else's data.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    espn_names = ["Adam Ashe"] + names[1:]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(espn_names, state="in"))
+
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text(json.dumps({"aliases": {names[0]: "Adam Ashe", "Nobody At All": "X"}}))
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--alias-file", str(aliases), "--output", out])
+
+    after = rebuilt(out)
+    assert after["sources"]["espn"]["aliases_applied"] == {names[0]: "Adam Ashe"}
+    golfer = next(g for g in after["golfers"] if g["name"] == names[0])
+    assert golfer["espn"]["match"] == "alias"
+
+    # Now rebuild with no alias file at all. The recorded one still answers.
+    again = str(tmp_path / "again.json")
+    run(["--from-result", out, "--alias-file", str(tmp_path / "nothing.json"),
+         "--output", again])
+    golfer = next(g for g in rebuilt(again)["golfers"] if g["name"] == names[0])
+    assert golfer["espn"]["match"] == "alias" and golfer["espn"]["display_name"] == "Adam Ashe"
+
+
+def test_a_rebuild_will_not_turn_a_scoreboard_back_into_a_groups_sheet(result_file, monkeypatch,
+                                                                       tmp_path, capsys):
+    """
+    ESPN does not withdraw a field once it has posted one, so a rebuild that finds none
+    where the last one found forty has failed to ask rather than learned something.
+
+    Writing the file anyway would null `live` and every athlete id, and the page built
+    from it would announce that a tournament halfway through its final round has not
+    started. Nothing is written and the run says why; the file that was passed in is
+    still correct, and rebuilding is cheap.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(names, state="in"))
+    live_path = str(tmp_path / "live.json")
+    run(["--from-result", path, "--output", live_path])
+    assert rebuilt(live_path)["build_mode"] == "live"
+
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard([], state="in"))
+    out = tmp_path / "downgraded.json"
+    with pytest.raises(SystemExit) as exc:
+        bc.main(["--from-result", live_path, "--output", str(out)])
+    assert "found none" in str(exc.value)
+    assert not out.exists(), "a refused rebuild must not leave a half-written file"
+
+
+def test_an_espn_outage_during_a_live_tournament_is_refused_too(result_file, monkeypatch,
+                                                                tmp_path):
+    """
+    Same rule, other cause. An exception and an empty field are the same empty list to
+    everything downstream, and neither is a reason to throw away a working scoreboard.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE:
+                        leaderboard(names, state="in"))
+    live_path = str(tmp_path / "live.json")
+    run(["--from-result", path, "--output", live_path])
+
+    def boom(event_id, league=espn.DEFAULT_LEAGUE):
+        raise RuntimeError("ESPN returned HTTP 503")
+
+    monkeypatch.setattr(espn, "fetch_leaderboard", boom)
+    with pytest.raises(SystemExit) as exc:
+        bc.main(["--from-result", live_path, "--output", str(tmp_path / "nope.json")])
+    assert "503" in str(exc.value)
+
+
+def test_the_mode_a_file_was_built_in_is_readable_without_the_key(result_file):
+    """
+    Files written before 2.0 carry no `build_mode`, and a rebuild has to know the mode to
+    refuse a downgrade. Inferring it is exact rather than a guess: those files recorded
+    the ESPN field size, and having a field is the whole of what the mode means.
+    """
+    _, result = result_file
+    assert bc.prior_build_mode(result) == "groups"
+    assert bc.prior_build_mode({"build_mode": "live"}) == "live"
+
+    legacy = {"sources": {"espn": {"field_size_at_build": 156}}}
+    assert bc.prior_build_mode(legacy) == "live"
+    assert bc.prior_build_mode({"sources": {"espn": {"field_size_at_build": 0}}}) == "groups"
+    assert bc.prior_build_mode({}) == "groups"
 
 
 # ---------------------------------------------------------------------------

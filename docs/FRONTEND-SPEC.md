@@ -41,16 +41,38 @@ other and the interesting information is the *margin*, not the standings.
 
 ## 2. Where the data comes from
 
-| | Baked in at build time | Fetched live in the browser |
+| | Baked in at build time | Fetched in the browser |
 |---|---|---|
 | Teams, logos, rosters | ✅ | — |
 | Odds when the groups were drawn | ✅ | — |
 | Odds re-read at a later rebuild | ✅ when present — see §4 | — |
 | Which endpoints produced the numbers | ✅ | — |
 | Grouping quality certificate | ✅ | — |
-| Live scores and positions | — | ✅ ESPN |
+| Golfer → ESPN athlete id | ✅ — see §8 | — |
+| Scores and positions | — | ✅ ESPN |
 
 **ESPN is the only row on the right, and that is the whole of the page's network.**
+
+### `build_mode` — read it before anything else
+
+ESPN publishes zero competitors until the first tee time, so half the pages this spec
+describes are built before there is anything to score. That is not a degraded state to
+design around; it is a different document, and `DATA.build_mode` says which one you
+have:
+
+| `build_mode` | `DATA.live` | `golfers[].espn` | What the page does |
+|---|---|---|---|
+| `"groups"` | `null` | `null` on every golfer | renders rosters and odds, requests nothing from anywhere, ranks nothing |
+| `"live"` | an object (§7) | an object per golfer, carrying an ESPN athlete id when the build resolved one | polls ESPN, joins on that id, ranks |
+
+Branch on `DATA.live` once, at the top, exactly as the reference does
+(`var LIVE = DATA.live || null`). A `groups` page that starts a poll loop is asking a
+question whose answer it could not use, and one that renders a spinner is apologising
+for a fetch that was never going to happen.
+
+*A note on the word.* Three unrelated things in this project are called "live": that
+`build_mode` value, the `live` block in the result JSON, and the test suites that hit
+the real APIs. This document always says which one it means.
 
 Everything baked in is one JSON object embedded in the page:
 
@@ -68,7 +90,10 @@ it belongs in the file, not in the page.
 
 ---
 
-## 3. ESPN — the live leaderboard
+## 3. ESPN — the leaderboard
+
+Everything in this section is about a `live`-mode page. A `groups`-mode page has
+`DATA.live === null` and makes no request at all (§2).
 
 ```
 https://site.web.api.espn.com/apis/site/v2/sports/golf/leaderboard?league=pga&event=<id>
@@ -78,10 +103,11 @@ Unauthenticated. Sends `access-control-allow-origin: *`. Fetch it directly from 
 browser; it works from `file://`. Poll it on `DATA.live.poll_interval_seconds`
 (default 60).
 
-**Always pass the pinned `event` id** from `DATA.sources.espn.event_id`. Without it
-the endpoint answers about whatever ESPN thinks is current, which next Thursday is a
-different tournament. **Verify the id in the response** and refuse a payload that does
-not match — scoring a league against the wrong tournament looks entirely normal until
+**Use the URL the file gives you**, `DATA.live.espn_leaderboard_url` — the pinned
+`event` id is already in it. Without that id the endpoint answers about whatever ESPN
+thinks is current, which next Thursday is a different tournament. **Verify the id in
+the response** against `DATA.live.espn_event_id` and refuse a payload that does not
+match — scoring a league against the wrong tournament looks entirely normal until
 someone notices the names.
 
 ### The four things in this payload that are not what they look like
@@ -111,25 +137,29 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 
 | State | What ESPN returns | What the page shows |
 |---|---|---|
-| Before the tournament | `state: "pre"`, **zero competitors** | every roster, with odds at creation; "not started"; **no positions and no ranking** |
-| In progress | `state: "in"`, positions live | the full board |
+| Built before the field posted | nothing — a `groups` page never asks | every roster, with odds at creation; "not started"; **no positions and no ranking** |
+| Not started yet | `state: "pre"`, **zero competitors** | the same: rosters and odds, **nothing ranked** |
+| In progress | `state: "in"`, positions moving | the full board |
 | After the cut | 74 of 147 have position `"-"` | cut golfers visibly out, still listed |
 | Withdrawn / DQ | `status.type` `STATUS_WD`/`STATUS_DQ`, no position | same treatment as cut, labelled |
 | Finished | `state: "post"`, `completed: true` | final, stop implying it will change |
 | ESPN unreachable | — | last-known board, plus a visible staleness marker |
 
-The pre-tournament case is not an edge case. Groups are drawn Wednesday night and the
-page exists from that moment; for its first ~12 hours ESPN publishes **no field at
-all**. It must be a designed state, not an empty div.
+### Never rank an empty board
 
-Everything the pool cares about at that point is already decided and already in the
-file: who holds whom, what each golfer was worth, and that the draw came out even. Show
-all of it. What must **not** appear is a ranking — running the standings rule over an
-empty leaderboard puts every golfer in tier 2, which orders the teams by roster size and
-presents it as a leaderboard. Positions read `—` until there are positions. The same
-applies whenever the board is empty for any other reason: ESPN unreachable, or a payload
-for the wrong tournament (§3). The rosters and the odds stay; the positions do not
-appear.
+This guard has nothing to do with the name join and survives every change to it. Since
+2.0 the Wednesday-night page is a `groups` page that does not fetch, so the *first* row
+above is settled at build time — but a `live` page can be handed an empty board any
+afternoon of the week: ESPN unreachable, a payload refused for the wrong event (§3), a
+fetch that fails on a train, a first poll that has not returned yet. All of those arrive
+as zero competitors, and one of them is not rare.
+
+Everything the pool cares about is already in the file regardless: who holds whom, what
+each golfer was worth, and that the draw came out even. Show all of it. What must
+**not** appear is a ranking — running the standings rule over an empty leaderboard puts
+every golfer in tier 2 (§6), which orders the teams by roster size and presents it as a
+leaderboard. Positions read `—` until there are positions. The rosters and the odds
+stay, because they are baked in and nothing the network did can affect them.
 
 ---
 
@@ -224,8 +254,15 @@ position · name · score to par · thru · what they were worth at creation · 
 since the draw, on a rebuilt page — §4)
 
 Sorted by the rank key (§6), so the golfer carrying the team is always first. Cut,
-withdrawn and absent golfers stay listed — a team's roster does not shrink — but must
-be visibly out of it.
+withdrawn and unscoreable golfers stay listed — a team's roster does not shrink — but
+must be visibly out of it. On a `groups` page nobody is out of anything yet, so the
+"out" treatment belongs on the board existing, not on the golfer having no score.
+
+`golfers[].espn.match` distinguishes the two ways a golfer can have no leaderboard row
+at all: `"absent"` means somebody checked this week's field and confirmed the golfer is
+not in it, `"unresolved"` means nobody has looked yet (§8). Both score nothing, so the
+standings do not care; a page that shows the difference is telling the pool whether the
+gap is a withdrawal or a build somebody still has to finish.
 
 ### 5.3 The odds panel
 
@@ -267,7 +304,7 @@ A golfer's rank is a **pair**, never a number:
 |---|---|---|
 | `0` | still in the tournament | the displayed position number (`T12` → `12`) |
 | `1` | cut / withdrawn / disqualified | `sortOrder` |
-| `2` | priced by Kalshi, never in the ESPN field | `0` |
+| `2` | no ESPN athlete on this golfer — confirmed absent from the field, or not yet reviewed | `0` |
 | `3` | *padding* — this team has no golfer this deep | `0` |
 
 Compare pairs left to right.
@@ -276,9 +313,16 @@ Tier 0 uses the **displayed** position, which tied golfers share — that sharin
 what makes the tie-break fire at all. Tier 1 falls back to `sortOrder` because ESPN
 publishes no position for a cut player (all 74 read `"-"`) while `sortOrder` still
 ranks them sensibly among themselves and below everyone who made the cut. Tier 2 is a
-golfer who never teed off; 4 of 151 in a measured field. They rank below every golfer
-who is in the tournament but still ahead of holding nothing, because a team that
-drafted 12 golfers has drafted 12 golfers.
+golfer with no row on the leaderboard to read: either they are not in the field, or the
+build could not settle their name and said so (§8). Measured on the Rocket Classic,
+that was 12 of 151 before review and 4 of 151 after it — the difference is the whole
+point of §8, and neither number changes the rule. Tier 2 ranks below every golfer who
+is in the tournament but still ahead of holding nothing, because a team that drafted 12
+golfers has drafted 12 golfers.
+
+`standings_rules.golfer_rank_tiers` in the result file says the same thing in one line
+each, so a page can show the rule it is running rather than restating it in its own
+words and drifting.
 
 Do **not** collapse the tiers into one number. A cut golfer is not "position 74"; if
 they were, a team of cut golfers could outrank a team holding someone in contention.
@@ -323,19 +367,44 @@ Abridged; every field is present in a real file. Run
 `python build_competition.py --league leagues/example-league.json --tournament wyndham`
 for a complete one.
 
+The example below is a `live`-mode file, because that is the one with everything in it.
+**Three of these blocks are `null` in `groups` mode** — `live`, `golfers[].espn` and
+`sources.espn.match_report` — and null rather than empty on purpose: an empty object
+reads as a join that was attempted and came back with nothing, which is a different and
+much worse fact than no join having been possible. See §2.
+
 ```jsonc
 {
-  "schema_version": "1.2",   // 1.2 dropped live.kalshi_markets_url and
-                             // live.kalshi_proxy_url_template. See §4.
+  "schema_version": "2.0",   // 2.0 split the file in two along `build_mode`, and the
+                             // halves are not the same document. It also dropped
+                             // live.name_match, golfers[].espn.source / .from_event,
+                             // sources.espn.identities_from_history and
+                             // .field_available_at_build: nothing matches names at
+                             // runtime any more, and no identity comes from a
+                             // tournament that is already over. See §8.
+                             // (1.2 had dropped live.kalshi_markets_url and
+                             // live.kalshi_proxy_url_template. See §4.)
+
+  // "groups" or "live", and a fact about the ESPN leaderboard at build time rather
+  // than a setting somebody chose. READ THIS FIRST: it says whether the rest of the
+  // file describes a draw or a scoreboard.
+  "build_mode": "live",
+
   "competition_id": "uuid5, stable for this league+event+market",
   "generated_at": "2026-08-03T20:41:00+00:00",
-  "generator": { "tool": "...", "git_commit": "e581c23", "seed": 42 },
+  // poll_interval_seconds lives here as well as under `live`, because it is an input
+  // somebody typed: a groups build has no `live` block to keep it in, and it has to
+  // survive the rebuild that turns that groups sheet into a scoreboard.
+  "generator": { "tool": "...", "git_commit": "e581c23", "seed": 42,
+                 "poll_interval_seconds": 60 },
 
   // null on a first build. On a rebuild (--from-result), what it was rebuilt from and
   // how: mode is "refresh" | "refresh-odds" | "regroup". A file carrying Wednesday's
-  // odds and Sunday's leaderboard says so here.
+  // odds and Sunday's leaderboard says so here — and a groups sheet rebuilt into a
+  // scoreboard is exactly that file.
   "rebuilt_from": { "source_file": "build/result.json", "mode": "refresh",
-                    "source_generated_at": "…", "first_built_at": "…", "rebuild_count": 2 },
+                    "source_generated_at": "…", "source_schema_version": "2.0",
+                    "first_built_at": "…", "rebuild_count": 2 },
 
   "league":   { "league_id": "uuid", "league_name": "Sunday Fivesome",
                 "league_slug": "sunday-fivesome", "team_count": 5 },
@@ -365,14 +434,21 @@ for a complete one.
                                  // null unless the build re-read it (--refresh-odds).
                                  // Never feeds the grouping. Compare against `raw`.
     },
-    "espn": {                    // athlete_id may be null; see §8
+    // NULL on every golfer in groups mode — there was no field, so there is nothing
+    // to say. In live mode, every golfer has this block and athlete_id may still be
+    // null; see §8.
+    "espn": {
       "athlete_id": "4425906", "display_name": "Cameron Young",
       "headshot": "https://a.espncdn.com/…", "country": "USA",
-      "match": "exact | initial_last | alias | unresolved | deferred",
-      "source": "field | history | null",   // where the identity came from
-      "from_event": { "event_id": "401811960", "name": "Rocket Classic", "end": "…" },
-      "in_field": true           // in THIS week's ESPN field. null while it is
-                                 // unpublished — unknown is not the same as no.
+      // How this golfer was settled. The first three are matches, in the order the
+      // tiers are tried; the last two both mean "no athlete" and are not the same
+      // claim. "absent": somebody looked at this week's field and confirmed he is not
+      // in it. "unresolved": nobody has looked.
+      "match": "decision | alias | exact | absent | unresolved",
+      // In THIS week's ESPN field. Three states, on purpose: true, false (checked, and
+      // he is not), null (not checked). Folding null into false would report a
+      // withdrawal the build has no evidence for.
+      "in_field": true
     }
   }],
 
@@ -388,15 +464,28 @@ for a complete one.
                 // false, always. The page never requests this endpoint; it is here so a
                 // reader can check the numbers server-side.
                 "browser_reachable": false, "browser_note": "…403…" },
-    "espn":   { "event_id": "401811961", "leaderboard_endpoint": "https://…",
-                "browser_reachable": true,
-                "field_available_at_build": false,
-                "identities_from_history": 146,        // see §8
-                "match_report": { "matched": 146, "requested": 150,
-                                  "from_field": 0, "from_history": 146,
-                                  "not_in_field": [], "unresolved": [ … ],
-                                  "history": { "scanned": [ … ], "athletes": 358,
-                                               "unscanned_events": 30 } } }
+    "espn":   { "league": "pga", "event_id": "401811961",
+                "leaderboard_endpoint": "https://…", "scoreboard_endpoint": "https://…",
+                "browser_reachable": true, "browser_note": "…allow-origin: *…",
+                // 0 in groups mode, and the reason it is a groups build.
+                "field_size_at_build": 147,
+                // NULL in groups mode: there was no join, so there is no report on one.
+                // `matched` can legitimately be lower than `requested` — see §8.
+                "match_report": { "espn_field_size": 147, "requested": 151,
+                                  "matched": 139, "matched_decision": 0,
+                                  "matched_alias": 0, "matched_exact": 139,
+                                  "absent": [ … ],       // reviewed and confirmed out
+                                  "unresolved": [ … ],   // nobody has looked yet
+                                  // normalised full names two athletes in THIS field
+                                  // share; refused rather than guessed
+                                  "ambiguous_names": [],
+                                  "problems": [ … ] },   // sentences, worth surfacing
+                // The reviewed decisions this build applied, keyed by Kalshi name, so
+                // the next rebuild does not re-ask a question somebody answered.
+                "match_decisions": { "Jason Day": { "absent": true } },
+                // The aliases that actually fired — not the whole alias file, which is
+                // repo state rather than a fact about this competition.
+                "aliases_applied": { "Zachary Bauchou": "Zach Bauchou" } }
   },
 
   "odds_snapshot": {
@@ -424,80 +513,126 @@ for a complete one.
     "summary": "Delta 0.000858 (1 tick, 0.09% of the field) -- PROVEN OPTIMAL: …"
   },
 
-  // What the page does while it is open. One endpoint, on a timer, and the name join
-  // it needs to read the answer. There is no odds endpoint here — see §4.
+  // What the page does while it is open: one endpoint, on a timer. There is no odds
+  // endpoint here — see §4 — and no name-matching block either, in either mode: the
+  // build has already written an ESPN athlete id onto every golfer it resolved, and
+  // the page joins on that. See §8.
+  //
+  // NULL in groups mode, and that is the whole instruction: fetch nothing, poll
+  // nothing, rank nothing. `espn_event_id` is the id to check an arriving payload
+  // against (§3).
   "live": {
     "espn_leaderboard_url": "https://…&event=401811961",
-    "poll_interval_seconds": 60,
-    "name_match": { "strategy": ["alias", "normalized_exact", "first_initial_and_last_name"],
-                    "normalization": "…", "aliases": { "Zachary Bauchou": "Zach Bauchou" } }
+    "espn_event_id": "401811961",
+    "poll_interval_seconds": 60
   },
 
-  "standings_rules": { "golfer_rank_tiers": { "0": "…", "1": "…", "2": "…", "3": "…" },
-                       "comparison": "lexicographic …" }
+  // The rule this file expects to be ranked by, in the file, so a page can show it.
+  // Tier 2 is "no ESPN athlete on this golfer: either confirmed absent from the field,
+  // or not yet reviewed. Scores nothing either way." See §6.
+  "standings_rules": { "description": "…",
+                       "golfer_rank_tiers": { "0": "…", "1": "…", "2": "…", "3": "…" },
+                       "comparison": "lexicographic …", "unresolved": "…" }
 }
 ```
 
-Typical size: ~100 KB for a 150-golfer field with five inlined SVG logos.
+Typical size: ~100 KB for a 150-golfer field with five inlined SVG logos. A `groups`
+file is a little smaller: three of its blocks are the word `null`.
 
 ---
 
 ## 8. Matching golfers to the leaderboard
 
 Kalshi and ESPN publish the same golfers under different names, and Kalshi's stable
-golfer UUID is not an ESPN id. The join is by name, and **the page has to be able to do
-it** — a build run on Wednesday night has no ESPN field to join against, so
-`golfers[].espn.athlete_id` is frequently null.
+golfer UUID is not an ESPN id, so the two fields have to be joined by name somewhere.
 
-Three tiers, in order. `lib.js` implements all of them:
+**That somewhere is the build, and it is not the page.** A `live` build joins the Kalshi
+names against the competitors ESPN published for this tournament and bakes the winning
+`athlete_id` onto each golfer. At runtime the join is therefore a `Map` lookup on that
+id:
 
-1. **Alias** — `DATA.live.name_match.aliases`, a hand-maintained override. Always wins.
-2. **Normalised exact** — NFKD, drop combining marks, transliterate the letters NFKD
-   leaves alone (`ø→o`, `æ→ae`, `å→a`, `ł→l`, `ß→ss`), lowercase, hyphens and
-   apostrophes to spaces, drop `jr/sr/ii/iii/iv/v`, drop non-letters, join runs of
-   consecutive single letters (`C.T. Pan` ≡ `CT Pan`), collapse whitespace.
-3. **First initial + last name** — resolves every formal-vs-familiar first name a golf
-   field throws up.
+```js
+var byId = GolfPool.indexByAthleteId(parsed.players);   // athlete id -> ESPN player
+var player = GolfPool.resolveGolfer(golfer, byId);      // -> player | null
+```
 
-Measured on a real field, 151 Kalshi names against 147 ESPN competitors:
+`null` is a real answer and means "no leaderboard row to read": either the golfer is not
+in the field, or the build could not settle their name. Both are tier 2 (§6) and both
+are stated in the file — `golfers[].espn.match` and `.in_field`.
 
-| tier | resolved |
+There is no name matching in `lib.js` any more. It used to carry a transliteration
+table, a normaliser and a first-initial fallback mirrored character for character
+against the Python, because a page built before the field existed had to finish the join
+in the browser against a leaderboard the build had never seen. No page is built that way
+now (§2), so the second copy of a subtle string algorithm is gone rather than
+maintained, and a lookup on an integer cannot pick the wrong Smith.
+
+### The three build-time tiers, and why there is no fourth
+
+All three are exact or explicit. Tried in this order:
+
+1. **`decision`** — a binding somebody reviewed and recorded for this competition, or a
+   note that the golfer is genuinely not in the field. Always wins; somebody looked.
+2. **`alias`** — an explicit Kalshi-name → ESPN-display-name entry from the alias file,
+   reusable every week and learned from decisions.
+3. **`exact`** — the two normalised display names are equal. Normalisation is NFKD, drop
+   combining marks, transliterate the letters NFKD leaves alone (`ø→o`, `æ→ae`, `å→a`,
+   `ł→l`, `ß→ss`), lowercase, hyphens and apostrophes to spaces, drop
+   `jr/sr/ii/iii/iv/v`, drop non-letters, join runs of consecutive single letters
+   (`C.T. Pan` ≡ `CT Pan`), collapse whitespace.
+
+Measured on the Rocket Classic, 151 Kalshi names against 147 ESPN competitors:
+
+| outcome | count |
 |---|---|
-| normalised exact | 139 |
-| first initial + last | 8 — Zachary/Zach Bauchou, Cameron/Cam Davis, Kris/Kristoffer Ventura, Nicolas/Nico Echavarria, Matthew/Matt McCarty, Benjamin/Ben James, Jordan L./Jordan Smith, Hao-Tong/Haotong Li |
-| unresolved | 4 — all genuinely absent from the field (withdrew before play) |
+| `exact` | 139 |
+| left for review | 12 — of which **8** are formal-vs-familiar first names: Zachary/Zach Bauchou, Cameron/Cam Davis, Kris/Kristoffer Ventura, Nicolas/Nico Echavarria, Matthew/Matt McCarty, Benjamin/Ben James, Jordan L./Jordan Smith, Hao-Tong/Haotong Li |
+| genuinely absent | 4 — Daniel Brown, Taylor Moore, Brooks Koepka, Jason Day, all withdrawn before play |
 
-Collisions inside the ESPN field for tier 2: **zero**. When a key *is* ambiguous it is
-dropped rather than guessed, and the golfer falls through to unresolved — which is
-tier 2 of the rank key, and a legitimate display state ("not in the field").
+A first-initial-plus-last-name rule binds those eight correctly, and it was measured
+collision-free inside that 147-player field. It used to be tier 4. It is not any more,
+because "no collisions in one field" is exactly the measurement that cannot be
+extrapolated: the week a field holds two J. Smiths, or a Cameron and a Carson Young, it
+binds one of them to the wrong person, and nothing downstream — not the page, not the
+standings, not the reader — can tell that case from the other 150. So the rule survives
+as a **suggestion generator** and never as a match. An unresolved name comes back with
+ranked candidates and the reason for each, a person settles it, and the settlement is
+written down where it can be read before it takes effect.
 
-### Identity before the tournament starts
+### Two refusals, and why `matched` can be lower than `requested`
 
-The build does not have to leave `athlete_id` null just because this week's field is
-empty. Those golfers played last week, so the build walks back through the season's
-finished tournaments and matches against the union of their fields — the same three
-tiers, over a wider set of athletes. Measured on the 2026 Wyndham with nothing
-published: **146 of 150** identified from four earlier leaderboards, in 3.5 seconds.
+Both are in `sources.espn.match_report`, and neither is a failure:
 
-Two things follow, and the page depends on both:
+- **Two Kalshi names resolving to one athlete.** One ESPN athlete cannot be on two
+  teams, so the second name is left unresolved and `problems` says who already holds
+  them. Reviewed decisions are applied in a first pass, so which name counts as "second"
+  never depends on how Kalshi happened to sort its markets.
+- **One normalised name shared by two athletes in the same field.** It is dropped from
+  the index, listed in `ambiguous_names`, and *both* golfers come back unresolved. Zero
+  such names in the measured field; the day there is one, a coin flip is the wrong way
+  to decide which of two people is on somebody's team.
 
-1. **What comes back is identity, never scoring.** An athlete id, a display name, a
-   headshot, a country. Position, `sortOrder` and to-par describe a tournament that is
-   over, and the standings rule ranks on exactly those fields — a golfer who won in July
-   would show T1 on Thursday morning. `golfers[].espn.source` says `"history"` when this
-   is where the identity came from, and `from_event` names the tournament.
+### `absent` and `unresolved` are different, and the page should know it
 
-2. **A baked `athlete_id` is a better runtime key than a name.** `lib.js` tries it first,
-   so a pre-tournament build now hands the page an exact join instead of re-deriving one
-   by name every poll. A golfer who does not tee off simply fails that lookup and falls
-   through the name tiers to unresolved, which is correct.
+Both score nothing. Only one of them is a fact:
 
-Tier 2 needs one extra guard over a season's worth of athletes: a first-initial key that
-is unique inside one field need not be unique across five hundred golfers. The union
-index drops any key two athletes share, and the scan keeps widening the union while any
-match still rests on tier 2 — so an ambiguous name comes back unresolved rather than
-bound to the wrong person. Measured four tournaments back from the 2026 Wyndham: one
-refused key, `c|young`, holding both Cameron Young and Carson Young.
+| `match` | `in_field` | Means |
+|---|---|---|
+| `"absent"` | `false` | somebody checked this week's field and confirmed the golfer is not in it |
+| `"unresolved"` | `null` | nobody has looked yet |
+
+An unresolved golfer is the build saying it does not know, out loud, by name. The
+`unresolved` list in `match_report` is that list, and the build also writes it to a
+`match-review.json` beside the result file with the unclaimed ESPN athletes and ranked
+suggestions, for somebody to settle and rebuild from.
+
+**A golfer left unresolved at build time is unscoreable for the life of that page.**
+They carry no `athlete_id`, so there is nothing for `resolveGolfer` to look up, and
+polling harder will not help: every poll re-reads the same leaderboard and finds the
+same nothing. **The fix is a rebuild, not a refresh** — and there is no way for a page
+to do it. That makes the review step load-bearing for correctness rather than tidiness,
+and it makes `match_report.unresolved` worth surfacing somewhere quiet on the page: it
+is the one defect in a scoreboard that the scoreboard cannot recover from on its own.
 
 ---
 
