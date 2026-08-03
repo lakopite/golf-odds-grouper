@@ -13,15 +13,9 @@ import os
 import random
 import time
 
+import groupers
 import kalshi_odds
-from groupers import (
-    calculate_total_odds,
-    backtracking_generate_groups,
-    dp_generate_groups,
-    sa_generate_groups,
-    ga_generate_groups,
-    greedy_redistribute_groups,
-)
+from groupers import calculate_total_odds, partition
 
 # ---------------------------------------------------------------------------
 # Configuration. These are the defaults; every one has a CLI flag.
@@ -409,14 +403,6 @@ def validate_groups(groups, golfers):
     return valid_groups
 
 
-# Function to print results
-def print_results(method_name, assigned_groups, group_totals):
-    print(f"\n{method_name} Results: {max([v for v in group_totals.values()]) - min([v for v in group_totals.values()])} delta")
-    for name, group in assigned_groups.items():
-        print(f"{name}'s group: {[golfer['golfer_name'] for golfer in group]}, Total Odds: {group_totals[name]}")
-    print(json.dumps(assigned_groups, indent=2))
-
-
 def percentage_difference(value1, value2):
     """Calculate the percentage difference between two decimal values."""
     try:
@@ -428,66 +414,70 @@ def percentage_difference(value1, value2):
         return float('inf')
 
 
-def confirm_group(method_name, assigned_groups, group_totals, golfers, output_dir=OUTPUT_DIR):
-    # print_results(method_name, assigned_groups, group_totals)
+def describe_partition(report):
+    """
+    One line on how good the partition is, and -- when it is not perfect -- why.
+
+    The distinction the old output could not draw: "we ran five methods and this one won"
+    says nothing about whether the answer is good. This says whether it is the best that
+    exists, and when it is not, it names the golfer standing in the way rather than
+    leaving a number to be squinted at.
+    """
+    delta_pct = report["delta"] * 100
+    head = (f"Delta {report['delta']:.6f} ({report['delta_ticks']} tick"
+            f"{'' if report['delta_ticks'] == 1 else 's'}, {delta_pct:.2f}% of the field)")
+
+    if report["optimal"]:
+        return head + " -- PROVEN OPTIMAL: no partition of this field does better."
+    if not report["exact_grid"]:
+        return head + (" -- these odds are not on a price grid, so optimality cannot be "
+                       "certified. The partition is still the best this search found.")
+    return head + (f" -- best found; the proven floor is {report['floor_ticks']} ticks.")
+
+
+def describe_dominant(report, n_groups):
+    """
+    The golfers who put a floor under the delta, and what to do about them.
+
+    A golfer worth more than a group's fair share cannot be balanced around: their group
+    is heavy whatever happens elsewhere. On the live 143-golfer field this bites from 13
+    groups upward, and by 25 groups it forces a delta of 48 ticks -- 4% of the field --
+    that no algorithm can improve. Searching harder is the wrong response. Excluding them
+    is the right one, and it is what --auto-exclude already does.
+    """
+    if not report["dominant_golfers"]:
+        return []
+    lines = [
+        f"!! {len(report['dominant_golfers'])} golfer(s) are worth more than a group's "
+        f"fair share (1/{n_groups} of the field). No partition can balance around them:"
+    ]
+    for g in report["dominant_golfers"]:
+        lines.append(f"     {g['golfer_name']}: {g['fair_shares']:.2f} fair shares")
+    lines.append(f"   This is why the delta cannot go below {report['floor_ticks']} ticks. "
+                 "Re-run with --auto-exclude to drop them.")
+    return lines
+
+
+def confirm_group(assigned_groups, group_totals, golfers, report, output_dir=OUTPUT_DIR):
+    totals = list(group_totals.values())
     group_info = {
-        "method": method_name,
+        "method": "Differencing + local search",
         "groups": assigned_groups,
         "totals": group_totals,
         "valid": validate_groups(assigned_groups, golfers),
-        "delta": max([v for v in group_totals.values()]) - min([v for v in group_totals.values()]),
-        "delta_percentage": percentage_difference(max([v for v in group_totals.values()]), min([v for v in group_totals.values()]))
+        "delta": max(totals) - min(totals),
+        "delta_percentage": percentage_difference(max(totals), min(totals)),
+        "delta_ticks": report["delta_ticks"],
+        "floor_ticks": report["floor_ticks"],
+        "optimal": report["optimal"],
+        "dominant_golfers": report["dominant_golfers"],
     }
     os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, f'{method_name}.json'), 'w') as f:
+    with open(os.path.join(output_dir, 'GROUPING.json'), 'w') as f:
         json.dump(group_info, f, indent=4)
     if group_info['valid']:
         return group_info
     return None
-
-
-METHODS = ("backtracking", "dp", "sa", "ga", "greedy")
-
-METHOD_LABELS = {
-    "backtracking": "Backtracking",
-    "dp": "Dynamic Programming",
-    "sa": "Simulated Annealing",
-    "ga": "Genetic Algorithm",
-    "greedy": "Greedy Algorithm",
-}
-
-
-def run_methods(golfers, n_groups, methods=METHODS, sa_iter=100000, ga_pop=500,
-                ga_generations=10000, ga_mutation=0.1):
-    """
-    Run each requested partitioner and return {label: groups}.
-
-    Every method needs at least n_groups golfers. dp_generate_groups in particular
-    does not merely return a bad answer on a short field -- its reconstruction loop
-    never terminates. main() checks the field size after exclusions for that reason.
-    """
-    if len(golfers) < n_groups:
-        raise ValueError(f"{len(golfers)} golfers cannot fill {n_groups} groups")
-    out = {}
-    for m in methods:
-        # Each method gets its own list: greedy_redistribute_groups sorts in place,
-        # so sharing one would make a run depend on the order the methods were asked for.
-        field = list(golfers)
-        if m == "backtracking":
-            out[METHOD_LABELS[m]] = backtracking_generate_groups(field, n_groups)
-        elif m == "dp":
-            out[METHOD_LABELS[m]] = dp_generate_groups(field, n_groups)
-        elif m == "sa":
-            out[METHOD_LABELS[m]] = sa_generate_groups(field, n_groups, max_iter=sa_iter)
-        elif m == "ga":
-            out[METHOD_LABELS[m]] = ga_generate_groups(
-                field, n_groups, pop_size=ga_pop, generations=ga_generations, mutation_rate=ga_mutation
-            )
-        elif m == "greedy":
-            out[METHOD_LABELS[m]] = greedy_redistribute_groups(field, n_groups)
-        else:
-            raise ValueError(f"unknown method: {m}")
-    return out
 
 
 def load_odds(args):
@@ -559,13 +549,12 @@ def build_parser():
     ap.add_argument("--no-exclude", action="store_true", help="exclude nobody")
     ap.add_argument("--auto-exclude", action="store_true",
                     help="also exclude every golfer whose de-vigged probability exceeds 1/participants")
-    ap.add_argument("--methods", default=",".join(METHODS),
-                    help=f"comma-separated subset of {','.join(METHODS)}")
-    ap.add_argument("--sa-iter", type=int, default=100000)
-    ap.add_argument("--ga-pop", type=int, default=500)
-    ap.add_argument("--ga-generations", type=int, default=10000)
-    ap.add_argument("--ga-mutation", type=float, default=0.1)
-    ap.add_argument("--seed", type=int, help="seed the RNG so a run is reproducible")
+    ap.add_argument("--time-limit", type=float, default=groupers.DEFAULT_TIME_LIMIT,
+                    help="seconds to keep improving the partition. Only ever spent when "
+                         "the proven floor is out of reach (default "
+                         f"{groupers.DEFAULT_TIME_LIMIT})")
+    ap.add_argument("--seed", type=int,
+                    help="seed the RNG so the deal of groups to participants is reproducible")
     return ap
 
 
@@ -573,11 +562,6 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.seed is not None:
         random.seed(args.seed)
-
-    methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    unknown = [m for m in methods if m not in METHODS]
-    if unknown:
-        raise SystemExit(f"unknown method(s) {unknown}; choose from {list(METHODS)}")
 
     start_time = time.time()
 
@@ -627,7 +611,6 @@ def main(argv=None):
 
     # Re-check AFTER exclusions. The check above ran on the full field, and an
     # exclusion list -- named or automatic -- can drop it below the group count.
-    # dp_generate_groups does not fail gracefully on a short field; it hangs.
     if len(golfers) < n_groups:
         raise SystemExit(
             f"only {len(golfers)} golfers left after excluding {len(exclude_list)}, "
@@ -636,31 +619,19 @@ def main(argv=None):
 
     print(f"Grouping {len(golfers)} golfers into {n_groups} groups...")
 
-    groups_by_method = run_methods(
-        golfers, n_groups, methods=methods, sa_iter=args.sa_iter, ga_pop=args.ga_pop,
-        ga_generations=args.ga_generations, ga_mutation=args.ga_mutation,
-    )
-
-    result = {}
-    for label, groups in groups_by_method.items():
-        assigned = {name: group for name, group in zip(participant_names, groups)}
-        totals = {name: calculate_total_odds(group) for name, group in assigned.items()}
-        result[label] = confirm_group(label, assigned, totals, golfers, output_dir=args.output_dir)
-
-    best_groups = None
-    for k, v in result.items():
-        if v is not None:
-            if best_groups is None:
-                best_groups = v
-            elif v.get('delta_percentage') < best_groups.get('delta_percentage'):
-                best_groups = v
+    groups, report = partition(golfers, n_groups, time_limit=args.time_limit)
+    assigned = {name: g for name, g in zip(participant_names, groups)}
+    totals = {name: calculate_total_odds(g) for name, g in assigned.items()}
+    best_groups = confirm_group(assigned, totals, golfers, report, output_dir=args.output_dir)
 
     if best_groups is None:
         print("NO VALID GROUPS FOUND")
         return 1
 
     print(f"Odds source was {source}...")
-    print(f"Best Grouping Method was {best_groups.get('method')} with a delta percentage of {best_groups.get('delta_percentage')}%")
+    print(describe_partition(report))
+    for line in describe_dominant(report, n_groups):
+        print(line)
     print("Assigning names to group...")
     # Shuffle participant names and assign groups
     random.shuffle(participant_real_names)

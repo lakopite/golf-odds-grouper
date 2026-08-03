@@ -1,7 +1,8 @@
 # Golf Odds Grouper
 
 Reads a tournament's odds, partitions the field into equal-weighted groups, and deals
-those groups out to the pool's participants.
+those groups out to the pool's participants. The partition is provably optimal on a
+normal field, and the run says so.
 
 Odds come from the **Kalshi** prediction market. They used to come from DraftKings,
 which moved its odds endpoint every season and started each year with an hour in
@@ -20,7 +21,8 @@ echo '["Mo", "Diogo", "Luis", "Cody", "Darwin"]' > participants.json
 python group.py --event KXPGATOUR-WYC26
 ```
 
-Groups are written to `output/BESTGROUPS.json`, one file per method alongside it.
+Groups are written to `output/BESTGROUPS.json`, with `output/GROUPING.json` alongside it
+recording the delta, the proven floor, and whether the partition is optimal.
 
 ## Pre-requisites
 
@@ -119,9 +121,7 @@ python group.py [--event TICKER] [--series KXPGATOUR] [--price ask|mid|bid|last]
                 [--data-file PATH] [--dk-odds-type "Winner"]
                 [--participants participants.json] [--output-dir output]
                 [--exclude NAME ...] [--no-exclude] [--auto-exclude]
-                [--methods backtracking,dp,sa,ga,greedy]
-                [--sa-iter N] [--ga-pop N] [--ga-generations N] [--ga-mutation F]
-                [--seed N]
+                [--time-limit SECONDS] [--seed N]
 ```
 
 An archived DraftKings `dk_data.json` still parses — `list_dk_golf_odds()` and
@@ -130,22 +130,14 @@ compared against Kalshi side by side if one is ever exported by hand.
 
 ### Runtime
 
-A default run on a 143-golfer field takes about **5 minutes**, and around **10 minutes**
-with 25 participants. Essentially all of it is the genetic algorithm at its default
-`--ga-pop 500 --ga-generations 10000`; every other method finishes in under a second.
-These defaults pre-date the Kalshi migration and are left alone deliberately.
+A run finishes in well under a second on a 143-golfer field, at any group count. The
+partitioner stops the moment it can prove its answer is optimal, which on a real field
+is immediately. `--time-limit` (default 2s) caps the search in the case where the proof
+is out of reach — see the fair-share note below, because that case is a property of the
+field rather than of the search.
 
-The GA does not appear to be earning that time — on a measured 143-golfer run its best
-delta and backtracking's agreed to twelve significant figures, and with 25 participants
-the DP won outright. For a fast run that is unlikely to lose anything:
-
-```bash
-python group.py --ga-pop 40 --ga-generations 100        # seconds, not minutes
-python group.py --methods backtracking,dp,sa,greedy     # skip the GA entirely
-```
-
-The same odds always produce the same groups regardless of how the odds file was
-ordered: the field is sorted into one canonical order on load. Group *assignment* to
+The same odds always produce the same groups. The field is sorted into one canonical
+order on load, and the partitioner has no randomness in it. Group *assignment* to
 participants is random by design — pass `--seed N` to make a whole run reproducible.
 
 ## Tests
@@ -159,92 +151,99 @@ The offline suite proves the code is self-consistent. The live suite proves the 
 still answers, still sends money fields as strings, and still quotes an ask on every
 active market. Run the live suite before trusting a season's first pull.
 
-## Golfers Grouping Algorithms
+## How the grouping works
 
-This project provides five different methods to partition a list of golfers into a
-specified number of balanced groups based on their odds of winning. The methods aim to
-minimize the difference between the group with the highest cumulative odds and the group
-with the lowest cumulative odds. Each is run, each is validated, and the one with the
-smallest delta percentage wins.
+The field is partitioned into groups of equal total implied probability. The measure is
+the **delta**: the highest group total minus the lowest. Smaller is better.
 
-## Methods
+### It is an integer problem, and that is the whole trick
 
-1. **Backtracking**
-2. **Dynamic Programming**
-3. **Simulated Annealing**
-4. **Genetic Algorithm**
-5. **Greedy Algorithm with Redistribution**
+Kalshi quotes on a price grid — the Winner series ticks at $0.001, the others at a flat
+$0.01. Every price in a book is an exact multiple of that tick (measured on the live
+143-golfer Wyndham field: zero prices off the grid), and the de-vig divides the whole
+book by one constant, so the grid survives it.
 
-### 1. Backtracking
+So this is not a real-valued partition. It is a partition of **whole numbers of ticks**,
+which hands us something a float formulation cannot have: a provable floor.
 
-**Function:** `backtracking_generate_groups`
+- **Divisibility.** 1151 ticks split 5 ways cannot beat a delta of 1 tick, because 1151
+  is not divisible by 5. Reach 1 tick and you are done.
+- **Concentration.** If one golfer is worth more than a group's fair share, their group
+  is heavy no matter what happens elsewhere. Taking the *j* heaviest golfers together
+  sharpens this into a bound that is tight in practice.
 
-**Parameters:**
-- `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
-- `n_groups`: Integer, the number of groups to divide the golfers into.
+Every run reports the delta, the floor, and whether it reached it. `PROVEN OPTIMAL`
+means exactly that: no partition of this field does better.
 
-**Description:**
-Uses a backtracking approach to generate balanced groups of golfers. It recursively tries to assign golfers to groups to minimize the difference in total odds.
+### The method
 
-### 2. Dynamic Programming
+1. Recover the tick grid and convert the field to whole numbers.
+2. Compute the floor.
+3. Seed with **Karmarkar–Karp differencing** — hold the group totals as a tuple and
+   repeatedly combine the two most-imbalanced, largest against smallest, so imbalances
+   cancel instead of compounding.
+4. Improve with **local search** over single moves and single swaps. Both are needed: a
+   move alone cannot rebalance two groups that are already the right size, and a swap
+   alone cannot change a group's size at all.
+5. Stop at the floor and report the answer as optimal.
 
-**Function:** `dp_generate_groups`
+Group sizes are not constrained beyond "at least one golfer each". Forcing equal sizes
+costs real accuracy — measured on the live field with a 30-second search, 12 groups
+reaches 1 tick unconstrained and is stuck at 8 ticks with equal sizes. A group of one is
+a legitimate answer; a group of none is not, and is prevented.
 
-**Parameters:**
-- `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
-- `n_groups`: Integer, the number of groups to divide the golfers into.
+### When the delta cannot be small
 
-**Description:**
-Uses a dynamic programming approach to generate balanced groups of golfers. It iteratively calculates the minimum difference in total odds between groups and assigns golfers accordingly.
+At 13 groups and above on the live field, Cameron Young at 92 ticks exceeds the fair
+share of 1151/13 = 88.5, and the floor rises with the group count:
 
-**Known limitation (pre-dates the Kalshi migration; measured, not fixed).** The DP's
-objective is degenerate: `dp[n][n_groups][k] == k` for every feasible `k`, so the
-minimal difference it finds is always 0 and its reconstruction emits `n_groups`
-singletons. All the actual balancing is then done by the "assign each remaining golfer
-to the lightest group" fallback at the end of the function. Two consequences worth
-knowing: raising the table's fixed-point resolution changes which singletons come out
-but does not improve the partition, and the method must never be given fewer golfers
-than groups — the reconstruction loop does not terminate on that input. `group.py`
-checks the field size after exclusions to keep that state unreachable.
+| Groups | Proven floor | What binds |
+|---|---|---|
+| 2–12 | 1 tick | nothing |
+| 13 | 4 ticks | Cameron Young, 1.04 fair shares |
+| 16 | 22 ticks | Cameron Young, 1.28 fair shares |
+| 25 | 48 ticks | Cameron Young, 2.00 fair shares |
 
-### 3. Simulated Annealing
+**No algorithm beats those numbers.** Searching harder is the wrong response; excluding
+the golfer is the right one. The run names whoever is responsible and says so. With
+`--auto-exclude` dropping Cameron Young, every group count from 2 to 27 lands back at
+1 tick or better.
 
-**Function:** `sa_generate_groups`
+### What this replaced
 
-**Parameters:**
-- `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
-- `n_groups`: Integer, the number of groups to divide the golfers into.
-- `max_iter`: Integer (default=1000), the maximum number of iterations to perform.
-- `temp`: Float (default=1000), the initial temperature for the simulated annealing process. Think of temp as the "energy" or "excitement" level at the start of the process. A high temperature means the algorithm is more willing to accept changes, even if they make things worse temporarily, to explore more potential solutions.
-- `cooling_rate`: Float (default=0.99), the rate at which the temperature decreases. The cooling_rate controls how quickly the temperature drops over time. A high cooling rate means the temperature drops quickly, and the algorithm becomes more selective faster. A low cooling rate means the temperature drops slowly, allowing the algorithm to explore a broader range of solutions for a longer time.
+Five methods — backtracking, dynamic programming, simulated annealing, a genetic
+algorithm, and greedy redistribution — were run on every field and the smallest delta
+won. They agreed on the live field because a full golf field is the easy case: a long
+tail of one-tick golfers gives almost any method the small change it needs to close the
+last gap. The comparison was therefore measuring very little, and off that field the
+methods separated badly. Measured deltas in ticks, lower is better:
 
-**Description:**
-Uses a simulated annealing approach to generate balanced groups of golfers. It starts with a random initial solution and iteratively tries to improve it by making random swaps and accepting changes based on the temperature.
+| Test field | Floor | backtrack | dp | sa | ga | greedy | now |
+|---|---|---|---|---|---|---|---|
+| Live, 5 groups | 1 | 1 | 1 | 1 | 1 | 94 | **1** |
+| Live, 12 groups | 1 | 1 | 1 | 8 | 1 | 92 | **1** |
+| Live, 25 groups | 48 | 49 | 48 | 53 | 49 | 89 | **48** |
+| Limited field, 70 golfers | 1 | 3 | 1 | 1 | 1 | 4 | **1** |
+| Small field, 24 golfers | 3 | 14 | 12 | 21 | 3 | 92 | **3** |
+| 40 items, large weights | — | 136210 | 136210 | 3130 | 3717 | 683185 | **401** |
 
-### 4. Genetic Algorithm
+Four of the five had defects that made them unfixable rather than untuned. The
+backtracking recurrence used `dp(i, 0) = inf`, which blocks the exclude path and forces
+the top golfer into the seed set every run; its objective had no relation to balance, and
+its last five lines did all the work. The DP scaled prices with `int(odds * 100)`, so
+after the de-vig almost every golfer scaled to zero, and its cost grew with the *sum* of
+the weights — 609 seconds on a 40-item field. The annealer started at temperature 1000
+against a delta of 0.001–0.08, so it accepted nearly every bad move for its first
+thousand steps and refused every bad move after about 1,400 of its 100,000 — it never
+annealed. The genetic algorithm drew its crossover point from the field size (143) but
+sliced groups of about 12, so at 12 groups the crossover did nothing in 92% of draws, and
+it needed 5–10 minutes to reach what the current code reaches in about 3 milliseconds.
+Greedy redistribution was the worst method on all ten test fields; its swap was fixed
+rather than chosen, so it overshot and oscillated instead of converging.
 
-**Function:** `ga_generate_groups`
-
-**Parameters:**
-- `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
-- `n_groups`: Integer, the number of groups to divide the golfers into.
-- `pop_size`: Integer (default=100), the size of the population. This is the number of possible solutions (groups of golfers) the algorithm starts with. A larger population size means more potential solutions to choose from and evolve, but it also requires more computational resources.
-- `generations`: Integer (default=1000), the number of generations to evolve. This is how many times the algorithm will improve the population. In each generation, the algorithm selects the best solutions, combines them to create new solutions, and possibly mutates them to explore new possibilities. More generations mean more chances to find a good solution.
-- `mutation_rate`: Float (default=0.1), the probability of mutation. This is the chance that a small random change will be made to a solution. Mutations help the algorithm explore new solutions that might not be found through selection and crossover alone. A higher mutation rate means more randomness and diversity in the solutions, while a lower rate means more stability and refinement of existing solutions.
-
-**Description:**
-Uses a genetic algorithm to generate balanced groups of golfers. It initializes a population of random solutions, evaluates their fitness, and iteratively applies crossover and mutation operations to evolve better solutions.
-
-### 5. Greedy Algorithm with Redistribution
-
-**Function:** `greedy_redistribute_groups`
-
-**Parameters:**
-- `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
-- `n_groups`: Integer, the number of groups to divide the golfers into.
-
-**Description:**
-Uses a greedy algorithm to initially distribute golfers into groups and then redistributes them to balance the total odds. It sorts golfers by their odds and assigns them to groups in a round-robin fashion, followed by a redistribution step to minimize the difference in total odds between groups.
+The current code is deterministic, which the annealer and the genetic algorithm were not.
+Both returned a different answer to the same question on consecutive runs, which makes
+"why did my group change?" unanswerable.
 
 ## Research record
 
