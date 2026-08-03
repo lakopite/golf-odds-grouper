@@ -8,6 +8,16 @@ __pycache__
 .pytest_cache
 20*
 
+# A competition build belongs to the run that made it, not to the source tree.
+# build/ holds the result JSON, dist/ holds the page and zip handed to the user.
+build/
+dist/
+
+# Leagues are the user's own rosters. The worked example is checked in; anything
+# else they drop in here stays theirs.
+leagues/*.json
+!leagues/example-league.json
+
 # Test fixtures are checked in on purpose; the patterns above would swallow them.
 !tests/fixtures/dk_data.json
 !tests/fixtures/participants.json

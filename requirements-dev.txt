@@ -1,0 +1,9 @@
+# Testing only. Nothing here is needed to build a competition.
+-r requirements.txt
+pytest==8.3.4
+
+# Drives the bundled scoreboard in a real browser (tests/test_frontend_render.py).
+# Needs a browser too: `playwright install chromium`, or set CHROMIUM_PATH to one
+# already on disk. Both that test file and the node-based parity test skip cleanly
+# when their runtime is missing.
+playwright==1.49.1

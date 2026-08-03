@@ -1,0 +1,10 @@
+{
+  "league_name": "Sunday Fivesome",
+  "teams": [
+    { "team_name": "Bogey Boys",      "player_name": "Mo",     "team_logo": "logos/bogey-boys.svg" },
+    { "team_name": "Fairway to Heaven","player_name": "Diogo", "team_logo": "logos/fairway.svg" },
+    { "team_name": "Mulligan Mafia",  "player_name": "Luis",   "team_logo": "logos/mulligan.svg" },
+    { "team_name": "Sand Trap Society","player_name": "Cody",  "team_logo": "logos/sandtrap.svg" },
+    { "team_name": "Albatross Alliance","player_name": "Darwin","team_logo": "logos/albatross.svg" }
+  ]
+}
