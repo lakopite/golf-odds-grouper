@@ -70,10 +70,18 @@ def backtracking_generate_groups(golfers, n_groups):
     return groups
 
 # Dynamic Programming Approach
-def dp_generate_groups(golfers, n_groups):
+def dp_generate_groups(golfers, n_groups, scale=100):
+    """
+    scale is the fixed-point resolution of the DP table.
+
+    At the default 100 an odds value is quantised to whole cents, so in a 140-golfer
+    field every golfer below 1% rounds to zero weight and the table only really packs
+    the top of the board. Kalshi quotes the tail on a 0.1c tick, so scale=1000 keeps
+    that resolution; the table grows linearly with scale, so it costs ~10x the memory.
+    """
     n = len(golfers)
     max_sum = sum(g["odds"] for g in golfers)
-    scaled_max_sum = int(max_sum * 100)  # Scaling to avoid precision issues
+    scaled_max_sum = int(max_sum * scale)  # Scaling to avoid precision issues
 
     # Initialize DP table and backtracking table
     dp = np.full((n + 1, n_groups + 1, scaled_max_sum + 1), float('inf'))
@@ -85,7 +93,7 @@ def dp_generate_groups(golfers, n_groups):
     progress_bar = tqdm(total=total_steps, desc="Dynamic Programming Progress")
 
     for i in range(1, n + 1):
-        golfer_odds = int(golfers[i - 1]["odds"] * 100)
+        golfer_odds = int(golfers[i - 1]["odds"] * scale)
         for j in range(1, n_groups + 1):
             for k in range(scaled_max_sum + 1):
                 # Exclude current golfer
@@ -125,7 +133,7 @@ def dp_generate_groups(golfers, n_groups):
         if i > 0:
             groups[j - 1].append(golfers[i - 1])
             used[i - 1] = True
-            current_sum -= int(golfers[i - 1]["odds"] * 100)
+            current_sum -= int(golfers[i - 1]["odds"] * scale)
             j -= 1
         i -= 1
 

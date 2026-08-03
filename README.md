@@ -1,18 +1,136 @@
 # Golf Odds Grouper
 
+Reads a tournament's odds, partitions the field into equal-weighted groups, and deals
+those groups out to the pool's participants.
+
+Odds come from the **Kalshi** prediction market. They used to come from DraftKings,
+which moved its odds endpoint every season and started each year with an hour in
+DevTools hunting for the new URL. Kalshi publishes a documented, stable,
+unauthenticated REST API instead, so there is nothing to hunt for.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+
+# Who is playing this week? (participants.json is a list of name strings)
+echo '["Mo", "Diogo", "Luis", "Cody", "Darwin"]' > participants.json
+
+# Pull this week's odds and build the groups in one step.
+python group.py --event KXPGATOUR-WYC26
+```
+
+Groups are written to `output/BESTGROUPS.json`, one file per method alongside it.
+
 ## Pre-requisites
-- Requires a valid json response from DraftKings Sportsbook e.g (`https://sportsbook-nash.draftkings.com/sites/US-SB/api/v5/eventgroups/205797?format=json`) to exist in the root of the project `/path/to/repo/dk_data.json`
-- Requires a json list of participant name strings to exist at the root of the project `/path/to/repo/participants.json` (example `["Mo", "Diogo", "Luis", "Cody", "Darwin"]`)
 
-## Hidden Option
-- Can fine tune which odds type you'd like to choose by changing the `ODDS_TYPE` function variable to match the DK odds type label. Defaults to "Winner" but another good option is "Top 10 (Including Ties)"
+- `participants.json` in the repo root: a JSON list of participant name strings, e.g.
+  `["Mo", "Diogo", "Luis", "Cody", "Darwin"]`. One group is built per participant.
+- Network access to `api.elections.kalshi.com`. No API key, no account, no auth.
 
-## Purpose
-Using the documented algorithms below, this tool aims to determine the optimal groups aiming to minimize the difference between the groups with the highest and lowest cumulative odds. Once the best groups are identified, they are randomly assigned to the participants.
+## Getting the odds
+
+`group.py` resolves its odds in this order:
+
+1. `--data-file PATH`, if given.
+2. `--event TICKER`, if given — a live pull from Kalshi.
+3. A local `kalshi_data.json`, then a local `dk_data.json`.
+4. Otherwise, a live pull of the newest `KXPGATOUR` event that has active markets.
+
+So `python group.py` on its own works during tournament week. To capture the odds
+first and group later — useful if you want the raw payload kept:
+
+```bash
+python kalshi_odds.py --list-events            # what golf is on right now
+python kalshi_odds.py --latest                 # newest live PGA Tour winner event
+python kalshi_odds.py --event KXPGATOUR-WYC26 --write-odds-file
+python group.py                                # reads the kalshi_data.json just written
+```
+
+**Event codes are not predictable.** The 2026 Wyndham Championship is `WYC26`; 2025 was
+`WC25`. Always look the code up with `--list-events` rather than constructing it.
+
+**Pull Wednesday night.** Winner markets post Sunday ~23:00Z of tournament week, but
+markets keep being *added* through Wednesday as the field firms up. A Sunday pull gets
+an incomplete field.
+
+## Hidden option — which market to price off
+
+The market type is nothing more than a series prefix on the event ticker, and every
+series returns the identical shape. This is the direct replacement for the old
+DraftKings `ODDS_TYPE` label. Change it with `--series`, or edit `MARKET_SERIES` in
+`group.py`:
+
+| Series | Market |
+|---|---|
+| `KXPGATOUR` | Outright Winner — **the default** |
+| `KXPGATOP5` | Top 5 Finishers |
+| `KXPGATOP10` | Top 10 Finishers |
+| `KXPGAMAKECUT` | To Make the Cut |
+
+**Prefer Winner.** The old README recommended `Top 5 (Including Ties)` as "another good
+option" on DraftKings. On Kalshi that advice inverts: Winner ticks at $0.001 below 10¢
+(`price_level_structure: tapered_deci_cent`) while Top 5, Top 10 and MakeCut are flat
+$0.01 — 10× coarser exactly where a golf field lives. Top 5 still works, it is simply a
+worse signal. Top 5 / Top 10 markets also post about 21 hours later than Winner, so
+they carry a narrower pull window.
+
+`--price` picks which side of the book to read. It defaults to `ask`, and should stay
+there. Measured on a live 143-golfer field: the ask gives every golfer a real quoted
+price and sums to 1.308; the bid leaves 46 of 143 at zero and sums to 0.906, which is
+not a distribution at all. `mid` inherits the bid's hole — with a third of the field
+unbid, "mid" is usually just half the ask, a number the code invented rather than read.
+
+## De-vig and exclusions
+
+The raw book is not a probability distribution. A Winner ask book sums to about 1.30 —
+that spread over 1.0 is the overround. The grouper always divides by the **observed**
+field sum, so the same code is correct whether the book sums to 1.30, to 5 (Top 5), or
+to 10 (Top 10). Group totals therefore always add to 1.0.
+
+Exclusions run on top of that. `EXCLUDE_LIST` in `group.py` (or `--exclude NAME`, or
+`--no-exclude`) drops named golfers and re-scales the rest, giving the probability of
+winning *given that none of the excluded golfers wins*.
+
+`--auto-exclude` applies the rule the exclusion list exists to serve: drop any golfer
+whose de-vigged probability exceeds `1/participants`. Such a golfer is worth more than a
+whole group's fair share on their own, so no partition can balance around them. It
+iterates — removing one golfer redistributes their weight and can push the next over the
+line. Every run prints who is above the threshold whether or not you act on it.
+
+## Command reference
+
+```
+python group.py [--event TICKER] [--series KXPGATOUR] [--price ask|mid|bid|last]
+                [--data-file PATH] [--participants participants.json]
+                [--exclude NAME ...] [--no-exclude] [--auto-exclude]
+                [--methods backtracking,dp,sa,ga,greedy]
+                [--sa-iter N] [--ga-pop N] [--ga-generations N] [--dp-scale N]
+                [--output-dir output] [--seed N]
+```
+
+An archived DraftKings `dk_data.json` still parses — `list_dk_golf_odds()` and
+`--dk-odds-type` are unchanged — so old captures still run and a DK payload can be
+compared against Kalshi side by side if one is ever exported by hand.
+
+## Tests
+
+```bash
+python -m pytest tests/ -q          # offline, uses checked-in fixtures
+KALSHI_LIVE=1 python -m pytest tests/test_live.py -v   # hits the real Kalshi API
+```
+
+The offline suite proves the code is self-consistent. The live suite proves the endpoint
+still answers, still sends money fields as strings, and still quotes an ask on every
+active market. Run the live suite before trusting a season's first pull.
 
 ## Golfers Grouping Algorithms
 
-This project provides five different methods to partition a list of golfers into a specified number of balanced groups based on their odds of winning. The methods aim to minimize the difference between the group with the highest cumulative odds and the group with the lowest cumulative odds.
+This project provides five different methods to partition a list of golfers into a
+specified number of balanced groups based on their odds of winning. The methods aim to
+minimize the difference between the group with the highest cumulative odds and the group
+with the lowest cumulative odds. Each is run, each is validated, and the one with the
+smallest delta percentage wins.
 
 ## Methods
 
@@ -40,6 +158,7 @@ Uses a backtracking approach to generate balanced groups of golfers. It recursiv
 **Parameters:**
 - `golfers`: List of dictionaries, where each dictionary contains `golfer_name` and `odds` of each golfer.
 - `n_groups`: Integer, the number of groups to divide the golfers into.
+- `scale`: Integer (default=100), the fixed-point resolution of the DP table. At 100 an odds value is quantised to whole cents, so in a 140-golfer field every golfer below 1% rounds to zero weight and the table only really packs the top of the board. Kalshi quotes the tail on a 0.1¢ tick, so `--dp-scale 1000` keeps that resolution at roughly 10× the memory.
 
 **Description:**
 Uses a dynamic programming approach to generate balanced groups of golfers. It iteratively calculates the minimum difference in total odds between groups and assigns golfers accordingly.
@@ -82,3 +201,10 @@ Uses a genetic algorithm to generate balanced groups of golfers. It initializes 
 
 **Description:**
 Uses a greedy algorithm to initially distribute golfers into groups and then redistributes them to balance the total odds. It sorts golfers by their odds and assigns them to groups in a round-robin fashion, followed by a redistribution step to minimize the difference in total odds between groups.
+
+## Research record
+
+`kalshi-migration/` holds the evaluation that led here: why Kalshi over ESPN, Polymarket,
+The Odds API and DataGolf; the API traps that cost time; and the measurements behind the
+Winner-and-ask decision. It is history, not live documentation — the code it describes as
+"remaining work" now lives in `kalshi_odds.py` and `group.py`.

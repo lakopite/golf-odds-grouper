@@ -1,5 +1,12 @@
 # Odds Source Evaluation — Directional Findings
 
+> **Acted on 2026-08-03.** Recommendations 1–3 are implemented: the grouper prices off
+> `KXPGATOUR-<EVENT>`, the parent README no longer pushes Top 5, and the `group.py` shim
+> exists. Recommendation 1 was implemented with the **ask** rather than mid-where-two-sided,
+> because 46 of 143 golfers have no bid; see `START-HERE.md` §1. Recommendations 4 (ESPN
+> for field membership) and 5 (DataGolf) remain unbuilt, as does everything under
+> "Still open".
+
 Written 2026-08-03. Test case: **2026 Wyndham Championship** (`KXPGATOUR-WYC26`),
 captured pre-tournament — winner markets went live 2026-08-02 23:00Z, tournament
 tees off Thursday 08-06. This is the pre-tournament capture ORIENTATION.md §7

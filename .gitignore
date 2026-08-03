@@ -1,6 +1,13 @@
 venv
 output
+kalshi_data*
 dk_data*
+captures
 participants*.json
 __pycache__
+.pytest_cache
 20*
+
+# Test fixtures are checked in on purpose; the patterns above would swallow them.
+!tests/fixtures/dk_data.json
+!tests/fixtures/participants.json

@@ -1,0 +1,97 @@
+{
+  "source": "kalshi",
+  "event": "KXPGATOUR-WYC26",
+  "price_mode": "ask",
+  "golfers": [
+    {
+      "golfer_name": "Cameron Young",
+      "odds": 0.09,
+      "golfer_id": "9fbf091c-5e4b-42a4-93d7-92a6785a618d"
+    },
+    {
+      "golfer_name": "Jackson Koivun",
+      "odds": 0.044,
+      "golfer_id": "8169868c-7b2c-45ff-a9fa-4628f463845a"
+    },
+    {
+      "golfer_name": "Hideki Matsuyama",
+      "odds": 0.041,
+      "golfer_id": "d45bcf4a-5803-4b0b-ab6c-6427a76cecf7"
+    },
+    {
+      "golfer_name": "Patrick Cantlay",
+      "odds": 0.038,
+      "golfer_id": "d072ae36-88f2-4276-b97e-6de87aa2b875"
+    },
+    {
+      "golfer_name": "Ryan Gerard",
+      "odds": 0.032,
+      "golfer_id": "6ff0d2f5-2a16-45fd-82a9-69c99a86261d"
+    },
+    {
+      "golfer_name": "Ben Griffin",
+      "odds": 0.032,
+      "golfer_id": "d8126bf8-8558-44a2-a473-8ce001de7471"
+    },
+    {
+      "golfer_name": "Matthew McCarty",
+      "odds": 0.008,
+      "golfer_id": "80d16074-9940-44ee-b159-4b7ad819e2ac"
+    },
+    {
+      "golfer_name": "Max McGreevy",
+      "odds": 0.008,
+      "golfer_id": "d61ba0aa-d3f8-4ea0-924d-a18c0ae76019"
+    },
+    {
+      "golfer_name": "Harry Hall",
+      "odds": 0.007,
+      "golfer_id": "be5be8d0-b561-4d0e-ac4a-90275f2f979f"
+    },
+    {
+      "golfer_name": "John Parry",
+      "odds": 0.007,
+      "golfer_id": "9786a2d1-21b0-4086-957b-8ca089562614"
+    },
+    {
+      "golfer_name": "William Mouw",
+      "odds": 0.007,
+      "golfer_id": "bb638691-1a48-486b-a439-25d89c8a5c93"
+    },
+    {
+      "golfer_name": "Daniel Berger",
+      "odds": 0.007,
+      "golfer_id": "509991b7-9e9d-48be-9a3b-b75fd23be6ff"
+    },
+    {
+      "golfer_name": "Daniel Brown",
+      "odds": 0.001,
+      "golfer_id": "b35c9bff-25ff-40c1-8c5a-3717f1e01c07"
+    },
+    {
+      "golfer_name": "Michael Thorbjornsen",
+      "odds": 0.001,
+      "golfer_id": "c3242516-37d7-46e3-aba7-b74f1498527e"
+    },
+    {
+      "golfer_name": "Patton Kizzire",
+      "odds": 0.001,
+      "golfer_id": "3442d4dd-ecfa-43aa-9a01-7525e6f4952c"
+    },
+    {
+      "golfer_name": "Rafael Campos",
+      "odds": 0.001,
+      "golfer_id": "b3be6e26-e578-4ed3-bd24-98adbf0c29e4"
+    },
+    {
+      "golfer_name": "Christo Lamprecht",
+      "odds": 0.001,
+      "golfer_id": "0da41090-bfca-43e2-be9e-0d18ebba5b17"
+    },
+    {
+      "golfer_name": "Danny Walker",
+      "odds": 0.001,
+      "golfer_id": "de193540-82b9-447a-9f3a-adc779b46019"
+    }
+  ]
+}
