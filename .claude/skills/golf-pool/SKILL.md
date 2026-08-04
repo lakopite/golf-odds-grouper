@@ -416,8 +416,22 @@ Two ways to get this wrong, both easy:
 
 **An empty `suggestions` list is an answer, not a gap.** It means nobody left in the
 field resembles that name even loosely, and a Kalshi field and an ESPN field for the
-same tournament are very nearly the same people — so check `espn_athletes_nobody_claimed`
-once, and if they are not in it either, they withdrew. Record the absence.
+same tournament are very nearly the same people — so check
+`espn_athletes_nobody_claimed` once, and if they are not in it either, they are not in
+the field ESPN published.
+
+**Before the first tee time, that is not yet the same thing as a withdrawal.** The build
+runs a day or two early now, and ESPN's field still moves in that window — a golfer
+Kalshi already prices may be an alternate ESPN has not listed yet. Both cases look
+identical in one snapshot: no row, no suggestions. So record `absent` only when you can
+say what happened, and leave the rest unresolved. An unresolved golfer costs nothing
+until play starts and is settled by the next rebuild; an `absent` recorded wrongly is a
+decision that sticks and stops anybody looking again.
+
+Two reads are what tell them apart. Measured on the Wyndham, 2026-08-04: Daniel Berger
+was in ESPN's field at 18:16 and gone by 19:55, with David Skinns listed in his place
+and the field size unchanged at 147. That is a withdrawal, and it is knowable because
+somebody looked twice.
 
 Then rebuild, and the decisions take effect:
 

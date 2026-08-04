@@ -371,6 +371,12 @@ through the half that moves the standings. A golfer who is simply not in the fie
 back with an empty suggestion list, which is itself the answer — an ESPN field and a
 Kalshi field for the same tournament are very nearly the same people.
 
+Before the first tee time, "no row on the leaderboard" and "withdrew" are not yet the
+same fact: the build runs a day or two early, and a golfer Kalshi prices may be an
+alternate ESPN has not listed yet. Record an absence only when you can say what
+happened; an unresolved golfer costs nothing until play starts, and a wrong absence
+stops anybody looking again.
+
 Somebody — in practice Claude, driving `.claude/skills/golf-pool/` — fills in
 `decisions`, binding an athlete id or recording an absence, and the next build reads it
 back and records what it applied. Nothing is written at all when every name resolved and
