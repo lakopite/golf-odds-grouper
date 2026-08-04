@@ -28,7 +28,16 @@
  * Which is correct: they either withdrew or nobody has settled their name yet, and
  * the result file says which. See match_review.py.
  *
- * A designed scoreboard should reuse this file verbatim and write only its own
+ * ONE COPY, ABOVE THE TEMPLATES
+ * -----------------------------
+ * It lives in `frontend/` rather than inside a template directory because more than
+ * one template ships: `frontend/scoreboard/` is the designed page and
+ * `frontend/template/` is the plain reference. Both pull this file in from ../lib.js
+ * with a script tag, which the bundler inlines like any other local asset, so the rule
+ * that decides the pool exists once and the parity test covers every page built from
+ * it. A template that copied it would be a second rumour.
+ *
+ * A new design should do the same: reuse this file verbatim and write only its own
  * app.js. See docs/FRONTEND-SPEC.md.
  */
 'use strict';

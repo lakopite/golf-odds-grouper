@@ -1,5 +1,8 @@
 {
   "league_name": "Sunday Fivesome",
+  "tagline": "Season 4",
+  "crest": "logos/example-crest.svg",
+  "banner": "logos/example-banner.svg",
   "teams": [
     { "team_name": "Bogey Boys",      "player_name": "Mo",     "team_logo": "logos/bogey-boys.svg" },
     { "team_name": "Fairway to Heaven","player_name": "Diogo", "team_logo": "logos/fairway.svg" },

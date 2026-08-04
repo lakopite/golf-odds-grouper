@@ -243,14 +243,85 @@ def test_an_explicit_basename_wins(result, template, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The real template
+# The templates that actually ship
+#
+# Two of them, and the contract is the contract for both: the designed page
+# (frontend/scoreboard, the default) and the plain reference (frontend/template).
 # ---------------------------------------------------------------------------
 
-def test_the_shipped_template_honours_its_own_contract(result, tmp_path):
-    paths, report = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "out"))
+SHIPPED = [bundler.DEFAULT_TEMPLATE, bundler.REFERENCE_TEMPLATE]
+SHIPPED_IDS = ["scoreboard", "reference"]
+
+
+def test_the_default_is_the_designed_page():
+    """
+    `python bundle_frontend.py --result ...` with no --template is the whole of what
+    the skill runs, so what it produces has to be the page somebody wants to be handed
+    rather than the one that exists to prove the contract.
+    """
+    assert os.path.basename(bundler.DEFAULT_TEMPLATE) == "scoreboard"
+    assert os.path.basename(bundler.REFERENCE_TEMPLATE) == "template"
+
+
+@pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)
+def test_a_shipped_template_honours_its_own_contract(result, shipped, tmp_path):
+    paths, report = bundler.bundle(result, shipped, str(tmp_path / "out"))
     markup = read_html(paths)
     assert report["missing"] == []
-    assert sorted(report["inlined"]) == ["app.js", "lib.js", "style.css"]
+    assert sorted(report["inlined"]) == ["../lib.js", "app.js", "style.css"]
     assert embedded_json(markup) == result
     assert not re.search(r'<script[^>]+src=', markup)
+    assert not re.search(r'<link[^>]*rel=["\']stylesheet', markup)
     assert "GolfPool" in markup and "computeStandings" in markup
+
+    # Every token the bundler knows how to fill has been filled. Not a blanket "{{" ban:
+    # an unrecognised token is deliberately left alone, and both templates carry a
+    # comment about `{{tokens}}` that is documentation rather than a placeholder.
+    assert not re.search(r"\{\{\s*(?:%s)\s*\}\}" % "|".join(
+        ["league_name", "tournament", "market", "generated_at", "team_count",
+         "competition_id"]), markup)
+    assert f"<title>{result['league']['league_name']}" in markup
+    assert result["competition_id"] in markup
+
+
+@pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)
+def test_a_shipped_template_reaches_no_host_at_all_from_its_markup(result, shipped, tmp_path):
+    """
+    Every remote reference in a template survives bundling untouched and is then
+    requested on every open -- and fails on the first one that happens offline, which
+    for this page is most of them. The design was drawn against Google Fonts; the
+    stylesheet names the families and falls back to a stack instead.
+    """
+    markup = read_html(bundler.bundle(result, shipped, str(tmp_path / "out"))[0])
+    assert not re.search(r'<(?:link|script|img)[^>]+(?:href|src)=["\']//', markup)
+    assert not re.search(r'<(?:link|script|img)[^>]+(?:href|src)=["\']https?://', markup)
+
+
+@pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)
+def test_a_shipped_template_carries_the_one_copy_of_the_standings_rule(shipped):
+    """
+    `../lib.js`, above both template directories. Two copies of the rule that decides
+    the pool is one implementation and one rumour, and only one of them would be under
+    the parity test.
+    """
+    with open(os.path.join(shipped, "index.html"), encoding="utf-8") as f:
+        assert '<script src="../lib.js"></script>' in f.read()
+    assert not os.path.exists(os.path.join(shipped, "lib.js"))
+
+
+def test_an_image_whose_source_arrives_at_runtime_does_not_break_the_bundle(result, tmp_path):
+    """
+    `<img src="">` is what an element fed from the data looks like before anybody
+    thinks about it. It joins to the template directory, which exists -- so an
+    exists() check sends the bundler off to base64-encode a directory and it dies
+    with IsADirectoryError three frames down.
+    """
+    d = tmp_path / "tpl"
+    d.mkdir()
+    (d / "index.html").write_text(
+        '<!doctype html><html><body><img src="" alt=""><img alt="">'
+        f'<script id="competition-data" type="application/json">{bundler.JSON_MARKER}</script>'
+        "</body></html>")
+    paths, report = bundler.bundle(result, str(d), str(tmp_path / "out"))
+    assert report["missing"] == []
+    assert 'src=""' in read_html(paths)

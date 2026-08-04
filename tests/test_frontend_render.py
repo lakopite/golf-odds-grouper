@@ -1,16 +1,20 @@
 """
-Render the bundled page in a real browser.
+Render the bundled reference page in a real browser.
 
-The parity test proves the rules agree. This proves the page built from them actually
-works: that it opens from a file:// URL with no server, that the only host it touches
-is ESPN -- odds are baked in and never fetched, because Kalshi 403s a browser -- and
-that the standings it draws are the ones standings.py computes.
+`frontend/template/` is the plain implementation: no design, no views, one long list
+of cards. It exists to prove the contract in docs/FRONTEND-SPEC.md rather than to be
+the page anybody is handed, so this suite is where the contract itself gets checked --
+that the bundle opens from a file:// URL with no server, that the only host it touches
+is ESPN, and that the standings it draws are the ones standings.py computes.
+
+The designed page ships by default and has its own suite next door,
+tests/test_scoreboard_render.py, making the same claims against its own markup. The
+browser, the competition and the ESPN stub are shared from conftest.py.
 
 Skipped without Playwright and a browser. Chromium is pre-installed in this
 environment; elsewhere, `pip install playwright && playwright install chromium`.
 """
 
-import glob
 import json
 import os
 import re
@@ -18,122 +22,27 @@ import re
 import pytest
 
 import bundle_frontend as bundler
-import espn_leaderboard
 import standings
+from conftest import ESPN_EVENT_ID, LEADERBOARD_GLOB
 
-playwright_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ESPN_EVENT_ID = "401811960"
-LEADERBOARD_GLOB = "**/site.web.api.espn.com/**"
-
-
-def _chromium_path():
-    """
-    A browser Playwright did not download itself.
-
-    Environments that pre-install Chromium often pin a different build number than the
-    Playwright package expects, and the default launch then fails on a path that does
-    not exist. Point at whatever is actually on disk before giving up.
-
-    Two rules, both learned by getting them wrong. Candidates are filtered down to a
-    file that is actually EXECUTABLE, because `pw-browsers` holds a directory per build
-    (`chromium-1194`, `chromium_headless_shell-1194`) alongside the binary, and handing
-    Playwright a directory fails exactly like handing it nothing -- the suite then
-    reports "no chromium available" on a machine carrying three of them, which is the
-    worst way for a browser test to be wrong: it never runs and never says so. And the
-    per-build directories are searched directly, rather than trusting `chromium` to be
-    the binary; here it happens to be a symlink to one, but that is this image's
-    convention and not a guarantee.
-    """
-    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "/opt/pw-browsers"]
-    candidates = [os.environ.get("CHROMIUM_PATH")]
-    for root in roots:
-        if root:
-            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "chrome-linux", "chrome")))
-            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "**", "headless_shell"),
-                                           recursive=True))
-    candidates += ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
-
-
-@pytest.fixture(scope="module")
-def browser():
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        try:
-            b = p.chromium.launch()
-        except Exception:                            # noqa: BLE001 -- retried below
-            path = _chromium_path()
-            if not path:
-                pytest.skip("no chromium available")
-            try:
-                b = p.chromium.launch(executable_path=path)
-            except Exception as exc:                 # noqa: BLE001
-                pytest.skip(f"no chromium available: {exc}")
-        yield b
-        b.close()
+TEMPLATE = bundler.REFERENCE_TEMPLATE
 
 
 @pytest.fixture
-def competition(espn_final_payload, tmp_path):
-    """
-    A four-team league over the real finished Rocket Classic field.
-
-    Built here rather than by build_competition.py because that needs a live Kalshi
-    pull, and the point of this test is the page rather than the pull. The shape is
-    the shape build_competition.py emits -- test_build_competition.py holds that to
-    account separately.
-    """
-    from test_build_competition import golfer_name, live_stage, make_result
-
-    _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
-    names = [golfer_name(i) for i in range(len(players))]
-    result = make_result(n_teams=4, n_golfers=len(players), espn=live_stage(names))
-
-    # Re-label the synthetic field with the real one, keeping the odds and the deal.
-    # Round-robin by rank, so team 0 holds the winner and the leaderboard order of the
-    # teams is known in advance.
-    #
-    # The athlete id is the point. This fixture used to null it deliberately, to force
-    # the page to redo the name join at runtime; there is no runtime name join any more,
-    # and the baked id is the only key the page has. So bake the REAL one.
-    ordered = sorted(result["golfers"], key=lambda g: -g["odds"]["raw"])
-    for golfer, player in zip(ordered, players):
-        golfer["name"] = player["name"]
-        golfer["espn"] = {"athlete_id": player["athlete_id"], "display_name": player["name"],
-                          "headshot": player["headshot"], "country": player["country"],
-                          "match": "exact", "in_field": True}
-    by_id = {g["golfer_id"]: g for g in result["golfers"]}
-    for team in result["teams"]:
-        team["golfer_names"] = [by_id[gid]["name"] for gid in team["golfer_ids"]]
-
-    result["sources"]["espn"]["event_id"] = ESPN_EVENT_ID
-    url = espn_leaderboard.leaderboard_url(ESPN_EVENT_ID)
-    result["sources"]["espn"]["leaderboard_endpoint"] = url
-    result["live"]["espn_leaderboard_url"] = url
-    result["live"]["espn_event_id"] = ESPN_EVENT_ID
-    result["tournament"]["name"] = "Rocket Classic"
-
-    paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "dist"))
-    return {"result": result, "html": paths[0], "players": players}
+def competition(rocket_classic, tmp_path):
+    paths, _ = bundler.bundle(rocket_classic["result"], TEMPLATE, str(tmp_path / "dist"))
+    return {"result": rocket_classic["result"], "html": paths[0],
+            "players": rocket_classic["players"]}
 
 
 @pytest.fixture
-def page(browser, competition, espn_final_payload):
+def page(browser, competition, serve_espn):
     ctx = browser.new_context()
     seen = []
     ctx.on("request", lambda r: seen.append(r.url))
-
-    def serve_espn(route):
-        route.fulfill(status=200, content_type="application/json",
-                      headers={"access-control-allow-origin": "*"},
-                      body=json.dumps(espn_final_payload))
-
-    ctx.route(LEADERBOARD_GLOB, serve_espn)
+    ctx.route(LEADERBOARD_GLOB, serve_espn())
     p = ctx.new_page()
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
@@ -219,7 +128,7 @@ def test_it_never_asks_kalshi_for_anything(page):
 
 
 def test_a_rebuilt_page_shows_the_odds_moving_with_no_network_at_all(browser, competition,
-                                                                     espn_final_payload, tmp_path):
+                                                                     serve_espn, tmp_path):
     """
     The only way prices move on this page: somebody re-ran the build with
     --refresh-odds and re-sent it. That re-read is baked in exactly as the original
@@ -236,14 +145,12 @@ def test_a_rebuilt_page_shows_the_odds_moving_with_no_network_at_all(browser, co
         "raw_book_sum": 1.31, "matched": len(result["golfers"]),
         "no_longer_priced": [], "priced_since_the_draw": ["Monday Qualifier"],
     }
-    paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "refreshed"))
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "refreshed"))
 
     ctx = browser.new_context(viewport={"width": 900, "height": 800})
     seen = []
     ctx.on("request", lambda r: seen.append(r.url))
-    ctx.route(LEADERBOARD_GLOB, lambda route: route.fulfill(
-        status=200, content_type="application/json",
-        headers={"access-control-allow-origin": "*"}, body=json.dumps(espn_final_payload)))
+    ctx.route(LEADERBOARD_GLOB, serve_espn())
     p = ctx.new_page()
     p.goto("file://" + paths[0])
     p.wait_for_selector("#standings article.team", timeout=15000)
@@ -311,23 +218,15 @@ def test_it_survives_espn_being_down(browser, competition):
 
 
 @pytest.fixture
-def groups_page(browser, competition, tmp_path):
+def groups_page(browser, groups_result, tmp_path):
     """
     The page a build makes before the first tee time: `live` is null.
 
-    Bundled from the same competition with its scoring stripped, exactly as a groups
-    build emits it -- no ESPN block on any golfer, and no `live` block at all. The
-    context routes ESPN to a hard failure, so if the page asks for anything the request
-    is both counted and refused.
+    The context routes everything over the wire to a hard failure, so if the page asks
+    for anything the request is both counted and refused.
     """
-    result = json.loads(json.dumps(competition["result"]))
-    result["build_mode"] = "groups"
-    result["live"] = None
-    result["sources"]["espn"]["field_size_at_build"] = 0
-    result["sources"]["espn"]["match_report"] = None
-    for golfer in result["golfers"]:
-        golfer["espn"] = None
-    paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "groups"))
+    result = groups_result
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "groups"))
 
     ctx = browser.new_context()
     seen = []

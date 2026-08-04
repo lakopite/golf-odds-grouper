@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400"
+     role="img" aria-label="Sunday Fivesome — five groups, one field">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16294f"/>
+      <stop offset="0.62" stop-color="#0d1a35"/>
+      <stop offset="1" stop-color="#0a1229"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c9a961"/>
+      <stop offset="0.5" stop-color="#f0dcae"/>
+      <stop offset="1" stop-color="#c9a961"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="400" fill="url(#sky)"/>
+
+  <!-- Five fairways, one per group. Uneven on purpose: so are the groups. -->
+  <g fill="none" stroke="#d4af5f" stroke-opacity="0.22" stroke-width="2">
+    <path d="M-40 400 C 220 300 300 190 340 40"/>
+    <path d="M180 400 C 380 310 430 200 460 40"/>
+    <path d="M420 400 C 560 320 590 210 600 40"/>
+    <path d="M700 400 C 720 300 760 190 840 40"/>
+    <path d="M950 400 C 900 300 940 190 1060 40"/>
+  </g>
+
+  <g fill="#d4af5f" fill-opacity="0.5">
+    <circle cx="340" cy="40" r="5"/><circle cx="460" cy="40" r="5"/><circle cx="600" cy="40" r="5"/>
+    <circle cx="840" cy="40" r="5"/><circle cx="1060" cy="40" r="5"/>
+  </g>
+
+  <text x="600" y="196" font-family="Helvetica,Arial,sans-serif" font-size="76" font-weight="700"
+        letter-spacing="6" fill="url(#gold)" text-anchor="middle">SUNDAY FIVESOME</text>
+  <line x1="380" y1="228" x2="820" y2="228" stroke="#d4af5f" stroke-opacity="0.55" stroke-width="2"/>
+  <text x="600" y="266" font-family="Helvetica,Arial,sans-serif" font-size="26" font-weight="600"
+        letter-spacing="9" fill="#8fa3c8" text-anchor="middle">FIVE GROUPS · ONE FIELD</text>
+
+  <rect x="4" y="4" width="1192" height="392" fill="none" stroke="#d4af5f" stroke-opacity="0.3"
+        stroke-width="3" rx="10"/>
+</svg>

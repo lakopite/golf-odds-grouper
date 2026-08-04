@@ -28,7 +28,10 @@ python bundle_frontend.py --result build/result.json --out dist/
 `build/result.json` is the source of truth for that competition: the teams and their
 groups, the odds at the moment they were drawn, both API endpoints, who was excluded
 and why, and the partition's optimality certificate. `dist/*.html` is that file baked
-into a single static page — it opens from disk and needs no server. Whether it polls
+into a single static page — it opens from disk and needs no server. The page is
+`frontend/scoreboard/`, the designed one; `--template frontend/template` bundles the
+plain reference instead, which is the thing to reach for when the question is whether
+the page is wrong or the data is (`frontend/README.md`). Whether it polls
 ESPN for scores is not a setting anybody chooses; it is decided below. The `.zip`
 beside it carries the page, the result JSON and a manifest.
 
@@ -84,6 +87,7 @@ sentence: *"build this week's pool for my-league at the Wyndham"*.
 | | |
 |---|---|
 | `leagues/README.md` | the league file format |
+| `frontend/README.md` | the two templates, and what a third one has to honour |
 | `docs/FRONTEND-SPEC.md` | the scoreboard's design brief and the full result-JSON schema |
 
 ## Quick start — the grouper alone
@@ -224,7 +228,7 @@ unauthenticated leaderboard, and the rule is:
 > separated by their next-best golfer, and so on. Groups are uneven, so a team can run
 > out of golfers partway down — when it does, the team that still has one wins.
 
-`standings.py` implements it and `frontend/template/lib.js` implements it again in the
+`standings.py` implements it and `frontend/lib.js` implements it again in the
 browser, because the browser is where it actually runs. `tests/test_frontend_parity.py`
 feeds both the same payloads and fails if they disagree — two implementations of a rule
 are one implementation and one rumour unless something checks them against each other.
@@ -356,9 +360,10 @@ tournament that has not started. That last one is the fact `build_mode` is read 
 it is worth knowing the day it stops being true. Run them before trusting a season's
 first pull.
 
-Two suites need a runtime beyond Python and skip cleanly without it:
-`test_frontend_parity.py` needs `node`, and `test_frontend_render.py` drives the
-bundled page in a real browser through Playwright.
+Three suites need a runtime beyond Python and skip cleanly without it:
+`test_frontend_parity.py` needs `node`, and `test_scoreboard_render.py` and
+`test_frontend_render.py` drive the two bundled pages in a real browser through
+Playwright.
 
 ## How the grouping works
 

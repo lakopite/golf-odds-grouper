@@ -151,6 +151,13 @@ python bundle_frontend.py --result build/result.json --out dist/
 Writes `dist/<league>-<tournament>.html` (self-contained — opens from disk, no server)
 and a matching `.zip` holding the page, `result.json`, and a manifest.
 
+No `--template` is the right call: the default is the designed scoreboard
+(`frontend/scoreboard/`), which is the page people want to be handed. There is a plain
+reference at `frontend/template/` — `--template frontend/template` — and the only
+reason to bundle it is diagnostic: if a number looks wrong on the designed page, the
+reference draws the same data with no design in the way and says whether the page or
+the file is at fault. Do not hand it over as the deliverable.
+
 Then send both:
 
 ```
@@ -186,6 +193,9 @@ A league file lives in `leagues/`. Two shapes work; prefer the first.
 ```json
 {
   "league_name": "Sunday Fivesome",
+  "tagline": "Season 4",
+  "crest": "logos/example-crest.svg",
+  "banner": "logos/example-banner.svg",
   "teams": [
     { "team_name": "Bogey Boys", "player_name": "Mo", "team_logo": "logos/bogey-boys.svg" },
     { "team_name": "Mulligan Mafia", "player_name": "Luis", "team_logo": null }
@@ -203,6 +213,16 @@ A bare list of team objects also works and takes its league name from the filena
   runs and machines, nothing to persist. `python league.py <file> --write-ids` pins
   them into the file if they ever need to survive a rename.
 - One team = one group. Five teams, five groups.
+
+`crest`, `banner` and `tagline` are the league's own identity and fill the scoreboard's
+masthead — a crest beside the name, a wide banner across the top, a line of small caps
+under the name. All three are optional, all three default to null, and a league with
+none of them gets a page that looks finished anyway; do not invent a tagline nobody
+asked for. Paths resolve against the league file and are inlined as data URIs like the
+team logos, so **keep them small**: anything over 512 KB is refused and left as a path
+that will not resolve in the export, and every inlined byte lands in every copy of the
+page. A crest around 256 px and a banner around 720 px wide is the right order of
+magnitude; a JPEG beats a PNG for a photographic banner by roughly five to one.
 
 Validate before building:
 
@@ -495,12 +515,15 @@ join settled and a handful listed for review (§4.2).
 | `match_review.py` | the worksheet those leftover names get settled in, and the aliases a settlement is worth keeping (§4.2) |
 | `data/espn_aliases.json` | the learned Kalshi → ESPN name aliases. Written only by `--update-aliases`, created on first use, safe to hand-edit |
 | `standings.py` | the standings rule, in Python, for testing |
-| `frontend/template/` | the reference scoreboard — `lib.js` holds the rules |
+| `frontend/scoreboard/` | the designed scoreboard — what a plain bundle produces |
+| `frontend/template/` | the plain reference page, for telling a bad page from bad data |
+| `frontend/lib.js` | the standings rule in JavaScript. One copy, inlined by both |
 | `docs/FRONTEND-SPEC.md` | the design brief and the full result-JSON schema |
 | `groupers.py`, `group.py`, `kalshi_odds.py` | the engine; see README.md |
 
 Do not edit the engine to change a competition. Every knob is a flag.
 
 Tests: `python -m pytest tests/ -q`. The parity test proves `lib.js` and
-`standings.py` agree; the render test drives the bundled page in a real browser.
-Run both after touching the frontend or the standings rule.
+`standings.py` agree; `test_scoreboard_render.py` and `test_frontend_render.py` drive
+the two bundled pages in a real browser. Run all three after touching the frontend or
+the standings rule.
