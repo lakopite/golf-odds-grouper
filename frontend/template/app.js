@@ -54,54 +54,18 @@ function resolvePlayer(golfer) {
 }
 
 /* ------------------------------------------------------------------ *
- * Movement since the draw.
+ * Render
  *
  * The page never fetches odds, and there is no state in which it might. Kalshi
  * allowlists request origins: a GET carrying Origin: https://kalshi.com returns 200,
  * and every other origin -- localhost, GitHub Pages, file:// -- gets a 403 with no
- * CORS headers at all, preflight included (measured 2026-08-03). The odds here are
- * the ones baked into the file, and they are correct as of the time they state.
- *
- * Prices do still move between two copies of the page: somebody re-ran the build with
- * --refresh-odds and re-sent it. That re-read is baked in exactly as the original
- * snapshot is, so it costs no network -- and it is compared against the price the
- * groups were DRAWN on rather than against the raw ask, because those differ on any
- * price mode but the default.
- *
- * Computed once, at load, because it is a pure function of the baked data.
- * ------------------------------------------------------------------ */
-
-var MOVEMENT = (function () {
-  var refreshed = DATA.odds_snapshot.refreshed;
-  if (!refreshed) return null;
-  var byId = new Map();
-  DATA.golfers.forEach(function (g) {
-    if (g.golfer_id && g.odds.current !== null && g.odds.current !== undefined) {
-      byId.set(g.golfer_id, g.odds.current);
-    }
-  });
-  return { byId: byId, sum: refreshed.raw_book_sum, at: new Date(refreshed.at) };
-})();
-
-/* ------------------------------------------------------------------ *
- * Render
+ * CORS headers at all, preflight included (measured 2026-08-03). The odds here are the
+ * ones baked into the file, they were read when the groups were drawn, and there is
+ * exactly one of them per golfer: nothing in this repo produces a second reading, so
+ * nothing on this page shows a price moving.
  * ------------------------------------------------------------------ */
 
 function pct(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
-
-/* Movement, not a second column of levels. The number beside it is what the golfer was
- * worth when the groups were drawn; repeating the re-read price next to it reads as a
- * jump even when nothing has moved, because one is de-vigged and the other is not. What
- * is actually interesting is "shorter than when you drafted him", in points of the same
- * price. Under half a point is not a move worth an arrow. */
-function moveCell(golfer) {
-  if (!MOVEMENT) return '';
-  var now = MOVEMENT.byId.get(golfer.golfer_id);
-  if (now === undefined) return '';
-  var delta = (now - (golfer.odds.raw || 0)) * 100;
-  if (Math.abs(delta) < 0.05) return '→';
-  return (delta > 0 ? '↑ +' : '↓ −') + Math.abs(delta).toFixed(1);
-}
 
 /* One golfer's row. `player` is null before the tournament starts and for anyone who
  * never teed off, and the row still has to say who they are and what they were worth --
@@ -121,7 +85,6 @@ function golferRow(golfer, player) {
   tr.append(el('td', 'gscore', player ? GolfPool.fmtPar(player.toPar) : '—'));
   tr.append(el('td', 'gthru', player ? String(player.thru || player.statusShort || '') : ''));
   tr.append(el('td', 'godds', pct(golfer.odds.grouping_weight)));
-  tr.append(el('td', 'gmove', moveCell(golfer)));
   return tr;
 }
 
@@ -253,27 +216,13 @@ function renderOdds() {
       return e.golfer_name + ' (' + e.reason.replace(/_/g, ' ') + ')';
     }).join(', ') + '.');
   }
-  if (MOVEMENT) {
-    // Not a feed. Somebody re-ran the build against Kalshi and re-sent this page, and
-    // that re-read is baked in exactly as the snapshot is. Saying "live" would promise
-    // a number that will not change until the next rebuild.
-    parts.push('Odds re-read ' + MOVEMENT.at.toLocaleString() + ' when this page was '
-      + 'rebuilt, book then summing to ' + MOVEMENT.sum.toFixed(3)
-      + '. The arrows are movement since the draw; they will not change again until the '
-      + 'next rebuild.');
-    if (snap.refreshed.priced_since_the_draw.length) {
-      parts.push(snap.refreshed.priced_since_the_draw.length + ' golfer(s) were added to the '
-        + 'market after the draw and are in nobody’s group: '
-        + snap.refreshed.priced_since_the_draw.join(', ') + '.');
-    }
-  } else {
-    // Not an apology for a missing feature -- a statement of what these numbers are.
-    // There is no fetch that could make them newer, so there is nothing to promise.
-    parts.push('These are the prices the groups were drawn on. They do not move while '
-      + 'this page is open: Kalshi’s API returns 403 to a browser, so no odds are ever '
-      + 'fetched here. A rebuilt page carries a second reading and shows how far each '
-      + 'price moved.');
-  }
+  // Not an apology for a missing feature -- a statement of what these numbers are.
+  // There is no fetch that could make them newer, and no rebuild that would either:
+  // the odds are read once, when the groups are drawn.
+  parts.push('These are the prices the groups were drawn on. They do not move while '
+    + 'this page is open: Kalshi’s API returns 403 to a browser, so no odds are ever '
+    + 'fetched here. They do not move between two copies of this page either — there '
+    + 'is one reading per competition and this is it.');
   $('#odds-note').textContent = parts.join(' ');
 }
 

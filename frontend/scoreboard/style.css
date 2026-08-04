@@ -278,24 +278,6 @@ body {
   background: var(--gold-wash); border: 1px solid var(--gold-edge-soft); color: var(--gold-dim);
 }
 
-.callout {
-  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 11px;
-  padding: 11px 13px; margin-bottom: 14px;
-  border-radius: 9px;
-  background: var(--panel); border: 1px solid var(--line);
-}
-.callout[hidden] { display: none; }
-.callout-tag {
-  flex: none; padding-top: 2px;
-  font-family: var(--display); font-size: 11px; font-weight: 700;
-  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-4);
-}
-.callout p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-3); max-width: 88ch; text-wrap: pretty; }
-.callout.is-warn { border-color: rgba(217, 164, 65, .4); background: rgba(217, 164, 65, .08); }
-.callout.is-warn .callout-tag { color: var(--warn); }
-.callout.is-bad { border-color: rgba(217, 68, 68, .4); background: rgba(217, 68, 68, .07); }
-.callout.is-bad .callout-tag { color: var(--bad); }
-
 .panel {
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--panel); overflow: hidden;
@@ -427,8 +409,8 @@ td.c-chev { text-align: right; }
 /* Right-aligned columns sit flush against each other, so the padding goes on the left
  * of each -- otherwise "SCORE" and "DRAW" touch the moment a media query drops the
  * column that was between them. */
-.group th.g-score, .group th.g-thru, .group th.g-odds, .group th.g-move, .group th.g-tag,
-.group td.g-score, .group td.g-thru, .group td.g-odds, .group td.g-move, .group td.g-tag {
+.group th.g-score, .group th.g-thru, .group th.g-odds, .group th.g-tag,
+.group td.g-score, .group td.g-thru, .group td.g-odds, .group td.g-tag {
   text-align: right;
   padding-left: 10px;
 }
@@ -438,7 +420,6 @@ td.c-chev { text-align: right; }
 .group .g-thru { width: 56px; }
 .group .g-bar { width: 130px; padding-left: 10px; }
 .group .g-odds { width: 86px; }
-.group .g-move { width: 74px; }
 .group .g-tag { width: 118px; }
 
 /* The weight bar, and only on a groups sheet. Once there are scores the bar is the
@@ -455,7 +436,6 @@ td.g-name { font-size: 12px; color: var(--ink); min-width: 0; }
 td.g-score { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
 td.g-thru { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-6); }
 td.g-odds { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-4); }
-td.g-move { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-4); }
 td.g-tag {
   text-align: right; font-family: var(--display); font-size: 10px; font-weight: 600;
   letter-spacing: .1em; text-transform: uppercase; color: var(--ink-5);
@@ -488,23 +468,6 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
   cursor: pointer;
 }
 .more:hover { color: var(--gold-text); }
-
-/* ------------------------------------------------------------------ *
- * The rank-tier legend
- * ------------------------------------------------------------------ */
-
-.tiers {
-  display: flex; flex-wrap: wrap; gap: 8px 14px;
-  margin-top: 12px; padding: 10px 13px;
-  border-radius: 9px; background: var(--panel); border: 1px solid var(--line);
-  font-size: 11.5px; color: var(--ink-4);
-}
-.tiers[hidden] { display: none; }
-.tiers-title {
-  font-family: var(--display); font-size: 10.5px; font-weight: 600;
-  letter-spacing: .13em; text-transform: uppercase; color: var(--gold);
-}
-.tiers b { color: var(--ink); font-weight: 600; }
 
 /* ------------------------------------------------------------------ *
  * Odds view
@@ -558,22 +521,47 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
 .excl-raw { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink-4); }
 .excl-devig { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--gold); }
 
-.counts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 9px; font-size: 11.5px; color: var(--ink-4); }
-.counts b { font-family: var(--mono); font-weight: 400; color: var(--ink); }
+/* ------------------------------------------------------------------ *
+ * The full draw
+ *
+ * One card per group, in dealt order. The row is the same three-part shape as an
+ * excluded golfer above it -- name, a bar, the price -- because it is the same fact
+ * about a golfer, and reading down a column of bars is how "these groups are worth the
+ * same" stops being a number and starts being obvious.
+ * ------------------------------------------------------------------ */
 
-.note-block { padding: 8px 10px; border-radius: 7px; background: var(--fill-soft); border: 1px solid var(--line); margin-bottom: 7px; }
-.note-block:last-child { margin-bottom: 0; }
-.note-block.is-warn { background: rgba(217, 164, 65, .1); border-color: rgba(217, 164, 65, .3); }
-.note-title {
-  font-family: var(--display); font-size: 10.5px; font-weight: 600;
-  letter-spacing: .12em; text-transform: uppercase; color: var(--ink-4);
+.secthead { margin: 20px 0 10px; }
+.secthead h2 {
+  margin: 0;
+  font-family: var(--display); font-size: 21px; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
 }
-.note-block.is-warn .note-title { color: var(--warn); }
-.note-names { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
-.note-sub { font-size: 11px; color: var(--ink-4); margin-top: 3px; text-wrap: pretty; }
+.secthead p { margin: 3px 0 0; font-size: 12.5px; color: var(--ink-4); text-wrap: pretty; }
 
-.srcs { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--ink-4); }
-.srcs code { font-family: var(--mono); color: var(--ink-3); }
+.card.is-draw-group .card-head { color: var(--gold-text); }
+
+.draw-total {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 9px;
+  padding-bottom: 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.draw-total b {
+  font-family: var(--display); font-size: 24px; font-weight: 700; line-height: 1;
+  color: var(--gold-bright);
+}
+.draw-total span { font-size: 11.5px; color: var(--ink-5); }
+
+.draw-row {
+  display: grid; grid-template-columns: 1fr 92px 68px;
+  gap: 9px; align-items: center;
+  padding: 5px 0; border-bottom: 1px solid var(--line-faint);
+}
+.draw-row:last-child { border-bottom: 0; }
+.draw-name {
+  font-size: 12.5px; color: var(--ink-2);
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.draw-odds { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--gold); }
 
 /* ------------------------------------------------------------------ *
  * Provenance
@@ -635,10 +623,11 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
   .group .g-thru, .group .g-tag, .group .g-bar { display: none; }
   .group .g-score { width: 56px; }
   .group .g-odds { width: 70px; }
-  .group .g-move { width: 62px; }
 
   .cards { grid-template-columns: 1fr; }
   .excl { grid-template-columns: 1fr 62px 58px; }
+  .draw-row { grid-template-columns: 1fr 68px 58px; }
+  .secthead h2 { font-size: 18px; }
 }
 
 /* A group table on a groups-mode page has no positions, scores or thru to show --
@@ -647,6 +636,3 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
 .group.is-draw .g-score,
 .group.is-draw .g-thru,
 .group.is-draw .g-tag { display: none; }
-
-/* No rebuild, no second reading, so no movement column. Not a blank one. */
-.group.no-move .g-move { display: none; }

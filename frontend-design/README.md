@@ -22,17 +22,26 @@ template for what runs.
 | Sidebar crest, name, "10th Anniversary" | `DATA.league.crest` / `.league_name` / `.tagline` |
 | `assets/wcw-banner.png` | `DATA.league.banner`, from the league file |
 | `statusView()` — an editor prop with three settings | the real poll: last good response, staleness, HTTP and event-id errors |
-| `notStarted` — a boolean prop | `DATA.live === null`, and the three separate reasons a live page has nothing to rank |
+| `notStarted` — a boolean prop | `DATA.live === null`. The wireframe's paragraph callout did not ship: which of the several reasons there is nothing to rank is the status pill's job, in two words |
 | Inline `style` on every node | `frontend/scoreboard/style.css`, as classes |
 | The `narrow` flag and its resize listener | media queries at 760px |
 | Google Fonts `<link>` | the same families named first, over a system stack |
-| Sample "Excluded", "Grouping certificate", "Name join" cards | `odds_snapshot`, `grouping`, `sources.espn.match_report` |
+| Sample "Excluded" and "Grouping certificate" cards | `odds_snapshot`, `grouping` |
+| The full draw, group by group | `DATA.teams` and `DATA.golfers[].odds.grouping_weight` |
 | Editor props (`buildMode`, `espnState`, `showAnnotations`) | facts in the file, or state from the network. Nothing is a setting |
 
 Two things in the wireframe deliberately did **not** ship: the developer annotation
 chips (`GolfPool.computeStandings()`, `build_mode: "groups"`) became factual badges
 about the competition instead, and the hard-coded "12 teams · 105 golfers grouped" line
 became the real counts.
+
+Four things were later taken **out** of both, and the wireframe was edited to match:
+the "Prices do not move here" card and the movement column it described (there is one
+price per golfer now — see `docs/FRONTEND-SPEC.md` §4), the "Name join" card, the
+"Where the numbers came from" card, and the not-started paragraph and rank-tier legend
+on the standings view. All of them were accurate; all of them were read by the person
+who built the page rather than by the league, and they crowded out the two cards and
+the full draw that answer the question the page exists for.
 
 ## Changing the design
 

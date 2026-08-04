@@ -307,6 +307,25 @@ def test_golfers_are_listed_strongest_first():
     assert raw == sorted(raw, reverse=True)
 
 
+def test_the_result_records_no_price_read_after_the_groups_were_drawn():
+    """
+    `not in`, never `is None`. A field present and null is a slot waiting to be filled,
+    and the whole claim is that there is no slot: the odds were read once, when the
+    groups were drawn, and that reading is the competition.
+
+    Without this, a half-finished removal -- flag gone, function gone, frontend gone,
+    assemble() still writing `"current": null` onto all 150 golfers forever -- leaves
+    the suite completely green.
+    """
+    both_halves = (make_result(),
+                   make_result(espn=live_stage([golfer_name(0), golfer_name(1)])))
+    for result in both_halves:
+        assert "refreshed" not in result["odds_snapshot"]
+        assert all("current" not in g["odds"] for g in result["golfers"])
+        assert all(set(g["odds"]) == {"raw", "devigged", "grouping_weight"}
+                   for g in result["golfers"])
+
+
 def test_the_result_records_where_every_number_came_from():
     result = make_result()
     k = result["sources"]["kalshi"]

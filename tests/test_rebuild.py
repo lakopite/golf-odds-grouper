@@ -595,10 +595,6 @@ def test_the_mode_a_file_was_built_in_is_readable_without_the_key(result_file):
     assert bc.prior_build_mode({}) == "groups"
 
 
-# ---------------------------------------------------------------------------
-# --refresh-odds
-# ---------------------------------------------------------------------------
-
 def kalshi_market(golfer, ask, ticker=None):
     return {"ticker": ticker or f"KX-{golfer['golfer_id']}", "status": "active",
             "yes_sub_title": golfer["name"], "yes_bid_dollars": f"{max(ask - 0.001, 0):.4f}",
@@ -607,82 +603,77 @@ def kalshi_market(golfer, ask, ticker=None):
             "price_level_structure": "tapered_deci_cent"}
 
 
-@pytest.fixture
-def moving_market(monkeypatch, result_file):
-    """The same field, one price up, one golfer gone, one golfer new."""
-    _, result = result_file
-    golfers = result["golfers"]
-    markets = [kalshi_market(g, g["odds"]["raw"]) for g in golfers[1:]]
-    markets[0] = kalshi_market(golfers[1], golfers[1]["odds"]["raw"] + 0.01)
-    markets.append({"ticker": "KX-NEW", "status": "active", "yes_sub_title": "Monday Qualifier",
-                    "yes_bid_dollars": "0.0010", "yes_ask_dollars": "0.0020",
-                    "last_price_dollars": "0.0020",
-                    "custom_strike": {"golf_competitor": "new-id"}})
-    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: markets)
-    return result
+# ---------------------------------------------------------------------------
+# A rebuild does not go back to the market
+#
+# There was once a --refresh-odds flag that re-read Kalshi during a rebuild and baked
+# a second price in beside the drawn one. It is gone. The odds are read once, when the
+# groups are drawn, and a league mate looking at two prices for the same golfer -- one
+# he was dealt on, one he was not -- reasonably concluded the draw was being fiddled
+# with after the fact. These are the tests that keep the second price from coming back.
+# ---------------------------------------------------------------------------
 
-
-def test_refreshed_odds_sit_beside_the_drawn_ones_never_on_top_of_them(result_file, espn_field,
-                                                                      moving_market, tmp_path):
-    path, before = result_file
+def test_a_rebuild_writes_no_price_that_was_read_after_the_draw(result_file, espn_field,
+                                                                tmp_path):
+    """
+    Not `is None` -- `not in`. A field that is present and null is a slot waiting to be
+    filled, and the whole point is that there is no slot.
+    """
+    path, _ = result_file
     out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--refresh-odds", "--output", out])
+    run(["--from-result", path, "--output", out])
     after = rebuilt(out)
 
-    moved = next(g for g in after["golfers"] if g["name"] == before["golfers"][1]["name"])
-    assert moved["odds"]["raw"] == before["golfers"][1]["odds"]["raw"], "the draw price is fixed"
-    assert moved["odds"]["current"] == pytest.approx(moved["odds"]["raw"] + 0.01)
-    assert after["odds_snapshot"]["captured_at"] == before["odds_snapshot"]["captured_at"]
-    assert after["odds_snapshot"]["refreshed"]["at"] == after["generated_at"]
-    assert after["rebuilt_from"]["mode"] == "refresh-odds"
+    assert "refreshed" not in after["odds_snapshot"]
+    assert all("current" not in g["odds"] for g in after["golfers"])
+    assert all(set(g["odds"]) == {"raw", "devigged", "grouping_weight"}
+               for g in after["golfers"])
 
 
-def test_a_refresh_names_the_golfers_who_left_and_arrived(result_file, espn_field, moving_market,
-                                                          tmp_path):
+def test_a_rebuild_never_calls_kalshi_at_all(result_file, espn_field, monkeypatch, tmp_path):
     """
-    Two facts the pool will argue about: a drawn golfer with no market has been pulled
-    off the board, and a golfer priced after the draw is in nobody's group.
+    The strongest form of the claim, and the one that cannot rot: not "it ignores what
+    it read" but "it does not read". Any call at all detonates.
     """
-    path, before = result_file
-    out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--refresh-odds", "--output", out])
-    refreshed = rebuilt(out)["odds_snapshot"]["refreshed"]
-
-    assert refreshed["no_longer_priced"] == [before["golfers"][0]["name"]]
-    assert refreshed["priced_since_the_draw"] == ["Monday Qualifier"]
-    assert refreshed["matched"] == len(before["golfers"]) - 1
-
-
-def test_a_settled_market_carries_the_snapshot_rather_than_failing(result_file, espn_field,
-                                                                   monkeypatch, tmp_path, capsys):
-    """
-    Rebuilding after the tournament is a normal thing to want -- the final leaderboard
-    is the interesting one. Every market has settled by then, so there is nothing live
-    to read, and that is not a reason to refuse to write the file.
-    """
-    path, before = result_file
-    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
-        {"ticker": "KX-1", "status": "settled", "yes_sub_title": "Golfer 00",
-         "yes_bid_dollars": "0.0000", "yes_ask_dollars": "1.0000"}])
-    out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--refresh-odds", "--output", out])
-
-    after = rebuilt(out)
-    assert after["odds_snapshot"]["refreshed"] is None
-    assert after["odds_snapshot"]["raw_book_sum"] == before["odds_snapshot"]["raw_book_sum"]
-    assert all(g["odds"]["current"] is None for g in after["golfers"])
-    assert "settled" in capsys.readouterr().out
-
-
-def test_a_kalshi_outage_does_not_take_the_rebuild_with_it(result_file, espn_field, monkeypatch,
-                                                           tmp_path):
     def boom(*a, **kw):
-        raise RuntimeError("rate limited (429)")
+        raise AssertionError("a rebuild asked Kalshi for prices")
 
     monkeypatch.setattr(bc.kalshi_odds, "markets_for", boom)
     out = str(tmp_path / "after.json")
-    run(["--from-result", result_file[0], "--refresh-odds", "--output", out])
-    assert rebuilt(out)["odds_snapshot"]["refreshed"] is None
+    run(["--from-result", result_file[0], "--output", out])
+    assert rebuilt(out)["odds_snapshot"]["captured_at"] == result_file[1][
+        "odds_snapshot"]["captured_at"]
+
+
+def test_the_flag_that_used_to_re_read_the_market_is_gone(result_file):
+    """
+    argparse exits 2 on an unknown flag, which is what we want -- but SystemExit alone
+    would also be raised by a dozen unrelated failures, so the message is checked too.
+    """
+    with pytest.raises(SystemExit):
+        bc.main(["--from-result", result_file[0], "--refresh-odds"])
+
+
+def test_a_rebuild_says_it_is_a_refresh_and_never_a_refresh_of_odds(result_file, espn_field,
+                                                                    tmp_path):
+    out = str(tmp_path / "after.json")
+    run(["--from-result", result_file[0], "--output", out])
+    assert rebuilt(out)["rebuilt_from"]["mode"] == "refresh"
+
+
+def test_a_rebuild_at_a_different_price_does_not_relabel_the_drawn_snapshot(result_file,
+                                                                            espn_field,
+                                                                            tmp_path):
+    """
+    `--price mid` on a rebuild cannot make Wednesday's ask prices retroactively mids.
+    The snapshot keeps the mode it was actually read at.
+    """
+    path, before = result_file
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--price", "mid", "--output", out])
+    after = rebuilt(out)
+    assert after["odds_snapshot"]["price_mode"] == before["odds_snapshot"]["price_mode"]
+    assert after["sources"]["kalshi"]["price_mode"] == before["sources"]["kalshi"]["price_mode"]
 
 
 # ---------------------------------------------------------------------------
@@ -699,16 +690,25 @@ def test_regroup_refuses_to_overwrite_the_draw_it_read(result_file, tmp_path):
         bc.main(["--from-result", path, "--regroup", "--output", path])
 
 
-def test_regroup_and_refresh_odds_are_not_a_combination(result_file, espn_field, monkeypatch,
-                                                        tmp_path, capsys):
-    """--regroup already pulls fresh odds; there is nothing left for --refresh-odds."""
+def test_regroup_is_the_only_rebuild_that_reads_kalshi_at_all(result_file, espn_field,
+                                                              monkeypatch, tmp_path):
+    """
+    A regroup re-partitions, so it needs today's book -- and the prices it reads become
+    the odds at creation of a NEW draw, which is the only honest way a competition ever
+    gets a second set of prices.
+    """
     path, result = result_file
-    monkeypatch.setattr(bc.kalshi_odds, "markets_for",
-                        lambda *a, **kw: [kalshi_market(g, g["odds"]["raw"])
-                                          for g in result["golfers"]])
-    run(["--from-result", path, "--regroup", "--refresh-odds", "--time-limit", "0.5",
-         "--output", str(tmp_path / "out.json")])
-    assert "ignored" in capsys.readouterr().out
+    reads = []
+
+    def markets(*a, **kw):
+        reads.append(a)
+        return [kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]]
+
+    monkeypatch.setattr(bc.kalshi_odds, "markets_for", markets)
+    out = str(tmp_path / "out.json")
+    run(["--from-result", path, "--regroup", "--time-limit", "0.5", "--output", out])
+    assert reads, "a regroup has to price the field it is dealing"
+    assert "refreshed" not in rebuilt(out)["odds_snapshot"]
 
 
 def test_regroup_partitions_the_new_field_and_says_it_was_a_regroup(result_file, espn_field,
@@ -731,13 +731,15 @@ def test_regroup_partitions_the_new_field_and_says_it_was_a_regroup(result_file,
 # The flags that only mean something together
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("argv", [
-    ["--league", "x.json", "--tournament", "wyndham", "--refresh-odds"],
-    ["--league", "x.json", "--tournament", "wyndham", "--regroup"],
-])
-def test_the_rebuild_flags_need_a_rebuild(argv):
+def test_regroup_needs_a_rebuild(capsys):
+    """
+    Checked on the message, not just on SystemExit: argparse exits 2 for any of a dozen
+    reasons, so `pytest.raises(SystemExit)` alone would keep passing if the flag were
+    quietly removed.
+    """
     with pytest.raises(SystemExit):
-        bc.main(argv)
+        bc.main(["--league", "x.json", "--tournament", "wyndham", "--regroup"])
+    assert "--regroup only means something with --from-result" in capsys.readouterr().err
 
 
 def test_a_build_needs_either_a_league_or_a_result_file():
@@ -847,25 +849,6 @@ def test_the_tournaments_dates_and_course_survive_an_espn_outage(result_file, mo
     assert after["course"] == {"name": "Sedgefield CC", "par": 70}
     # But not the state: this run could not read it, so it does not claim to know it.
     assert after["state_at_build"] is None
-
-
-def test_a_rebuild_at_a_different_price_does_not_relabel_the_drawn_snapshot(result_file,
-                                                                            espn_field,
-                                                                            moving_market,
-                                                                            tmp_path):
-    """
-    `--price mid --refresh-odds` is a legitimate request: read today's book at the mid.
-    It must not make Wednesday's ask prices retroactively mids -- the page would print
-    "mid book summing to 1.31, captured <Wednesday>", which is simply false.
-    """
-    path, before = result_file
-    out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--refresh-odds", "--price", "mid", "--output", out])
-    after = rebuilt(out)
-
-    assert after["odds_snapshot"]["price_mode"] == before["odds_snapshot"]["price_mode"] == "ask"
-    assert after["sources"]["kalshi"]["price_mode"] == "ask"
-    assert after["odds_snapshot"]["refreshed"]["price_mode"] == "mid"
 
 
 def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, espn_field,
