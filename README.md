@@ -71,9 +71,9 @@ hand-picked exclusions, the seed and any reviewed golfer-name decisions all come
 out of the file. The groups and the odds they were drawn on are carried forward
 untouched — **a rebuild never re-deals**, because people have already been told which
 golfers they own — and the parts that have a "now" are redone: above all the ESPN side,
-which on Wednesday had no field to work with and on Thursday has one. Add
-`--refresh-odds` to record what the market says today alongside the prices the groups
-were drawn on, or `--regroup` to pull fresh odds and partition again, which is the one
+which on Wednesday had no field to work with and on Thursday has one. It does not go
+back to Kalshi: the odds were read once, when the groups were drawn, and that reading
+is the competition. `--regroup` pulls fresh odds and partitions again, which is the one
 that deals everybody new golfers and says so.
 
 A rebuild that finds no field where the last one found 150 competitors is refused
@@ -350,10 +350,16 @@ Its API allowlists request origins — `kalshi.com` gets a 200, every other orig
 including `localhost` and `file://` gets a 403 with no CORS headers. The exported page
 therefore fetches at most one thing, the ESPN leaderboard, and in `groups` mode not even
 that; its odds are baked in and time-stamped as of the draw. There are no live odds and
-no relay to configure, in either mode. The one way to show prices moving is to rebuild
-with `--refresh-odds`, which re-reads Kalshi server-side and bakes a second reading in
-beside the first; the page shows the movement since the draw and says it is frozen until
-the next rebuild.
+no relay to configure, in either mode.
+
+There is no way to show prices moving either, and that is deliberate. A rebuild used to
+be able to re-read Kalshi server-side and bake a second price in beside the drawn one,
+which the page rendered as an arrow. It was accurate and it was a mistake: a golfer
+showing two prices — the one his group was dealt on, and one from three days later —
+reads as a draw being quietly adjusted after the fact, and a fairness claim that has to
+be explained is not doing its job. One reading per competition, taken when the groups
+are drawn. `--regroup` is the only thing that ever prices a field again, and it deals a
+whole new draw when it does.
 
 ## Tests
 

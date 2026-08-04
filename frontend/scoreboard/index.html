@@ -81,11 +81,6 @@
         <div class="chips" id="standings-chips"></div>
       </div>
 
-      <div class="callout" id="not-started" hidden>
-        <span class="callout-tag" id="not-started-tag">Not started</span>
-        <p id="not-started-note"></p>
-      </div>
-
       <div class="panel">
         <div class="panel-head">
           <span class="panel-title" id="board-title">League table</span>
@@ -105,8 +100,6 @@
           </thead>
         </table>
       </div>
-
-      <div class="tiers" id="tiers" hidden></div>
     </section>
 
     <!-- View 2: what everyone was worth, and the proof the draw came out even. -->
@@ -114,13 +107,21 @@
       <div class="viewhead">
         <div>
           <h1>Odds &amp; the draw</h1>
-          <p class="viewsub">What every golfer was worth when the groups were drawn, and the
-            proof the draw came out even.</p>
+          <!-- Kept on one line on purpose: two suites assert this phrase, and a source
+               wrap puts a newline and eleven spaces through the middle of it. -->
+          <p class="viewsub">These are the prices the groups were drawn on, and they will not change &mdash; no odds are ever fetched here.</p>
         </div>
       </div>
 
       <div class="tiles" id="odds-tiles"></div>
       <div class="cards" id="odds-cards"></div>
+
+      <div class="secthead">
+        <h2>The full draw</h2>
+        <p>Every group as it was dealt, and what each golfer was worth at the moment
+          the groups were drawn.</p>
+      </div>
+      <div class="cards" id="odds-draw"></div>
     </section>
 
     <footer class="prov">

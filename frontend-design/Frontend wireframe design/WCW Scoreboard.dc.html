@@ -80,13 +80,6 @@ a:hover{color:#f7e8c2}
           </sc-if>
         </div>
 
-        <sc-if value="{{ notStarted }}" hint-placeholder-val="{{ false }}">
-          <div style="display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px 11px;padding:11px 13px;margin-bottom:14px;border-radius:9px;background:#101d3b;border:1px solid rgba(143,163,200,.25)">
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#8fa3c8;padding-top:2px;flex:none">Not started</span>
-            <p style="margin:0;font-size:13px;line-height:1.5;color:#c8d3e6;max-width:88ch;text-wrap:pretty">ESPN had published no field when this page was made, so no golfer has a position and nothing is ranked on play. The same table stands, ordered by the price each group was drawn at — every team sits within a tick of 8.33%. It fetches nothing and will not change until somebody rebuilds it.</p>
-          </div>
-        </sc-if>
-
         <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;overflow:hidden;background:#0d1730">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08)">
             <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#f2f5fb">{{ tableTitle }}</span>
@@ -152,15 +145,6 @@ a:hover{color:#f7e8c2}
           </sc-for>
         </div>
 
-        <sc-if value="{{ isLive }}" hint-placeholder-val="{{ true }}">
-          <div style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:12px;padding:10px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08);font-size:11.5px;color:#8fa3c8">
-            <span style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#d4af5f">Rank tiers</span>
-            <span><span style="color:#eef2fa">0</span> in the tournament — displayed position</span>
-            <span><span style="color:#eef2fa">1</span> cut / WD / DQ — ESPN sortOrder</span>
-            <span><span style="color:#eef2fa">2</span> no ESPN athlete — absent or unresolved</span>
-            <span><span style="color:#eef2fa">3</span> padding — team has no golfer this deep</span>
-          </div>
-        </sc-if>
       </section>
     </sc-if>
 
@@ -175,22 +159,22 @@ a:hover{color:#f7e8c2}
           <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Field priced</div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">107</div>
-            <div style="font-size:11px;color:#8fa3c8">105 grouped · 2 excluded</div>
+            <div style="font-size:11px;color:#8fa3c8">105 went into the groups · 2 left out</div>
           </div>
           <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Book sum</div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">1.166</div>
-            <div style="font-size:11px;color:#8fa3c8">ask prices · probability basis</div>
+            <div style="font-size:11px;color:#8fa3c8">what the raw prices added up to, before they were levelled out</div>
           </div>
           <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Captured</div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">12 Aug</div>
-            <div style="font-size:11px;color:#8fa3c8">18:05 UTC · never moves</div>
+            <div style="font-size:11px;color:#8fa3c8">18:05 UTC · the odds never change after this</div>
           </div>
           <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(212,175,95,.3)">
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#c9a961">Fair share</div>
             <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f0dcae;line-height:1.15">8.33%</div>
-            <div style="font-size:11px;color:#8fa3c8">1/12 · auto-exclude on</div>
+            <div style="font-size:11px;color:#8fa3c8">what each of the 12 groups is aiming for</div>
           </div>
         </div>
 
@@ -224,46 +208,32 @@ a:hover{color:#f7e8c2}
               <div style="margin-top:9px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fa3c8;word-break:break-word">group_sizes {{ groupSizes }}</div>
             </div>
           </div>
+        </div>
 
-          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
-            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Prices do not move here</div>
-            <div style="padding:11px 12px">
-              <p style="margin:0;font-size:12.5px;line-height:1.55;color:#c8d3e6;text-wrap:pretty">These are the prices the groups were drawn on. They do not move while this page is open: Kalshi's API returns 403 to every browser origin, so no odds are ever fetched here. A rebuilt page carries a second reading and shows how far each price moved.</p>
-              <div style="margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07);font-size:11.5px;color:#8fa3c8;text-wrap:pretty">This page has no movement column, and that is the default — not a blank one, not a spinner.</div>
-            </div>
-          </div>
+        <div style="margin:20px 0 10px">
+          <h2 style="margin:0;font-family:'Barlow Condensed',sans-serif;font-size:21px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#f2f5fb">The full draw</h2>
+          <p style="margin:3px 0 0;font-size:12.5px;color:#8fa3c8;text-wrap:pretty">Every group as it was dealt, and what each golfer was worth at the moment the groups were drawn.</p>
+        </div>
 
-          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
-            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Name join · needs review</div>
-            <div style="padding:10px 12px">
-              <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:9px;font-size:11.5px;color:#8fa3c8">
-                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">100</span> matched</span>
-                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">95</span> exact</span>
-                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">4</span> decision</span>
-                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">1</span> alias</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:7px">
-                <div style="padding:8px 10px;border-radius:7px;background:rgba(217,164,65,.1);border:1px solid rgba(217,164,65,.3)">
-                  <div style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#d9a441">Unresolved — nobody has looked yet</div>
-                  <div style="font-size:12px;color:#dce4f2;margin-top:2px">Hao-Tong Li, Jordan L. Smith</div>
-                  <div style="font-size:11px;color:#8fa3c8;margin-top:3px;text-wrap:pretty">Unscoreable for the life of this page. The fix is a rebuild, not a refresh.</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px">
+          <sc-for value="{{ drawGroups }}" hint-placeholder-len="4">
+            <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
+              <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#e8cf94">{{ g.team }}</div>
+              <div style="padding:11px 12px">
+                <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 9px;padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid rgba(255,255,255,.055)">
+                  <span style="font-family:'Barlow Condensed',sans-serif;font-size:24px;font-weight:700;color:#f0dcae;line-height:1">{{ g.total }}</span>
+                  <span style="font-size:11.5px;color:#7d8dab">{{ g.sub }}</span>
                 </div>
-                <div style="padding:8px 10px;border-radius:7px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
-                  <div style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#8fa3c8">Absent — checked and confirmed out</div>
-                  <div style="font-size:12px;color:#dce4f2;margin-top:2px">Jason Day, Taylor Moore, Daniel Brown — all withdrawn before play</div>
-                </div>
+                <sc-for value="{{ g.golfers }}" hint-placeholder-len="9">
+                  <div style="display:grid;grid-template-columns:1fr 92px 68px;gap:9px;align-items:center;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+                    <span style="font-size:12.5px;color:#dce4f2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ n.name }}</span>
+                    <span style="display:block;height:3px;border-radius:2px;background:rgba(255,255,255,.04)"><i style="display:block;height:3px;border-radius:2px;background:#d4af5f;width:{{ n.bar }}"></i></span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#d4af5f">{{ n.odds }}</span>
+                  </div>
+                </sc-for>
               </div>
             </div>
-          </div>
-
-          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
-            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Where the numbers came from</div>
-            <div style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:#8fa3c8">
-              <span>Kalshi <span style="font-family:'IBM Plex Mono',monospace;color:#c8d3e6">KXPGATOUR-WYC26</span> · Outright Winner · ask · mutually exclusive</span>
-              <span>ESPN <span style="font-family:'IBM Plex Mono',monospace;color:#c8d3e6">pga / 401811961</span> · {{ pollLine }}</span>
-              <span>{{ rebuildLine }}</span>
-            </div>
-          </div>
+          </sc-for>
         </div>
       </section>
     </sc-if>
@@ -578,7 +548,7 @@ class Component extends DCLogic {
       rootRef: this.rootRef,
       annot: this.props.showAnnotations !== false,
       isStandings: view === "standings", isOdds: view === "odds",
-      isLive: live, notStarted: !live,
+      isLive: live,
       navStandings: function () { self.setState({ view: "standings" }); },
       navOdds: function () { self.setState({ view: "odds" }); },
       navInkStandings: view === "standings" ? "#f0dcae" : "#c8d3e6",
@@ -604,8 +574,8 @@ class Component extends DCLogic {
       h1Size: narrow ? "24px" : "30px",
 
       standSub: live
-        ? "Round 3 \u00b7 best leaderboard position held, ties broken on the next golfer down"
-        : "Ordered by the price each group was drawn at. Nothing is ranked on play.",
+        ? "Round 3 \u00b7 best position held wins"
+        : "The draw. Nothing is ranked yet.",
       standChips: live
         ? [{ text: "GolfPool.computeStandings()" }, { text: "lib.js verbatim \u2014 parity test covers this page" }]
         : [{ text: 'build_mode: "groups"' }, { text: "DATA.live === null \u2192 no poll, no request" }, { text: "sort: teams[].total_odds desc" }],
@@ -638,18 +608,26 @@ class Component extends DCLogic {
       oddsCols: narrow ? "1fr" : "repeat(auto-fit,minmax(310px,1fr))",
       exclCols: narrow ? "1fr 62px 58px" : "1fr 78px 70px",
       groupSizes: "[" + d.sizes.join(", ") + "]",
+      // The full draw, in dealt order. Every group and every golfer in it at the price
+      // it was dealt at -- the working behind the certificate above.
+      drawGroups: d.teams.map(function (t) {
+        return {
+          team: t.name,
+          total: (t.total * 100).toFixed(2) + "%",
+          sub: "group " + t.groupNo + " of " + d.teams.length + " \u00b7 "
+            + t.roster.length + " golfers \u00b7 " + t.owner,
+          golfers: t.byWeight.map(function (g) {
+            return { name: g.name, bar: g.barW, odds: (g.weight * 100).toFixed(2) + "%" };
+          })
+        };
+      }),
+      // pollLine / rebuildLine lived here for the "Where the numbers came from" card,
+      // which went with the name-join card: both were provenance nobody read on a
+      // Sunday, and the event ids they named now sit in the footer of the real page.
       excluded: [
-        { name: "Ludvig \u00c5berg", why: "over_fair_share \u2014 above 1/12 of the book", raw: "14.0%", devig: "12.01%" },
-        { name: "Justin Thomas", why: "named \u2014 excluded by the commissioner", raw: "3.6%", devig: "3.09%" }
-      ],
-      pollLine: live
-        ? (this.props.espnState === "down"
-          ? "poll failed \u00b7 last good board 20:44:31"
-          : "polling every 60s \u00b7 last poll 20:52:07")
-        : "nothing is fetched by this page",
-      rebuildLine: live
-        ? "Rebuilt 15 Aug 2026 20:38 UTC \u00b7 static odds, live board"
-        : "Built 12 Aug 2026 18:07 UTC \u00b7 static page, no requests"
+        { name: "Ludvig \u00c5berg", why: "worth more than a whole group\u2019s share of the field (1 in 12)", raw: "14.0%", devig: "12.01%" },
+        { name: "Justin Thomas", why: "left out on purpose when the pool was set up", raw: "3.6%", devig: "3.09%" }
+      ]
     };
   }
 }

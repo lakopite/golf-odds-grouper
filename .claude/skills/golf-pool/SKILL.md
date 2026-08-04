@@ -1,6 +1,6 @@
 ---
 name: golf-pool
-description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file, to rebuild or refresh an existing competition from its result.json ("update the scoreboard", "refresh the odds", "the tournament has started", "redraw the groups"), or to match Kalshi golfer names to ESPN athletes - including settling the golfers a build reported as NEEDS REVIEW or unresolved, by filling in the decisions in a match-review.json and rebuilding.
+description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file, to rebuild an existing competition from its result.json ("update the scoreboard", "the tournament has started", "redraw the groups", or "refresh the odds" - which routes here so §6 can explain that odds are read once, at the draw, and never re-read), or to match Kalshi golfer names to ESPN athletes - including settling the golfers a build reported as NEEDS REVIEW or unresolved, by filling in the decisions in a match-review.json and rebuilding.
 ---
 
 # Golf pool
@@ -303,7 +303,6 @@ the same directory either way, because the review file (§4.2) lives beside `--o
 | The scoreboard, now play has started | *(nothing — this is the default)* |
 | The golfers that came back NEEDS REVIEW settled | `--match-review build/match-review.json` (§4.2) |
 | Those name bindings kept for next week | `--update-aliases` (§4.2) |
-| Today's prices shown against the drawn ones | `--refresh-odds` |
 | A genuinely new draw | `--regroup` |
 | The same groups, a new frontend | nothing — re-bundle (§4.3) |
 
@@ -322,14 +321,6 @@ finds none stops without writing. ESPN does not unpublish a field, so that is a 
 read rather than news, and rebuilding on it would null out a working scoreboard and look
 like a normal build. The file you passed is untouched; try again, or pin the event with
 `--espn-event <id>` if the lookup is what is failing.
-
-**`--refresh-odds`.** Also re-reads Kalshi and records what the market says now, in
-`odds_snapshot.refreshed` and `golfers[].odds.current`. The odds at creation do not
-move. This is the **only** way the exported page ever shows prices changing (§6) — the
-page presents them as movement since the draw, frozen until the next rebuild. It also
-names golfers priced after the draw who are in nobody's group, and drawn golfers whose
-market has gone. Re-send the page afterwards; a copy somebody already has will not
-update itself.
 
 **`--regroup`.** Pulls fresh odds and partitions again. **Every team gets a different
 group.** Only do this if they have asked for a redraw and nobody is holding the old
@@ -481,7 +472,7 @@ Everything is in there; read it rather than recomputing.
 | Why did I get this group? | `grouping.summary`, `grouping.optimal`, `generator.seed` |
 | Was the draw fair? | `teams[].total_odds` — all ≈ 1/n |
 | Why is X missing? | `odds_snapshot.excluded[]`, with a reason each |
-| What was X worth? | `golfers[].odds` — `raw`, `devigged`, `grouping_weight`, `current` |
+| What was X worth? | `golfers[].odds` — `raw`, `devigged`, `grouping_weight` |
 | Is X actually playing? | `golfers[].espn.in_field` — true, false (checked, and they are not), or null (nobody has looked) |
 | Who is X on ESPN, and how do we know? | `golfers[].espn.athlete_id` / `.display_name`, and `.match` — `exact`, `alias`, `decision`, `absent` or `unresolved` |
 | Which golfers still need a decision? | `sources.espn.match_report.unresolved`, beside `.absent` for the ones already settled (§4.2) |
@@ -510,10 +501,12 @@ exported page therefore fetches **one** thing, the ESPN leaderboard, and carries
 odds baked in: real, time-stamped, and fixed as of the draw. There is no relay flag and
 no live-odds setting to look for. **Never offer or promise live odds.**
 
-There is one honest way to show prices moving: rebuild with `--refresh-odds` (§4) and
-re-send the page. That bakes a second reading in beside the first, and the page shows
-the movement since the draw. It is a new page each time, not a feed — say that rather
-than calling it live.
+There is no honest way to show prices moving at all, so do not look for one. A rebuild
+used to be able to re-read the market and bake a second price in beside the drawn one;
+that was removed, because a golfer showing two prices — the one his group was dealt on
+and one from three days later — reads as a draw being adjusted after the fact. One
+reading per competition, taken when the groups are drawn. `--regroup` prices a field
+again only because it is dealing a completely new draw.
 
 **ESPN publishes no field before the tournament starts.** A `pre` event returns zero
 competitors, so on Wednesday night there is nobody to join the Kalshi names against — no

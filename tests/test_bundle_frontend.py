@@ -298,6 +298,20 @@ def test_a_shipped_template_reaches_no_host_at_all_from_its_markup(result, shipp
 
 
 @pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)
+def test_no_shipped_template_still_knows_how_to_draw_a_price_moving(result, shipped, tmp_path):
+    """
+    A markup-level guard, because the two render suites can only prove a page does not
+    draw movement for the data they happen to feed it. This proves the code to draw it
+    is not in the bundle at all -- on both templates, in one place, whatever a future
+    result file happens to contain.
+    """
+    markup = read_html(bundler.bundle(result, shipped, str(tmp_path / "out"))[0])
+    for gone in ("MOVEMENT", "moveCell", "g-move", "gmove",
+                 "odds_snapshot.refreshed", "odds.current", "refresh-odds"):
+        assert gone not in markup, gone
+
+
+@pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)
 def test_a_shipped_template_carries_the_one_copy_of_the_standings_rule(shipped):
     """
     `../lib.js`, above both template directories. Two copies of the rule that decides

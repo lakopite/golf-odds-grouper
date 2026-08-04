@@ -92,10 +92,16 @@ def test_it_never_asks_kalshi_for_anything(page):
     remote = [u for u in page["requests"] if not u.startswith(("file://", "data:"))]
     assert not [u for u in remote if "kalshi" in u.lower()], remote
 
-    page["page"].locator("#tab-odds").click()
-    text = page["page"].locator("#odds-cards").text_content()
+    p = page["page"]
+    p.locator("#tab-odds").click()
+    text = p.locator("#view-odds").text_content()
     assert "no odds are ever fetched here" in text
     assert "Live odds" not in text
+    # That sentence is static markup, so on its own it would hold however badly the view
+    # were broken. Pair it with the view having actually rendered: a JS error that left
+    # the odds panel empty must not read as "the page correctly says it fetches nothing".
+    assert p.locator("#odds-tiles .tile").count() == 4
+    assert p.locator("#odds-cards .card").count() == 2
 
 
 def test_no_webfont_or_other_cdn_is_referenced(competition):
@@ -163,13 +169,6 @@ def test_cut_golfers_are_listed_and_visibly_out(page, competition):
     assert all(t.strip() for t in tags)
 
 
-def test_the_rule_the_page_is_running_is_on_the_page(page):
-    tiers = page["page"].locator("#tiers")
-    assert tiers.is_visible()
-    text = tiers.text_content()
-    assert "padding" in text and "cut" in text
-
-
 # ---------------------------------------------------------------------------
 # The margin is the content
 # ---------------------------------------------------------------------------
@@ -222,8 +221,21 @@ def test_the_odds_view_states_the_snapshot_and_when_it_was_taken(page, competiti
     tiles = page["page"].locator("#odds-tiles").text_content()
     assert str(snap["field_size"]) in tiles
     assert str(snap["raw_book_sum"]) in tiles
-    assert snap["price_mode"] in tiles
-    assert "never moves" in tiles
+    assert "the odds never change after this" in tiles
+
+
+def test_the_tiles_explain_themselves_without_the_jargon(page):
+    """
+    These four numbers are read by people who have never priced a book. "ask prices ·
+    probability basis" is accurate and it is also the sentence that gets a scoreboard
+    accused of hiding something.
+    """
+    page["page"].locator("#tab-odds").click()
+    tiles = page["page"].locator("#odds-tiles").text_content()
+    for jargon in ("probability basis", "share of the slots", "auto-exclude", "1/"):
+        assert jargon not in tiles, jargon
+    assert "went into the groups" in tiles
+    assert "is aiming for" in tiles
 
 
 def test_the_optimality_certificate_is_shown(page, competition):
@@ -240,6 +252,64 @@ def test_the_optimality_certificate_is_shown(page, competition):
     assert not re.search(r"\d[eE][-+]\d", text), "no float noise in a display face"
 
 
+def test_the_odds_view_carries_only_the_draw_and_nothing_that_needs_explaining(page):
+    """
+    The odds view is read by the league, not by whoever built it. Three cards were
+    removed from it -- a prices/movement card, a name-join report and a list of API
+    endpoints -- because each one raised a question the reader could not act on, and
+    two of them described machinery rather than the pool.
+    """
+    page["page"].locator("#tab-odds").click()
+    cards = page["page"].locator("#odds-cards")
+    assert cards.locator(".card").count() == 2
+    text = cards.text_content()
+    assert "Excluded from the draw" in text
+    assert "Grouping certificate" in text
+    for gone in ("Name join", "Where the numbers came from", "Odds re-read",
+                 "Prices do not move here", "unresolved", "matched"):
+        assert gone not in text, gone
+
+
+def test_the_odds_view_lists_the_full_draw_group_by_group(page, competition):
+    """
+    The certificate one card up says the groups came out within a tick of each other.
+    This is the working: every group, every golfer in it, and what each was worth when
+    the groups were drawn.
+    """
+    result = competition["result"]
+    p = page["page"]
+    p.locator("#tab-odds").click()
+
+    groups = p.locator("#odds-draw .card")
+    assert groups.count() == len(result["teams"])
+    assert p.locator("#odds-draw .draw-row").count() == sum(
+        t["golfer_count"] for t in result["teams"])
+
+    text = p.locator("#odds-draw").text_content()
+    for team in result["teams"]:
+        assert team["team_name"] in text
+    # Every grouped golfer, by name, with a price beside them.
+    for golfer in result["golfers"]:
+        if golfer["team_id"]:
+            assert golfer["name"] in text
+    assert text.count("%") >= len(result["golfers"])
+
+
+def test_the_full_draw_is_in_dealt_order_and_each_group_states_its_total(page, competition):
+    result = competition["result"]
+    p = page["page"]
+    p.locator("#tab-odds").click()
+
+    heads = p.locator("#odds-draw .card-head").all_text_contents()
+    expected = [t["team_name"] for t in sorted(result["teams"],
+                                               key=lambda t: t["group_index"])]
+    assert [h.strip() for h in heads] == expected
+
+    totals = p.locator("#odds-draw .draw-total b").all_text_contents()
+    assert totals == [f"{t['total_odds'] * 100:.2f}%" for t in sorted(
+        result["teams"], key=lambda t: t["group_index"])]
+
+
 def test_the_provenance_names_the_build(page, competition):
     result = competition["result"]
     text = page["page"].locator("footer.prov").text_content()
@@ -248,53 +318,70 @@ def test_the_provenance_names_the_build(page, competition):
     assert "PROVEN OPTIMAL" in text
 
 
+def test_the_provenance_still_says_where_the_numbers_came_from(page, competition):
+    """
+    The "Where the numbers came from" card was the only place on the page naming the
+    Kalshi event and the ESPN event, and it was removed as clutter. Odds nobody can
+    trace back to a market are a number somebody typed, so both ids moved into the
+    footer rather than off the page -- docs/FRONTEND-SPEC.md §5.4 requires it.
+    """
+    result = competition["result"]
+    text = page["page"].locator("footer.prov").text_content()
+    assert result["sources"]["kalshi"]["event_ticker"] in text
+    assert result["sources"]["kalshi"]["price_mode"] in text
+    assert str(result["sources"]["espn"]["event_id"]) in text
+
+
 def test_the_masthead_names_the_tournament(page, competition):
     text = page["page"].locator(".topbar").text_content()
     assert competition["result"]["tournament"]["name"] in text
 
 
-def test_a_page_that_was_never_rebuilt_has_no_movement_column(page):
-    """Not a blank column, not a spinner, not an apology. Absent."""
-    assert not page["page"].locator("#board .group th.g-move").first.is_visible()
-    assert page["page"].locator("#board td.g-move").first.text_content() == ""
-
-
-def test_a_rebuilt_page_shows_the_odds_moving_with_no_network_at_all(browser, competition,
-                                                                     serve_espn, tmp_path):
+def test_no_group_row_has_anywhere_to_put_a_price_moving(page, competition):
     """
-    The only way prices move on this page: somebody re-ran the build with
-    --refresh-odds and re-sent it. That re-read is baked in exactly as the original
-    snapshot is, so it needs no network -- and it must be presented as movement since
-    the draw rather than as a second column of levels, because the two columns are on
-    different scales and would read as a jump when nothing had moved.
+    There was a Move column here, fed by a second Kalshi reading a rebuild could bake
+    in beside the first. Two prices for one golfer -- one he was dealt on, one he was
+    not -- read as the draw being adjusted after the fact, so there is now exactly one
+    price per golfer and no column that could hold a second.
+    """
+    p = page["page"]
+    assert p.locator("#board .group th.g-move").count() == 0
+    assert p.locator("#board td.g-move").count() == 0
+
+    # Seven columns, and the same seven in the header and every body row -- deleting a
+    # <th> without its <td> shifts every right-aligned cell one column over and lands
+    # the draw percentages under the wrong heading. Nothing else here catches that.
+    headers = p.locator("#board .group").first.locator("thead th").count()
+    assert headers == 7
+    cells = p.locator("#board .group").first.locator("tbody tr").first.locator("td").count()
+    assert cells == headers
+
+
+def test_a_result_carrying_a_second_reading_still_renders_one_price_per_golfer(
+        browser, competition, serve_espn, tmp_path):
+    """
+    Belt and braces for a file built by an older tool, or hand-edited. The page must
+    ignore the extra fields rather than grow a column back off them.
     """
     result = json.loads(json.dumps(competition["result"]))
-    for i, golfer in enumerate(result["golfers"]):
-        # A third of the field drifts up by a cent, the rest does not move at all.
-        golfer["odds"]["current"] = round(golfer["odds"]["raw"] + (0.01 if i % 3 == 0 else 0), 4)
+    for golfer in result["golfers"]:
+        golfer["odds"]["current"] = round(golfer["odds"]["raw"] + 0.01, 4)
     result["odds_snapshot"]["refreshed"] = {
-        "at": "2026-08-06T12:00:00+00:00", "price_mode": "ask", "field_size": len(result["golfers"]),
-        "raw_book_sum": 1.31, "matched": len(result["golfers"]),
+        "at": "2026-08-06T12:00:00+00:00", "price_mode": "ask",
+        "field_size": len(result["golfers"]), "raw_book_sum": 1.31,
+        "matched": len(result["golfers"]),
         "no_longer_priced": [], "priced_since_the_draw": ["Monday Qualifier"],
     }
-    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "refreshed"))
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "stale-schema"))
 
     ctx, out = open_page(browser, paths[0], serve_espn())
     p = out["page"]
-    p.wait_for_function("document.querySelector('td.g-move').textContent !== ''", timeout=15000)
-
-    cells = [c for c in p.locator("#board td.g-move").all_text_contents() if c]
-    assert any(c.startswith("↑ +1.0") for c in cells), cells[:5]
-    assert any(c == "→" for c in cells), "an unmoved golfer is not an arrow up"
-
+    assert p.locator("#board td.g-move").count() == 0
     p.locator("#tab-odds").click()
-    text = p.locator("#odds-cards").text_content()
-    assert "re-read" in text and "1.310" in text
-    assert "not a feed" in text
-    assert "Monday Qualifier" in text and "in nobody" in text
-
-    assert all("espn.com" in u for u in out["requests"]
-               if not u.startswith(("file://", "data:")))
+    text = p.locator("#view-odds").text_content()
+    assert "re-read" not in text
+    assert "Monday Qualifier" not in text
+    assert "1.310" not in text
     assert out["errors"] == []
     ctx.close()
 
@@ -347,7 +434,7 @@ def test_it_refuses_a_leaderboard_for_a_different_tournament(browser, competitio
     ctx, out = open_page(browser, competition["html"], lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(other)))
     p = out["page"]
-    assert "expected " + ESPN_EVENT_ID in p.locator("#not-started").text_content()
+    assert "expected " + ESPN_EVENT_ID in p.locator("#status-note").text_content()
 
     # The rosters and the odds are baked in and stay on screen -- the page is still
     # worth looking at. What must not survive is a POSITION: every one of those would
@@ -364,7 +451,6 @@ def test_it_survives_espn_being_down(browser, competition):
     p = out["page"]
     assert p.locator("#status-label").text_content() == "ESPN unreachable"
     assert "is-down" in (p.locator("#status-pill").get_attribute("class") or "")
-    assert "ESPN unavailable" in p.locator("#not-started").text_content()
     assert out["errors"] == []
 
     # The page is still useful: it knows its own groups and its own odds.
@@ -387,7 +473,7 @@ def test_a_live_page_whose_field_is_empty_still_refuses_to_rank(browser, competi
     ctx, out = open_page(browser, competition["html"], lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(empty)))
     p = out["page"]
-    assert "Waiting for ESPN" in p.locator("#not-started").text_content()
+    assert "with no field yet" in p.locator("#status-note").text_content()
     # ESPN answered, so the page is working -- but a green "Live" dot over a board with
     # no positions on it reads as broken rather than early.
     assert p.locator("#status-label").text_content() == "Not started"
@@ -442,12 +528,16 @@ def test_a_groups_page_calls_itself_the_groups(groups_page):
     assert p.locator("#standings-heading").text_content() == "Groups"
     assert p.locator("#tab-standings").text_content().strip() == "Groups"
     assert p.locator("#status-label").text_content() == "Not started"
-    text = p.locator("#not-started").text_content()
-    assert "had not started when this page was made" in text
-    assert "rebuilt page" in text, "it has to say how to get one that scores"
+    # Two words in the pill and a short caption, where there used to be a paragraph
+    # explaining which of four reasons there was nothing to rank. The paragraph was
+    # read as an apology for a page that was working exactly as built.
+    assert "Built before the field posted" in p.locator("#status-note").text_content()
+    assert p.locator("#standings-sub").text_content() == "The draw. Nothing is ranked yet."
 
+    # A groups page fetches nothing at all, so the odds view has to stand on its own.
     p.locator("#tab-odds").click()
-    assert "nothing is fetched by this page" in p.locator("#odds-cards").text_content()
+    assert p.locator("#odds-tiles .tile").count() == 4
+    assert p.locator("#odds-cards .card").count() == 2
 
 
 def test_a_groups_page_still_shows_every_roster(groups_page):
@@ -478,15 +568,21 @@ def test_a_groups_page_ranks_nobody(groups_page):
     assert p.locator("#board tbody.team.is-leader").count() == 0
     assert p.locator("#board tr.golfer.out").count() == 0
     # No positions, no scores, no thru: those columns are gone rather than full of
-    # dashes, and the tier legend is meaningless until something has been ranked.
+    # dashes.
     assert not p.locator("#board .group th.g-pos").first.is_visible()
-    assert not p.locator("#tiers").is_visible()
 
 
-def test_a_groups_page_says_there_was_no_join_to_report_on(groups_page):
-    p = groups_page["page"]
+def test_a_groups_page_still_shows_the_full_draw(groups_page):
+    """
+    The odds view is the same on both halves of the split. A groups page has no join to
+    report on and never had a leaderboard, but the draw is exactly as decided as it will
+    ever be, and it is the whole of what there is to look at on a Wednesday.
+    """
+    p, result = groups_page["page"], groups_page["result"]
     p.locator("#tab-odds").click()
-    assert "No join was possible" in p.locator("#odds-cards").text_content()
+    assert p.locator("#odds-draw .card").count() == len(result["teams"])
+    assert p.locator("#odds-draw .draw-row").count() == sum(
+        t["golfer_count"] for t in result["teams"])
 
 
 def test_a_groups_page_orders_the_teams_by_what_they_were_drawn_at(groups_page):

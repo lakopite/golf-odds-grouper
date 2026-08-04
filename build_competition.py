@@ -25,9 +25,9 @@ this program in half, and the split is read off the payload rather than off a fl
            against and no score to show, so the build does not try: no ESPN block on
            any golfer, `live` is null, and the page that gets built fetches nothing
            at all. What it has is everything that is already decided -- the teams,
-           the groups, the odds the groups were drawn on, and a refreshed reading if
-           one was asked for. That is a complete, deployable, honest artifact: it is
-           the groups sheet, and the groups sheet is what exists on Wednesday.
+           the groups, and the odds the groups were drawn on. That is a complete,
+           deployable, honest artifact: it is the groups sheet, and the groups sheet
+           is what exists on Wednesday.
 
   live     ESPN has published a field. Now the Kalshi names can be joined against
            THIS week's actual competitors, every match is against a person who is
@@ -63,9 +63,9 @@ That reads the league, the tournament on both APIs, the market, the price mode, 
 hand-picked exclusions, the seed and any reviewed name decisions out of the file,
 carries the groups and the odds at creation forward untouched, and redoes the parts
 that have a "now" -- above all the ESPN join, which is the whole difference between
-the two builds above. Add `--refresh-odds` to record what the market says today
-alongside (never instead of) the prices the groups were drawn on. `--regroup` is the
-one that deals again, and it says so.
+the two builds above. It does not re-read the odds, ever: they were read once, when
+the groups were drawn, and that reading is the competition. `--regroup` is the one
+that deals again, and it says so.
 
 WHY IT ALL GOES IN ONE FILE
 ---------------------------
@@ -126,7 +126,14 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # and `live.name_match` (nothing matches names at runtime any more). ADDED:
 # `build_mode`, `sources.espn.match_decisions`, and `golfers[].espn.match` gaining
 # "absent", which is a fact somebody checked rather than a name that was missed.
-SCHEMA_VERSION = "2.0"
+# 2.1 REMOVED `odds_snapshot.refreshed`, `golfers[].odds.current`, and the
+# "refresh-odds" value of `rebuilt_from.mode`. The odds are read once, at the moment
+# the groups are drawn, and that reading IS the competition. A second reading taken
+# days later was a price nobody was dealt on, printed beside one they were, and every
+# reader who noticed had to be talked back out of thinking the draw had moved. The
+# groups are worth what they were worth on Wednesday; there is now exactly one price
+# per golfer in this file and no way to ask for another.
+SCHEMA_VERSION = "2.1"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -416,66 +423,6 @@ def pull_odds(event_ticker, price):
         )
     tick = {m.get("price_level_structure") for m in markets if m.get("price_level_structure")}
     return markets, grouper_cli.sort_field(golfers), sorted(tick)
-
-
-def refresh_odds(event_ticker, price, field, now):
-    """
-    Re-read Kalshi at today's prices, without touching the groups.
-
-    This is the only way a scoreboard gets a moving number: Kalshi will not answer a
-    browser at all (see the CORS note in docs/FRONTEND-SPEC.md), so the page never
-    fetches odds and "current odds" means somebody re-ran the build and re-sent the
-    page. A second snapshot, not a feed.
-
-    Returns (by_name, report), or (None, None) if there is nothing live to read -- a
-    settled tournament quotes no active markets, and that is a reason to carry the
-    snapshot forward rather than to fail a rebuild that is otherwise fine.
-
-    A golfer whose market is still there but quoting nothing keeps no current price --
-    a zero would render as a price that collapsed to nothing, which is a lie about a
-    market that simply is not quoting. They are not reported as gone either: still
-    listed and still unquoted are different things, and only `bid` produces the second
-    in bulk.
-    """
-    try:
-        markets = kalshi_odds.markets_for(event_ticker)
-        current = kalshi_odds.to_golfers(markets, price=price, strict=False)
-    except Exception as exc:                       # noqa: BLE001 -- a rebuild survives this
-        print(f"!! could not refresh the odds: {exc}. Carrying the snapshot forward.",
-              file=sys.stderr)
-        return None, None
-
-    if not current:
-        print("!! no active Kalshi markets for this event -- it has settled. Carrying the "
-              "snapshot forward; the odds at creation are still the odds at creation.")
-        return None, None
-
-    by_id = {g["golfer_id"]: g for g in current if g.get("golfer_id")}
-    by_name = {g["golfer_name"]: g for g in current}
-    matched, drawn, still_listed = {}, set(), set()
-    for g in field:
-        hit = by_id.get(g.get("golfer_id")) or by_name.get(g["golfer_name"])
-        drawn.add(g["golfer_name"])
-        if hit:
-            still_listed.add(g["golfer_name"])
-            if hit["odds"] > 0:
-                matched[g["golfer_name"]] = hit
-
-    report = {
-        "at": now,
-        "price_mode": price,
-        "field_size": len(current),
-        "raw_book_sum": round(sum(g["odds"] for g in current), 6),
-        "matched": len(matched),
-        # Two facts the pool will want. A golfer in the draw with no live market has
-        # been pulled from the board -- usually a withdrawal. A golfer on the board who
-        # is in nobody's group was added after the draw and belongs to no team, which is
-        # a rule question rather than a bug.
-        "no_longer_priced": sorted(drawn - still_listed),
-        "priced_since_the_draw": sorted(g["golfer_name"] for g in current
-                                        if g["golfer_name"] not in drawn),
-    }
-    return matched, report
 
 
 def resolve_exclusions(golfers, n_groups, named, auto):
@@ -793,9 +740,10 @@ def rebuild(args, result):
     What moves between two runs of the same competition is what the world did, not what
     the pool decided. So the draw is carried forward verbatim and the run re-reads the
     parts that have a "now": the ESPN join (a Wednesday build has no field to join
-    against and a Thursday one does), the tournament's state, and -- with
-    --refresh-odds -- the current Kalshi prices alongside, never instead of, the ones
-    the groups were drawn on.
+    against and a Thursday one does) and the tournament's state. Kalshi is not read at
+    all. The odds were read once, when the groups were drawn, and a rebuild that went
+    back for a second reading would be putting a price nobody was dealt on next to the
+    one everybody was.
 
     Re-partitioning is deliberately NOT what this does. Rebuilding a live competition
     and quietly dealing everyone new golfers is the single most destructive thing this
@@ -858,22 +806,6 @@ def rebuild(args, result):
     print(f"Draw:    {len(weighted)} golfers in {len(teams)} groups, "
           f"{len(excluded)} excluded, carried forward unchanged")
 
-    # -- what has moved since ------------------------------------------------
-    current, refreshed = None, None
-    if args.refresh_odds:
-        current, refreshed = refresh_odds(kalshi["event_ticker"], args.price, field, now)
-        if refreshed:
-            print(f"Odds:    refreshed -- {refreshed['matched']}/{len(field)} of the drawn field "
-                  f"still priced, book now sums to {refreshed['raw_book_sum']:.4f} "
-                  f"(was {result['odds_snapshot']['raw_book_sum']})")
-            if refreshed["no_longer_priced"]:
-                print("  no longer priced (withdrawn, most likely): "
-                      + ", ".join(refreshed["no_longer_priced"][:8]))
-            if refreshed["priced_since_the_draw"]:
-                print(f"  {len(refreshed['priced_since_the_draw'])} golfer(s) were added to the "
-                      "market after the draw and are in nobody's group: "
-                      + ", ".join(refreshed["priced_since_the_draw"][:8]))
-
     season = args.season or tournament["season"]
     espn_event = None
     if args.espn_event:
@@ -904,7 +836,7 @@ def rebuild(args, result):
         "source_file": args.from_result,
         "source_generated_at": result["generated_at"],
         "source_schema_version": result.get("schema_version"),
-        "mode": "refresh-odds" if refreshed else "refresh",
+        "mode": "refresh",
         "rebuild_count": ((result.get("rebuilt_from") or {}).get("rebuild_count") or 0) + 1,
         "first_built_at": ((result.get("rebuilt_from") or {}).get("first_built_at")
                            or result["generated_at"]),
@@ -925,7 +857,7 @@ def rebuild(args, result):
         report=result["grouping"], order=order,
         seed=result["generator"].get("seed"),
         tournament_prior=tournament,
-        current=current, refreshed=refreshed, rebuilt_from=rebuilt_from,
+        rebuilt_from=rebuilt_from,
     )
 
     finish(out, args, espn, aliases, started)
@@ -951,11 +883,10 @@ def assemble(**k):
     absent = set(match_report.get("absent") or [])
     weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
     excluded_names = {e["golfer_name"] for e in k["excluded"]}
-    current = k.get("current") or {}
     captured_at = k.get("captured_at") or k["now"]
     # The price mode the CARRIED snapshot was captured at, which is not this run's
-    # --price: a rebuild may re-read the book at the mid without making Wednesday's ask
-    # prices retroactively mids.
+    # --price. A rebuild passes the mode recorded in the file, so a later run under a
+    # different --price cannot relabel Wednesday's ask prices as mids.
     price_mode = k.get("price_mode") or k["args"].price
     prior = k.get("tournament_prior") or {}
     prior_course = prior.get("course") or {}
@@ -969,7 +900,6 @@ def assemble(**k):
         name = g["golfer_name"]
         hit = (espn["matches"] or {}).get(name)
         player = hit["player"] if hit else None
-        live_price = current.get(name)
         golfers_out.append({
             "golfer_id": g.get("golfer_id"),
             "name": name,
@@ -984,11 +914,11 @@ def assemble(**k):
             "odds": {
                 "raw": g["odds"],
                 "devigged": round(devigged.get(name, 0.0), WEIGHT_PRECISION),
+                # Three numbers, all of them read at the same instant, and there will
+                # never be a fourth: the groups were drawn on these and stay drawn on
+                # them for as long as the file exists.
                 "grouping_weight": (round(weight_by_name[name], WEIGHT_PRECISION)
                                     if name in weight_by_name else None),
-                # What the same market quotes now, if this run re-read it. Never feeds
-                # the grouping -- the groups were drawn on `raw` and stay drawn on it.
-                "current": live_price["odds"] if live_price else None,
             },
             # Null in a groups build, and null rather than a shell of nulls: before the
             # first tee time this golfer has no ESPN presence to describe, and a block
@@ -1111,8 +1041,8 @@ def assemble(**k):
                     "Origin: https://kalshi.com returns 200, every other origin returns 403 "
                     "with no CORS headers (localhost, GitHub Pages and file:// all measured "
                     "2026-08-03). The scoreboard therefore never fetches odds: the prices "
-                    "the groups were drawn on are baked in, and a rebuild with "
-                    "--refresh-odds bakes in a second reading beside them."
+                    "the groups were drawn on are baked in, and they are the only prices "
+                    "this competition has."
                 ),
             },
             "espn": {
@@ -1151,9 +1081,6 @@ def assemble(**k):
             "field_size": len(field),
             "raw_book_sum": round(k["raw_sum"], 6),
             "liquidity": k["liquidity"],
-            # A later re-read of the same market. The snapshot above is the one the
-            # groups were drawn on and never changes; this is what the book says now.
-            "refreshed": k.get("refreshed"),
             "normalization": {
                 "method": "divide by the observed book sum, then rescale over survivors",
                 "basis": "probability" if k["exclusive"] else "share_of_n_slots",
@@ -1362,9 +1289,6 @@ def build_parser():
                          "exclusions, seed -- and anything given on the command line wins. "
                          "The groups and the odds at creation are carried forward untouched; "
                          "the ESPN join is redone.")
-    ap.add_argument("--refresh-odds", action="store_true",
-                    help="with --from-result: also re-read Kalshi and record what the market "
-                         "says now, alongside the odds the groups were drawn on")
     ap.add_argument("--regroup", action="store_true",
                     help="with --from-result: pull fresh odds and PARTITION AGAIN. Every team "
                          "gets a different group. Not what you want mid-tournament.")
@@ -1530,9 +1454,6 @@ def main(argv=None):
                 "path, or --overwrite if replacing it is the point.")
         try:
             if args.regroup:
-                if args.refresh_odds:
-                    print("note: --regroup pulls fresh odds and re-partitions on them, so "
-                          "--refresh-odds adds nothing here and is ignored.")
                 build(args, league=(league_mod.load_league(args.league) if args.league
                                     else league_from_result(result)),
                       prior_mode=prior_build_mode(result),
@@ -1558,9 +1479,8 @@ def main(argv=None):
         parser.error("give --league PATH, or --from-result PATH to rebuild an existing one")
     if not args.tournament and not args.kalshi_event:
         parser.error("give --tournament NAME or --kalshi-event TICKER")
-    for flag in ("refresh_odds", "regroup"):
-        if getattr(args, flag):
-            parser.error(f"--{flag.replace('_', '-')} only means something with --from-result")
+    if args.regroup:
+        parser.error("--regroup only means something with --from-result")
 
     try:
         build(args)

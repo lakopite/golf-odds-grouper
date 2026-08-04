@@ -51,7 +51,6 @@ other and the interesting information is the *margin*, not the standings.
 |---|---|---|
 | Teams, logos, rosters | ✅ | — |
 | Odds when the groups were drawn | ✅ | — |
-| Odds re-read at a later rebuild | ✅ when present — see §4 | — |
 | Which endpoints produced the numbers | ✅ | — |
 | Grouping quality certificate | ✅ | — |
 | Golfer → ESPN athlete id | ✅ — see §8 | — |
@@ -204,32 +203,23 @@ answer to "what was he worth?" — the question the pool is actually asking. Sho
 and show `odds_snapshot.captured_at` beside it so it is never mistaken for a price
 that is moving.
 
-### Prices do still move — between builds
+### There is exactly one price per golfer, and prices never move
 
-`build_competition.py --from-result <file> --refresh-odds` re-reads Kalshi
-**server-side**, where it answers fine, and bakes the result in:
-`odds_snapshot.refreshed` describes the re-read, and every golfer gains `odds.current`.
-No network at load, because it is not a feed — it is a second snapshot, taken when
-somebody rebuilt and re-sent the page.
+Not "no live odds, but a rebuild can show movement". None. A rebuild does not re-read
+Kalshi, there is no flag that makes it, and the result file has nowhere to put a second
+reading: `golfers[].odds` carries `raw`, `devigged` and `grouping_weight`, all three
+read at the same instant, and that instant is `odds_snapshot.captured_at`.
 
-Show it as movement against `odds.raw` (the price the groups were drawn on — **not**
-`kalshi.ask`, which is a different number on any price mode but the default): an arrow
-and a delta, never a second column of raw levels. "Cameron Young is shorter than when
-you drafted him" is the interesting fact; a raw level beside `grouping_weight` is
-actively misleading, because one is de-vigged and the other is not, so an unmoved
-golfer reads as a jump.
+This used to work the other way. `--refresh-odds` re-read the market server-side and
+baked a second price in beside the drawn one, which the page rendered as an arrow. It
+was accurate and it was a mistake: a golfer showing two prices — the one his group was
+dealt on and one from three days later — reads as a draw being adjusted after the fact.
+Every reader who noticed it had to be talked back out of the same suspicion, and a
+fairness claim that needs explaining is not doing its job.
 
-Say what it is, too: the arrows will not change again until the next rebuild. Calling
-it live would promise a number that cannot arrive.
-
-`refreshed` is `null` on a page that was never rebuilt — the common case — and
-`odds.current` is then `null` throughout, so the movement column is simply absent.
-That is the default state and it needs no apology.
-
-`refreshed.priced_since_the_draw` names golfers who were added to the market after the
-draw and are therefore in nobody's group; `refreshed.no_longer_priced` names drawn
-golfers whose market is gone, which usually means a withdrawal. Both are worth
-surfacing — the pool will ask.
+So: **a page must never show a price moving**, and should not carry a column, a slot or
+an empty state for one. If a result file from an older build still carries
+`odds_snapshot.refreshed` or `golfers[].odds.current`, ignore both.
 
 ---
 
@@ -257,8 +247,7 @@ One row or card per team, in finishing order. Each carries:
 
 Expanded, drilled into, or always visible — a design decision. Each golfer needs:
 
-position · name · score to par · thru · what they were worth at creation · (movement
-since the draw, on a rebuilt page — §4)
+position · name · score to par · thru · what they were worth at creation
 
 Sorted by the rank key (§6), so the golfer carrying the team is always first. Cut,
 withdrawn and unscoreable golfers stay listed — a team's roster does not shrink — but
@@ -273,16 +262,39 @@ gap is a withdrawal or a build somebody still has to finish.
 
 ### 5.3 The odds panel
 
-- Field size, book sum, price mode, and **capture time** for the snapshot.
+This panel is read by the league, not by whoever built the page, and everything on it
+has to survive that. Anything a reader cannot act on belongs in the footer (§5.4) or
+nowhere.
+
+- Field size, book sum, and **capture time** for the snapshot, **in plain English**.
+  The numbers may be exact; their captions may not be jargon. "ask prices · probability
+  basis" is precise, and it is also the caption that got a scoreboard accused of hiding
+  something. Say what the number means to somebody who has never priced a book.
 - Who was **excluded and why** (`odds_snapshot.excluded[].reason` is `named` or
   `over_fair_share`). A golfer worth more than a whole group's fair share cannot be
   balanced around, so they were dropped — that is a fact the pool will argue about and
   the page should be able to settle.
-- On a rebuilt page, the re-read: when it happened, what the book summed to then, and
-  that the movement it implies is frozen until the next rebuild (§4).
+- The **grouping certificate** (§`grouping`): the delta, whether it is provably optimal,
+  and the group sizes.
+- The **full draw**: every group as it was dealt, and every golfer in it with what they
+  were worth at creation. The certificate is a claim about the draw; this is the
+  working behind it, and it is the answer to "what did we all get" — which the league
+  table cannot give, because it ranks and it hides each group behind a chevron.
 - If `sources.kalshi.mutually_exclusive_outcomes` is **false** (Top 5 / Top 10 /
   MakeCut), the numbers are *share of N slots*, not probabilities, and the book sums
-  toward N rather than 1. Do not label them "win probability".
+  toward N rather than 1. Do not label them "win probability" — or anything else that
+  claims to be a probability. The safe framing, and the one the shipped page uses
+  throughout, is what a golfer was *worth*: it is true of both market types, so no page
+  has to detect which one it is holding. `sources.kalshi.market_label` in the footer
+  (§5.4) names the market for anybody who wants to know which it was.
+
+Deliberately **not** here: the name-join report and the list of API endpoints. Both are
+provenance, both were read by nobody on a Sunday, and both crowded out the two cards
+that answer the question the page exists for. The join's residue that still matters —
+a count of unmatched golfers, and a per-golfer marker — belongs in the margin of the
+standings (§8), and the events belong in the footer (§5.4 — which asks for *which*
+Kalshi event and *which* ESPN event, not for the endpoint URLs; those are carried in
+the result file and printed in the export's manifest, for checking server-side).
 
 ### 5.4 The provenance footer
 
@@ -328,8 +340,11 @@ is in the tournament but still ahead of holding nothing, because a team that dra
 golfers has drafted 12 golfers.
 
 `standings_rules.golfer_rank_tiers` in the result file says the same thing in one line
-each, so a page can show the rule it is running rather than restating it in its own
-words and drifting.
+each. A page **may** show it — if it does, it must show the file's words rather than
+restating the rule and drifting — but it is a legend for a rule most readers never
+question, and the shipped scoreboard leaves it out on those grounds. The field stays in
+the file either way; it costs nothing and a page that wants it should not have to
+re-derive it.
 
 Do **not** collapse the tiers into one number. A cut golfer is not "position 74"; if
 they were, a team of cut golfers could outrank a team holding someone in contention.
@@ -383,7 +398,10 @@ much worse fact than no join having been possible. See §2.
 
 ```jsonc
 {
-  "schema_version": "2.0",   // 2.0 split the file in two along `build_mode`, and the
+  "schema_version": "2.1",   // 2.1 dropped odds_snapshot.refreshed, golfers[].odds
+                             // .current and the "refresh-odds" rebuild mode: there is
+                             // one price per golfer and no way to ask for a second.
+                             // 2.0 split the file in two along `build_mode`, and the
                              // halves are not the same document. It also dropped
                              // live.name_match, golfers[].espn.source / .from_event,
                              // sources.espn.identities_from_history and
@@ -407,7 +425,7 @@ much worse fact than no join having been possible. See §2.
                  "poll_interval_seconds": 60 },
 
   // null on a first build. On a rebuild (--from-result), what it was rebuilt from and
-  // how: mode is "refresh" | "refresh-odds" | "regroup". A file carrying Wednesday's
+  // how: mode is "refresh" | "regroup". A file carrying Wednesday's
   // odds and Sunday's leaderboard says so here — and a groups sheet rebuilt into a
   // scoreboard is exactly that file.
   "rebuilt_from": { "source_file": "build/result.json", "mode": "refresh",
@@ -449,11 +467,10 @@ much worse fact than no join having been possible. See §2.
     "odds": {
       "raw": 0.09,               // as quoted, when the groups were drawn
       "devigged": 0.0688,        // ÷ observed book sum, whole field
-      "grouping_weight": 0.0772, // what the partitioner saw; null if excluded.
+      "grouping_weight": 0.0772  // what the partitioner saw; null if excluded.
                                  // Sums to 1.0 across every grouped golfer.
-      "current": 0.095           // the same market at odds_snapshot.refreshed.at.
-                                 // null unless the build re-read it (--refresh-odds).
-                                 // Never feeds the grouping. Compare against `raw`.
+      // Three numbers, all read at the same instant, and there is never a fourth.
+      // See §4: a rebuild does not go back to the market.
     },
     // NULL on every golfer in groups mode — there was no field, so there is nothing
     // to say. In live mode every golfer has this block, and a golfer no tier settled
@@ -517,10 +534,6 @@ much worse fact than no join having been possible. See §2.
     "captured_at": "…",          // when the groups were drawn. Never moves on a rebuild.
     "price_mode": "ask", "field_size": 150,
     "raw_book_sum": 1.166, "liquidity": { … },
-    // null unless a rebuild re-read the market. See §4.
-    "refreshed": { "at": "…", "price_mode": "ask", "field_size": 151,
-                   "raw_book_sum": 1.171, "matched": 149,
-                   "no_longer_priced": ["…"], "priced_since_the_draw": ["…"] },
     "normalization": { "basis": "probability | share_of_n_slots", "note": "…" },
     "excluded": [{ "golfer_name": "…", "reason": "named | over_fair_share",
                    "raw_odds": 0.21, "devigged_odds": 0.18 }],
@@ -552,7 +565,8 @@ much worse fact than no join having been possible. See §2.
     "poll_interval_seconds": 60
   },
 
-  // The rule this file expects to be ranked by, in the file, so a page can show it.
+  // The rule this file expects to be ranked by, in the file, so a page that wants to
+  // show it does not have to restate it. Optional to render — see §6.
   // Tier 2 is "no ESPN athlete on this golfer: either confirmed absent from the field,
   // or not yet reviewed. Scores nothing either way." See §6.
   "standings_rules": { "description": "…",
@@ -752,10 +766,13 @@ reference honours `prefers-color-scheme`.
 - [ ] Ties shown as ties; `decided_at` surfaced
 - [ ] Cut / WD golfers and golfers with no athlete id listed and visibly out
 - [ ] Snapshot odds shown with capture time; exclusions shown with reasons
-- [ ] A rebuilt page shows `odds.current` as movement against `odds.raw`, and says the
-      arrows are from a rebuild rather than a feed
-- [ ] A page that was never rebuilt (`refreshed` null) simply has no movement column —
-      not a blank one, not a spinner, not an apology
+- [ ] **No price ever appears to move** — no movement column, no arrows, no slot for a
+      second reading, and nothing rendered off `odds.current` or `odds_snapshot
+      .refreshed` if an older file still carries them
+- [ ] The odds view carries the four snapshot numbers **with plain-English captions**,
+      the exclusions, the certificate, and the full draw group by group with every
+      golfer's odds at creation — and no name-join report or endpoint list
+- [ ] Which Kalshi event and which ESPN event are named somewhere on the page (§5.4)
 - [ ] Handles `pre` (zero competitors), ESPN down, null logos
 - [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
 - [ ] The league's own crest, banner and tagline are shown when `DATA.league` carries

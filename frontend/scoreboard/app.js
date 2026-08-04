@@ -25,9 +25,17 @@
  * ----------------------------------
  * A live page can be holding an empty board any afternoon of the week: ESPN down, a
  * payload refused for the wrong event, a first poll still in flight. It then renders
- * exactly like the groups sheet -- every roster, every price, no ranking -- and says
- * which of the reasons it is. `RANKED` below is that distinction, and it is the only
- * thing in this file that decides whether a position ever appears on screen.
+ * exactly like the groups sheet -- every roster, every price, no ranking -- and the
+ * status pill says which of the reasons it is, in four words rather than a paragraph.
+ * `ranked()` below is that distinction, and it is the only thing in this file that
+ * decides whether a position ever appears on screen.
+ *
+ * ONE PRICE PER GOLFER
+ * --------------------
+ * The odds were read once, when the groups were drawn, and that reading is baked in.
+ * There is no second reading and no way to ask for one, so nothing on this page shows
+ * a price moving -- not a feed, not an arrow, not a stale number waiting to be
+ * refreshed. What a golfer was worth on draw day is what this page says he is worth.
  */
 'use strict';
 
@@ -50,7 +58,6 @@ var STATE = {
   meta: null,
   index: null,
   error: null,
-  lastPoll: null,
   lastGood: null
 };
 
@@ -77,30 +84,6 @@ function resolvePlayer(golfer) {
   if (!STATE.index) return null;
   return GolfPool.resolveGolfer(golfer, STATE.index);
 }
-
-/* ------------------------------------------------------------------ *
- * Movement since the draw.
- *
- * The page never fetches odds and there is no state in which it might. Prices do still
- * move between two copies of the page: somebody re-ran the build with --refresh-odds
- * and re-sent it, and that second reading is baked in exactly as the first is. It is
- * compared against the price the groups were DRAWN on rather than against the raw ask,
- * because those differ on any price mode but the default.
- *
- * Computed once, at load, because it is a pure function of the baked data.
- * ------------------------------------------------------------------ */
-
-var MOVEMENT = (function () {
-  var refreshed = DATA.odds_snapshot.refreshed;
-  if (!refreshed) return null;
-  var byId = new Map();
-  DATA.golfers.forEach(function (g) {
-    if (g.golfer_id && g.odds.current !== null && g.odds.current !== undefined) {
-      byId.set(g.golfer_id, g.odds.current);
-    }
-  });
-  return { byId: byId, sum: refreshed.raw_book_sum, at: new Date(refreshed.at) };
-})();
 
 /* ------------------------------------------------------------------ *
  * Formatting
@@ -166,56 +149,11 @@ function initials(name) {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
-/* Movement, not a second column of levels. The number beside it is what the golfer was
- * worth when the groups were drawn; repeating the re-read price next to it reads as a
- * jump even when nothing has moved, because one is de-vigged and the other is not.
- * Under half a tick is not a move worth an arrow. */
-function moveCell(golfer) {
-  if (!MOVEMENT) return '';
-  var now = MOVEMENT.byId.get(golfer.golfer_id);
-  if (now === undefined) return '';
-  var delta = (now - (golfer.odds.raw || 0)) * 100;
-  if (Math.abs(delta) < 0.05) return '→';
-  return (delta > 0 ? '↑ +' : '↓ −') + Math.abs(delta).toFixed(1);
-}
-
 /* ------------------------------------------------------------------ *
  * The one thing that decides whether a position appears
  * ------------------------------------------------------------------ */
 
 function ranked() { return !!LIVE && STATE.players.length > 0; }
-
-/* Why there is no ranking. Four different reasons, and saying the wrong one is how a
- * page gets accused of being broken when it is working exactly as built. */
-function notRankedReason() {
-  var start = DATA.tournament.start ? new Date(DATA.tournament.start).toLocaleString() : null;
-  if (!LIVE) {
-    return {
-      tag: 'Not started', tone: '',
-      text: 'The tournament had not started when this page was made, so ESPN had published '
-        + 'no field and there is nothing to rank yet' + (start ? ' — first round ' + start : '')
-        + '. This page shows the draw: it is final, and it was drawn on the odds below. It '
-        + 'fetches nothing and will not change. Ask for a rebuilt page once play begins and '
-        + 'that one will carry live scoring.'
-    };
-  }
-  if (STATE.error) {
-    return {
-      tag: 'ESPN down', tone: 'is-bad',
-      text: 'ESPN unavailable: ' + STATE.error + '. Groups and odds below are baked into this '
-        + 'page and are unaffected — nothing on this screen came from the network except the '
-        + 'positions, and there are none yet.'
-    };
-  }
-  if (!STATE.lastPoll) {
-    return { tag: 'Loading', tone: '', text: 'Asking ESPN for the leaderboard.' };
-  }
-  return {
-    tag: 'Not started', tone: '',
-    text: 'Waiting for ESPN to publish positions' + (start ? ' — first round ' + start : '')
-      + '. The groups below are final and were drawn on the odds shown.'
-  };
-}
 
 /* ------------------------------------------------------------------ *
  * Masthead. Baked data only, so it is drawn once.
@@ -339,7 +277,6 @@ function golferView(golfer, player, isRanked) {
     thru: madeCut ? String(player.thru || '') : '',
     odds: pct(golfer.odds.grouping_weight),
     bar: MAX_WEIGHT ? ((golfer.odds.grouping_weight || 0) / MAX_WEIGHT * 100).toFixed(1) + '%' : '0%',
-    move: moveCell(golfer),
     tag: tag,
     unresolved: !!(espn && espn.match === 'unresolved')
   };
@@ -422,12 +359,12 @@ function badge(team) {
 }
 
 function groupTable(row, isRanked) {
-  var table = el('table', 'group' + (isRanked ? '' : ' is-draw') + (MOVEMENT ? '' : ' no-move'));
+  var table = el('table', 'group' + (isRanked ? '' : ' is-draw'));
 
   var head = document.createElement('thead');
   var hr = document.createElement('tr');
   [['g-pos', 'Pos'], ['g-name', 'Golfer'], ['g-score', 'Score'], ['g-thru', 'Thru'],
-   ['g-bar', ''], ['g-odds', 'Draw'], ['g-move', 'Move'], ['g-tag', '']].forEach(function (pair) {
+   ['g-bar', ''], ['g-odds', 'Draw'], ['g-tag', '']].forEach(function (pair) {
     var th = el('th', pair[0], pair[1]);
     th.scope = 'col';
     hr.append(th);
@@ -459,7 +396,6 @@ function groupTable(row, isRanked) {
     tr.append(barTd);
 
     tr.append(el('td', 'g-odds', g.odds));
-    tr.append(el('td', 'g-move', g.move));
     tr.append(el('td', 'g-tag' + (g.unresolved ? ' is-unresolved' : ''), g.tag));
     body.append(tr);
   });
@@ -550,21 +486,15 @@ function renderStandings() {
   var rows = isRanked ? liveRows() : drawRows();
   var meta = STATE.meta || {};
 
+  /* A few words, not a paragraph. Which of the several ways there is nothing to rank
+   * yet -- ESPN down, wrong event, no field posted, built before the tournament -- is
+   * the status pill's job, and it says it in two words at the top of the page. Saying
+   * it twice, the second time at length, read as an apology for a page that was
+   * working exactly as built. */
   $('standings-sub').textContent = isRanked
-    ? ((meta.detail || (meta.round ? 'Round ' + meta.round : 'In play')) + ' · '
-       + 'best leaderboard position held, ties broken on the next golfer down')
-    : (LIVE ? 'Rosters and the prices they were drawn at. Nothing is ranked until ESPN '
-              + 'publishes positions.'
-            : 'Ordered by the price each group was drawn at. Nothing is ranked on play.');
-
-  var reason = isRanked ? null : notRankedReason();
-  var callout = $('not-started');
-  callout.hidden = !reason;
-  if (reason) {
-    callout.className = 'callout ' + reason.tone;
-    $('not-started-tag').textContent = reason.tag;
-    $('not-started-note').textContent = reason.text;
-  }
+    ? (meta.detail || (meta.round ? 'Round ' + meta.round : 'In play'))
+      + ' · best position held wins'
+    : 'The draw. Nothing is ranked yet.';
 
   $('board-title').textContent = isRanked ? 'League table' : 'League table · the draw';
   $('board-note').textContent = DATA.league.team_count + ' teams · '
@@ -579,12 +509,10 @@ function renderStandings() {
   rows.forEach(function (row) { board.append(teamBlock(row, isRanked)); });
 
   renderChips(isRanked);
-  renderTiers(isRanked);
 }
 
 function renderChips(isRanked) {
   var chips = [];
-  if (MOVEMENT) chips.push('odds re-read ' + shortDate(MOVEMENT.at));
   if (DATA.rebuilt_from) chips.push('rebuild #' + (DATA.rebuilt_from.rebuild_count || 1));
   var report = (DATA.sources.espn || {}).match_report;
   if (isRanked && report && report.unresolved && report.unresolved.length) {
@@ -593,23 +521,6 @@ function renderChips(isRanked) {
   var host = $('standings-chips');
   clear(host);
   chips.forEach(function (text) { host.append(el('span', 'chip', text)); });
-}
-
-/* The rule the page is running, in the file's own words rather than this file's. It is
- * only meaningful once something has been ranked by it. */
-function renderTiers(isRanked) {
-  var tiers = (DATA.standings_rules || {}).golfer_rank_tiers;
-  var host = $('tiers');
-  host.hidden = !(isRanked && tiers);
-  if (host.hidden) return;
-  clear(host);
-  host.append(el('span', 'tiers-title', 'Rank tiers'));
-  Object.keys(tiers).sort().forEach(function (key) {
-    var span = el('span');
-    span.append(el('b', null, key));
-    span.append(document.createTextNode(' ' + tiers[key]));
-    host.append(span);
-  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -633,42 +544,32 @@ function card(title, cls) {
   return node;
 }
 
-/* Top 5 / Top 10 / MakeCut outcomes are not mutually exclusive, so the book sums toward
- * N rather than 1 and the numbers are share-of-N-slots. Calling those "probability"
- * would be a different claim about the same figures. */
-function basisPhrase() {
-  var norm = DATA.odds_snapshot.normalization || {};
-  if (norm.basis === 'share_of_n_slots') return 'share of the slots';
-  return 'probability basis';
-}
-
+/* The four numbers at the top, and their notes in the words somebody who has never
+ * priced a book would use. "ask prices · probability basis" is precise and it is also
+ * the sentence that made a league mate ask whether the draw had been rigged. */
 function renderOdds() {
   var snap = DATA.odds_snapshot;
   var grouping = DATA.grouping;
-  var kalshi = DATA.sources.kalshi;
-  var espn = DATA.sources.espn || {};
 
   var tiles = $('odds-tiles');
   clear(tiles);
   tiles.append(tile('Field priced', String(snap.field_size),
-    grouping.grouped_golfers + ' grouped · ' + snap.excluded.length + ' excluded'));
+    grouping.grouped_golfers + ' went into the groups · ' + snap.excluded.length
+      + ' left out'));
   tiles.append(tile('Book sum', String(snap.raw_book_sum),
-    snap.price_mode + ' prices · ' + basisPhrase()));
+    'what the raw prices added up to, before they were levelled out'));
   var captured = stamp(snap.captured_at);
   tiles.append(tile('Captured', captured ? shortDate(captured) : '—',
-    (captured ? captured.toLocaleTimeString() + ' · ' : '') + 'never moves'));
+    (captured ? captured.toLocaleTimeString() + ' · ' : '')
+      + 'the odds never change after this'));
   var fair = 1 / DATA.league.team_count;
   tiles.append(tile('Fair share', pct(fair),
-    '1/' + DATA.league.team_count + ' · auto-exclude '
-      + (snap.auto_exclude ? 'on' : 'off'), true));
+    'what each of the ' + DATA.league.team_count + ' groups is aiming for', true));
 
   var cards = $('odds-cards');
   clear(cards);
   cards.append(excludedCard(snap));
   cards.append(certificateCard(grouping));
-  cards.append(pricesCard(snap));
-  cards.append(joinCard(espn));
-  cards.append(sourcesCard(kalshi, espn));
 }
 
 function excludedCard(snap) {
@@ -685,17 +586,34 @@ function excludedCard(snap) {
     var row = el('div', 'excl');
     var left = el('div');
     left.append(el('div', 'excl-name', e.golfer_name));
-    left.append(el('div', 'excl-why', e.reason === 'over_fair_share'
-      ? 'over_fair_share — above 1/' + DATA.league.team_count + ' of the book'
-      : e.reason.replace(/_/g, ' ')));
+    left.append(el('div', 'excl-why', excludedWhy(e)));
     row.append(left);
     row.append(el('span', 'excl-raw', pct(e.raw_odds, 1) + ' raw'));
     row.append(el('span', 'excl-devig', pct(e.devigged_odds, 2)));
     node.body.append(row);
   });
-  node.body.append(el('p', 'small', 'A golfer worth more than a whole group’s fair share '
-    + 'cannot be balanced around, so they were dropped before the partition ran.'));
+  // Only when somebody was actually dropped for being too strong. Appending it to every
+  // list told the league that a golfer the commissioner had named was too expensive to
+  // balance around, which is a different -- and unflattering -- claim about a decision
+  // a person made on purpose.
+  if (snap.excluded.some(function (e) { return e.reason === 'over_fair_share'; })) {
+    node.body.append(el('p', 'small', 'A golfer worth more than a whole group is worth '
+      + 'cannot be evened out by anybody else, however the field is split. Dropping them '
+      + 'is what lets the rest of the draw come out level.'));
+  }
   return node;
+}
+
+/* Why a golfer is not in anybody's group, in the words somebody would use out loud.
+ * `over_fair_share` is the field name in the result file and it belongs there; printing
+ * it on screen made a fair-share rule read like an error code. */
+function excludedWhy(e) {
+  if (e.reason === 'over_fair_share') {
+    return 'worth more than a whole group’s share of the field (1 in '
+      + DATA.league.team_count + ')';
+  }
+  if (e.reason === 'named') return 'left out on purpose when the pool was set up';
+  return e.reason.replace(/_/g, ' ');
 }
 
 function certificateCard(g) {
@@ -719,130 +637,82 @@ function certificateCard(g) {
   return node;
 }
 
-function pricesCard(snap) {
-  if (!MOVEMENT) {
-    // Not an apology for a missing feature -- a statement of what these numbers are.
-    var still = card('Prices do not move here');
-    still.body.append(el('p', null, 'These are the prices the groups were drawn on. They do '
-      + 'not move while this page is open: Kalshi’s API returns 403 to every browser '
-      + 'origin, so no odds are ever fetched here. A rebuilt page carries a second reading '
-      + 'and shows how far each price moved.'));
-    still.body.append(el('p', 'small', 'This page has no movement column, and that is the '
-      + 'default — not a blank one, not a spinner.'));
-    return still;
-  }
-  var node = card('Odds re-read at a rebuild');
-  node.body.append(el('p', null, 'Odds re-read ' + MOVEMENT.at.toLocaleString() + ' when this '
-    + 'page was rebuilt, the book then summing to ' + MOVEMENT.sum.toFixed(3) + '. The arrows '
-    + 'in each group are movement since the draw; they will not change again until the next '
-    + 'rebuild. This is a second snapshot, not a feed.'));
-  var refreshed = snap.refreshed;
-  if (refreshed.priced_since_the_draw && refreshed.priced_since_the_draw.length) {
-    node.body.append(el('p', 'small', refreshed.priced_since_the_draw.length + ' golfer(s) were '
-      + 'added to the market after the draw and are in nobody’s group: '
-      + refreshed.priced_since_the_draw.join(', ') + '.'));
-  }
-  if (refreshed.no_longer_priced && refreshed.no_longer_priced.length) {
-    node.body.append(el('p', 'small', refreshed.no_longer_priced.length + ' drawn golfer(s) no '
-      + 'longer have a market, which usually means a withdrawal: '
-      + refreshed.no_longer_priced.join(', ') + '.'));
-  }
-  return node;
-}
+/* ------------------------------------------------------------------ *
+ * The full draw
+ *
+ * Every group as it was dealt, and what each golfer in it was worth at the moment it
+ * was dealt. The league table upstairs holds the same rosters, but it holds them
+ * ranked, one team at a time, behind a chevron -- which is the right shape for "who is
+ * winning" and the wrong shape for "what did we all get". This is the flat answer, and
+ * it is the thing the certificate above is a certificate ABOUT: the four group totals
+ * sitting within a tick of each other is the whole claim, and it is easier to believe
+ * when you can see the golfers it is made of.
+ *
+ * Its own container rather than a third row of `#odds-cards`, so the two cards above
+ * keep the width the design drew them at.
+ * ------------------------------------------------------------------ */
 
-/* The one defect in a scoreboard that the scoreboard cannot recover from on its own: a
- * golfer left unresolved at build time carries no athlete id, so no amount of polling
- * will ever score them. The fix is a rebuild. Say so where somebody will read it. */
-function joinCard(espn) {
-  var node = card('Name join');
-  var report = espn.match_report;
-  if (!report) {
-    node.body.append(el('p', null, 'No join was possible. ESPN had published no field when this '
-      + 'page was built, so there was nobody to match the Kalshi names against — which is also '
-      + 'why nothing on this page is ranked.'));
-    return node;
-  }
-  var counts = el('div', 'counts');
-  [['matched', report.matched], ['exact', report.matched_exact],
-   ['reviewed', report.matched_decision], ['alias', report.matched_alias]].forEach(function (pair) {
-    if (pair[1] === undefined || pair[1] === null) return;
-    var span = el('span');
-    span.append(el('b', null, String(pair[1])));
-    span.append(document.createTextNode(' ' + pair[0]));
-    counts.append(span);
-  });
-  node.body.append(counts);
+function drawCard(team) {
+  var golfers = (GOLFERS_BY_TEAM.get(team.team_id) || []).slice()
+    .sort(function (a, b) {
+      return (b.odds.grouping_weight || 0) - (a.odds.grouping_weight || 0);
+    });
 
-  if (report.unresolved && report.unresolved.length) {
-    var open = el('div', 'note-block is-warn');
-    open.append(el('div', 'note-title', 'Unresolved — nobody has looked yet'));
-    open.append(el('div', 'note-names', report.unresolved.join(', ')));
-    open.append(el('div', 'note-sub', 'Unscoreable for the life of this page: they carry no ESPN '
-      + 'athlete id, so there is nothing to look up. The fix is a rebuild, not a refresh.'));
-    node.body.append(open);
-  }
-  if (report.absent && report.absent.length) {
-    var gone = el('div', 'note-block');
-    gone.append(el('div', 'note-title', 'Absent — checked and confirmed out'));
-    gone.append(el('div', 'note-names', report.absent.join(', ')));
-    node.body.append(gone);
-  }
-  if (report.ambiguous_names && report.ambiguous_names.length) {
-    var amb = el('div', 'note-block is-warn');
-    amb.append(el('div', 'note-title', 'Ambiguous — two athletes share the name'));
-    amb.append(el('div', 'note-names', report.ambiguous_names.join(', ')));
-    amb.append(el('div', 'note-sub', 'Refused rather than guessed: a coin flip is the wrong way '
-      + 'to decide which of two people is on somebody’s team.'));
-    node.body.append(amb);
-  }
-  if (!(report.unresolved || []).length && !(report.absent || []).length) {
-    node.body.append(el('p', 'small', 'Every Kalshi name in the draw resolved to an ESPN athlete '
-      + 'in this week’s field.'));
-  }
-  (report.problems || []).forEach(function (line) {
-    node.body.append(el('p', 'small', line));
+  var node = card(team.team_name, 'is-draw-group');
+
+  var head = el('div', 'draw-total');
+  head.append(el('b', null, pct(team.total_odds)));
+  head.append(el('span', null, 'group ' + (team.group_index + 1) + ' of '
+    + DATA.league.team_count + ' · ' + golfers.length + ' golfers'
+    + (team.player_name ? ' · ' + team.player_name : '')));
+  node.body.append(head);
+
+  golfers.forEach(function (g) {
+    var row = el('div', 'draw-row');
+    row.append(el('span', 'draw-name', g.name));
+
+    var barCell = el('span', 'draw-bar');
+    var bar = el('span', 'bar');
+    var fill = el('i');
+    fill.style.width = MAX_WEIGHT
+      ? ((g.odds.grouping_weight || 0) / MAX_WEIGHT * 100).toFixed(1) + '%'
+      : '0%';
+    bar.append(fill);
+    barCell.append(bar);
+    row.append(barCell);
+
+    row.append(el('span', 'draw-odds', pct(g.odds.grouping_weight)));
+    node.body.append(row);
   });
   return node;
 }
 
-function sourcesCard(kalshi, espn) {
-  var node = card('Where the numbers came from');
-  var list = el('div', 'srcs');
-
-  var k = el('span');
-  k.append(document.createTextNode('Kalshi '));
-  k.append(el('code', null, kalshi.event_ticker));
-  k.append(document.createTextNode(' · ' + kalshi.market_label + ' · ' + kalshi.price_mode
-    + ' · ' + (kalshi.mutually_exclusive_outcomes ? 'mutually exclusive' : 'not mutually exclusive')));
-  list.append(k);
-
-  var e = el('span');
-  e.append(document.createTextNode('ESPN '));
-  e.append(el('code', null, (espn.league || 'pga') + ' / ' + (espn.event_id || '—')));
-  var espnNote;
-  if (!LIVE) {
-    espnNote = 'nothing is fetched by this page';
-  } else if (STATE.error) {
-    espnNote = 'poll failed: ' + STATE.error
-      + (STATE.lastGood ? ' · last good board ' + STATE.lastGood.toLocaleTimeString() : '');
-  } else {
-    espnNote = 'polling every ' + POLL_SECONDS + 's'
-      + (STATE.lastPoll ? ' · last poll ' + STATE.lastPoll.toLocaleTimeString() : '');
-  }
-  e.append(document.createTextNode(' · ' + espnNote));
-  list.append(e);
-
-  list.append(el('span', null, 'Odds captured from ' + kalshi.markets_endpoint));
-  node.body.append(list);
-  return node;
+/* In dealt order, 1..n. The league table sorts by what each group is worth, because
+ * that is the nearest thing to a standing before anybody tees off; here the group
+ * number is the thing somebody is looking up. */
+function renderDraw() {
+  var host = $('odds-draw');
+  clear(host);
+  DATA.teams.slice()
+    .sort(function (a, b) { return a.group_index - b.group_index; })
+    .forEach(function (team) { host.append(drawCard(team)); });
 }
 
 /* ------------------------------------------------------------------ *
  * Provenance
  * ------------------------------------------------------------------ */
 
+/* Where every number on the page came from, in one line at the bottom.
+ *
+ * The event tickers used to live in a card on the odds view, which is the wrong place
+ * for them: nobody checks a market ticker on a Sunday, and a card that exists to be
+ * ignored is a card in the way of the ones that do not. They still have to be ON the
+ * page though -- odds nobody can trace back to a market are just a number somebody
+ * typed -- so they are here, where provenance goes. */
 function renderProvenance() {
   var gen = DATA.generator || {};
+  var kalshi = DATA.sources.kalshi;
+  var espn = DATA.sources.espn || {};
   var bits = ['built ' + DATA.generated_at];
   if (gen.tool) bits.push(gen.tool + (gen.git_commit ? ' @ ' + gen.git_commit : ''));
   if (gen.seed !== undefined && gen.seed !== null) bits.push('seed ' + gen.seed);
@@ -850,6 +720,9 @@ function renderProvenance() {
     bits.push('rebuilt ' + DATA.rebuilt_from.mode + ' from a file first built '
       + DATA.rebuilt_from.first_built_at);
   }
+  bits.push('Kalshi ' + kalshi.event_ticker + ' · ' + kalshi.market_label
+    + ' · ' + kalshi.price_mode);
+  bits.push('ESPN ' + (espn.league || 'pga') + '/' + (espn.event_id || '—'));
   bits.push(DATA.grouping.summary);
   $('provenance').textContent = bits.join(' · ');
 }
@@ -869,11 +742,16 @@ function showView(name) {
   });
 }
 
+/* What a poll can change, and nothing else.
+ *
+ * The odds view and the footer are pure functions of the baked data: not one number in
+ * either of them is waiting on ESPN. They are drawn once, in start(). Rebuilding the
+ * full draw -- a hundred and fifty rows, every one of them the same as it was -- on a
+ * sixty-second timer would be a page doing fourteen hundred pointless things a day
+ * behind a tab nobody has open. */
 function render() {
   renderStatus();
   renderStandings();
-  renderOdds();
-  renderProvenance();
 }
 
 /* ------------------------------------------------------------------ *
@@ -902,10 +780,7 @@ function poll() {
       STATE.lastGood = new Date();
     })
     .catch(function (err) { STATE.error = String(err.message || err); })
-    .then(function () {
-      STATE.lastPoll = new Date();
-      render();
-    });
+    .then(render);
 }
 
 /* One loop, one endpoint -- or no loop at all. A groups page has `live: null`, which is
@@ -914,6 +789,9 @@ function poll() {
 function start() {
   renderBrand();
   showView('standings');
+  renderOdds();
+  renderDraw();
+  renderProvenance();
   render();
 
   $('nav').addEventListener('click', function (e) {

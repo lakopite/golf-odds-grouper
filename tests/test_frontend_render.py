@@ -127,43 +127,44 @@ def test_it_never_asks_kalshi_for_anything(page):
     assert "Live odds" not in note
 
 
-def test_a_rebuilt_page_shows_the_odds_moving_with_no_network_at_all(browser, competition,
-                                                                     serve_espn, tmp_path):
+def test_the_reference_page_has_no_column_a_price_could_move_in(page, competition):
     """
-    The only way prices move on this page: somebody re-ran the build with
-    --refresh-odds and re-sent it. That re-read is baked in exactly as the original
-    snapshot is, so it needs no network -- and it must be presented as movement since
-    the draw rather than as a second column of levels, because the two columns are on
-    different scales and would read as a jump when nothing had moved.
+    A rebuild used to be able to re-read Kalshi and bake a second price in beside the
+    drawn one, which this page rendered as an arrow. Two prices for one golfer -- one
+    he was dealt on, one he was not -- is the shape of a draw being adjusted after the
+    fact, so there is one price per golfer now and no cell that could hold another.
     """
+    p = page["page"]
+    assert p.locator("td.gmove").count() == 0
+    rows = p.locator("#standings article.team table.golfers tbody tr").first
+    assert rows.locator("td").count() == 5
+
+
+def test_a_result_carrying_a_second_reading_renders_no_movement_anyway(browser, competition,
+                                                                       serve_espn, tmp_path):
+    """A file built by an older tool, or hand-edited. The extra fields are ignored."""
     result = json.loads(json.dumps(competition["result"]))
-    for i, golfer in enumerate(result["golfers"]):
-        # A third of the field drifts up by a cent, the rest does not move at all.
-        golfer["odds"]["current"] = round(golfer["odds"]["raw"] + (0.01 if i % 3 == 0 else 0), 4)
+    for golfer in result["golfers"]:
+        golfer["odds"]["current"] = round(golfer["odds"]["raw"] + 0.01, 4)
     result["odds_snapshot"]["refreshed"] = {
-        "at": "2026-08-06T12:00:00+00:00", "price_mode": "ask", "field_size": len(result["golfers"]),
-        "raw_book_sum": 1.31, "matched": len(result["golfers"]),
+        "at": "2026-08-06T12:00:00+00:00", "price_mode": "ask",
+        "field_size": len(result["golfers"]), "raw_book_sum": 1.31,
+        "matched": len(result["golfers"]),
         "no_longer_priced": [], "priced_since_the_draw": ["Monday Qualifier"],
     }
-    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "refreshed"))
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "stale-schema"))
 
     ctx = browser.new_context(viewport={"width": 900, "height": 800})
-    seen = []
-    ctx.on("request", lambda r: seen.append(r.url))
     ctx.route(LEADERBOARD_GLOB, serve_espn())
     p = ctx.new_page()
     p.goto("file://" + paths[0])
     p.wait_for_selector("#standings article.team", timeout=15000)
-    p.wait_for_function("document.querySelector('td.gmove').textContent !== ''", timeout=15000)
 
+    assert p.locator("td.gmove").count() == 0
     note = p.locator("#odds-note").text_content()
-    assert "re-read" in note and "1.310" in note
-    assert "in nobody" in note and "Monday Qualifier" in note
-
-    cells = [c for c in p.locator("td.gmove").all_text_contents() if c]
-    assert any(c.startswith("↑ +1.0") for c in cells), cells[:5]
-    assert any(c == "→" for c in cells), "an unmoved golfer is not an arrow up"
-    assert all("espn.com" in u for u in seen if not u.startswith(("file://", "data:")))
+    assert "re-read" not in note
+    assert "1.310" not in note
+    assert "Monday Qualifier" not in note
     ctx.close()
 
 
