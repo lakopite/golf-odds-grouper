@@ -324,6 +324,9 @@ def test_the_result_records_no_price_read_after_the_groups_were_drawn():
         assert all("current" not in g["odds"] for g in result["golfers"])
         assert all(set(g["odds"]) == {"raw", "devigged", "grouping_weight"}
                    for g in result["golfers"])
+        # The version is how a reader of an old file finds out the shape changed. A
+        # silent drop would leave two incompatible documents both calling themselves 2.0.
+        assert result["schema_version"] == "2.1"
 
 
 def test_the_result_records_where_every_number_came_from():

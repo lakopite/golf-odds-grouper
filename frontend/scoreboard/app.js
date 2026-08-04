@@ -586,17 +586,34 @@ function excludedCard(snap) {
     var row = el('div', 'excl');
     var left = el('div');
     left.append(el('div', 'excl-name', e.golfer_name));
-    left.append(el('div', 'excl-why', e.reason === 'over_fair_share'
-      ? 'over_fair_share — above 1/' + DATA.league.team_count + ' of the book'
-      : e.reason.replace(/_/g, ' ')));
+    left.append(el('div', 'excl-why', excludedWhy(e)));
     row.append(left);
     row.append(el('span', 'excl-raw', pct(e.raw_odds, 1) + ' raw'));
     row.append(el('span', 'excl-devig', pct(e.devigged_odds, 2)));
     node.body.append(row);
   });
-  node.body.append(el('p', 'small', 'A golfer worth more than a whole group’s fair share '
-    + 'cannot be balanced around, so they were dropped before the partition ran.'));
+  // Only when somebody was actually dropped for being too strong. Appending it to every
+  // list told the league that a golfer the commissioner had named was too expensive to
+  // balance around, which is a different -- and unflattering -- claim about a decision
+  // a person made on purpose.
+  if (snap.excluded.some(function (e) { return e.reason === 'over_fair_share'; })) {
+    node.body.append(el('p', 'small', 'A golfer worth more than a whole group is worth '
+      + 'cannot be evened out by anybody else, however the field is split. Dropping them '
+      + 'is what lets the rest of the draw come out level.'));
+  }
   return node;
+}
+
+/* Why a golfer is not in anybody's group, in the words somebody would use out loud.
+ * `over_fair_share` is the field name in the result file and it belongs there; printing
+ * it on screen made a fair-share rule read like an error code. */
+function excludedWhy(e) {
+  if (e.reason === 'over_fair_share') {
+    return 'worth more than a whole group’s share of the field (1 in '
+      + DATA.league.team_count + ')';
+  }
+  if (e.reason === 'named') return 'left out on purpose when the pool was set up';
+  return e.reason.replace(/_/g, ' ');
 }
 
 function certificateCard(g) {

@@ -282,13 +282,19 @@ nowhere.
   table cannot give, because it ranks and it hides each group behind a chevron.
 - If `sources.kalshi.mutually_exclusive_outcomes` is **false** (Top 5 / Top 10 /
   MakeCut), the numbers are *share of N slots*, not probabilities, and the book sums
-  toward N rather than 1. Do not label them "win probability".
+  toward N rather than 1. Do not label them "win probability" — or anything else that
+  claims to be a probability. The safe framing, and the one the shipped page uses
+  throughout, is what a golfer was *worth*: it is true of both market types, so no page
+  has to detect which one it is holding. `sources.kalshi.market_label` in the footer
+  (§5.4) names the market for anybody who wants to know which it was.
 
 Deliberately **not** here: the name-join report and the list of API endpoints. Both are
 provenance, both were read by nobody on a Sunday, and both crowded out the two cards
 that answer the question the page exists for. The join's residue that still matters —
 a count of unmatched golfers, and a per-golfer marker — belongs in the margin of the
-standings (§8), and the endpoints belong in the footer.
+standings (§8), and the events belong in the footer (§5.4 — which asks for *which*
+Kalshi event and *which* ESPN event, not for the endpoint URLs; those are carried in
+the result file and printed in the export's manifest, for checking server-side).
 
 ### 5.4 The provenance footer
 

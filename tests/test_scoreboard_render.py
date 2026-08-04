@@ -92,10 +92,16 @@ def test_it_never_asks_kalshi_for_anything(page):
     remote = [u for u in page["requests"] if not u.startswith(("file://", "data:"))]
     assert not [u for u in remote if "kalshi" in u.lower()], remote
 
-    page["page"].locator("#tab-odds").click()
-    text = page["page"].locator("#view-odds").text_content()
+    p = page["page"]
+    p.locator("#tab-odds").click()
+    text = p.locator("#view-odds").text_content()
     assert "no odds are ever fetched here" in text
     assert "Live odds" not in text
+    # That sentence is static markup, so on its own it would hold however badly the view
+    # were broken. Pair it with the view having actually rendered: a JS error that left
+    # the odds panel empty must not read as "the page correctly says it fetches nothing".
+    assert p.locator("#odds-tiles .tile").count() == 4
+    assert p.locator("#odds-cards .card").count() == 2
 
 
 def test_no_webfont_or_other_cdn_is_referenced(competition):
@@ -528,8 +534,10 @@ def test_a_groups_page_calls_itself_the_groups(groups_page):
     assert "Built before the field posted" in p.locator("#status-note").text_content()
     assert p.locator("#standings-sub").text_content() == "The draw. Nothing is ranked yet."
 
+    # A groups page fetches nothing at all, so the odds view has to stand on its own.
     p.locator("#tab-odds").click()
-    assert "no odds are ever fetched here" in p.locator("#view-odds").text_content()
+    assert p.locator("#odds-tiles .tile").count() == 4
+    assert p.locator("#odds-cards .card").count() == 2
 
 
 def test_a_groups_page_still_shows_every_roster(groups_page):

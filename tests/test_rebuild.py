@@ -645,13 +645,16 @@ def test_a_rebuild_never_calls_kalshi_at_all(result_file, espn_field, monkeypatc
         "odds_snapshot"]["captured_at"]
 
 
-def test_the_flag_that_used_to_re_read_the_market_is_gone(result_file):
+def test_the_flag_that_used_to_re_read_the_market_is_gone(result_file, capsys):
     """
     argparse exits 2 on an unknown flag, which is what we want -- but SystemExit alone
-    would also be raised by a dozen unrelated failures, so the message is checked too.
+    would also be raised by a dozen unrelated failures on this command line (no ESPN
+    stub, no --output), so it would keep passing if the flag came back. The message is
+    what says argparse refused the flag rather than the run failing later.
     """
     with pytest.raises(SystemExit):
         bc.main(["--from-result", result_file[0], "--refresh-odds"])
+    assert "unrecognized arguments: --refresh-odds" in capsys.readouterr().err
 
 
 def test_a_rebuild_says_it_is_a_refresh_and_never_a_refresh_of_odds(result_file, espn_field,

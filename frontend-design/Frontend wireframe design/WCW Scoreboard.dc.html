@@ -621,16 +621,13 @@ class Component extends DCLogic {
           })
         };
       }),
-      excluded: [
-        { name: "Ludvig \u00c5berg", why: "over_fair_share \u2014 above 1/12 of the book", raw: "14.0%", devig: "12.01%" },
-        { name: "Justin Thomas", why: "named \u2014 excluded by the commissioner", raw: "3.6%", devig: "3.09%" }
-      ],
       // pollLine / rebuildLine lived here for the "Where the numbers came from" card,
-      // which was removed with the name-join card: both were provenance nobody read on
-      // a Sunday, and the endpoints they named now sit in the footer of the real page.
-      lastLine: live
-        ? "Rebuilt 15 Aug 2026 20:38 UTC \u00b7 static odds, live board"
-        : "Built 12 Aug 2026 18:07 UTC \u00b7 static page, no requests"
+      // which went with the name-join card: both were provenance nobody read on a
+      // Sunday, and the event ids they named now sit in the footer of the real page.
+      excluded: [
+        { name: "Ludvig \u00c5berg", why: "worth more than a whole group\u2019s share of the field (1 in 12)", raw: "14.0%", devig: "12.01%" },
+        { name: "Justin Thomas", why: "left out on purpose when the pool was set up", raw: "3.6%", devig: "3.09%" }
+      ]
     };
   }
 }

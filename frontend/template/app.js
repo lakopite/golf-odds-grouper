@@ -230,10 +230,14 @@ function renderOdds() {
  * is ever requested; on a groups page neither is, and the wording has to say so rather
  * than name an endpoint nothing calls. */
 function renderFooter() {
+  var espn = DATA.sources.espn || {};
   $('#sources').textContent = (LIVE
       ? 'scores polled from ' + LIVE.espn_leaderboard_url + ' · odds captured from '
       : 'nothing is fetched by this page · odds captured from ')
-    + DATA.sources.kalshi.markets_endpoint;
+    + DATA.sources.kalshi.markets_endpoint
+    // Named even in groups mode, where nothing is polled and the URL above is the only
+    // thing that would otherwise identify either event. FRONTEND-SPEC §5.4.
+    + ' · ESPN ' + (espn.league || 'pga') + '/' + (espn.event_id || '—');
   $('#poll').textContent = STATE.lastPoll ? 'last poll ' + STATE.lastPoll.toLocaleTimeString() : '';
 }
 
