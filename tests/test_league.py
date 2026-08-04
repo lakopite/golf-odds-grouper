@@ -114,8 +114,46 @@ def test_branding_that_is_not_a_string_is_refused(tmp_path):
     path = tmp_path / "l.json"
     path.write_text(json.dumps({"league_name": "X", "crest": {"src": "a.png"},
                                 "teams": [{"team_name": "A", "player_name": "Ann"}]}))
-    with pytest.raises(ValueError, match="'crest' must be a string or null"):
+    with pytest.raises(ValueError, match="'crest' must be a string, false or null"):
         league.load_league(str(path))
+
+
+def test_the_tagline_is_not_offered_false(tmp_path):
+    """`false` means "do not fill this from the default", and only the two images have
+    a default. Accepting it on the tagline would promise a fallback that is not there."""
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({"league_name": "X", "tagline": False,
+                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    with pytest.raises(ValueError, match="'tagline' must be a string or null"):
+        league.load_league(str(path))
+
+
+@pytest.mark.parametrize("field", ["crest", "banner"])
+def test_false_art_is_kept_apart_from_unset(tmp_path, field):
+    """
+    The one distinction load_league exists to carry. Unset means "I supplied no art"
+    and the build fills it with the default; false means "this league has none" and the
+    build leaves it alone. Collapsing them puts a crest nobody asked for on the page.
+    """
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({"league_name": "X", field: False,
+                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    loaded = league.load_league(str(path))
+    assert loaded[field] is False
+    assert loaded["crest" if field == "banner" else "banner"] is None
+
+
+def test_write_ids_keeps_a_false_it_was_given(tmp_path):
+    """`false` is falsy, and a writer that tested truthiness would drop it -- handing
+    the league back the default crest it had just said no to."""
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({"league_name": "X", "crest": False,
+                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    league.write_ids(str(path), league.load_league(str(path)))
+    written = json.loads(path.read_text())
+    assert written["crest"] is False
+    assert "banner" not in written and "tagline" not in written
+    assert league.load_league(str(path))["crest"] is False
 
 
 def test_write_ids_keeps_the_branding_and_invents_none(tmp_path):
