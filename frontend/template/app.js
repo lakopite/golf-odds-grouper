@@ -25,6 +25,15 @@
 
 var DATA = JSON.parse(document.getElementById('competition-data').textContent);
 
+/* The league's art: {logo: 'data:…', banner: 'data:…'}, either key or both absent.
+ * Separate from DATA because DATA is the result file verbatim, and the result file
+ * names the art with a slug rather than carrying the images themselves. The bundler
+ * resolves the slug and fills this element in. */
+var ART = (function () {
+  try { return JSON.parse(document.getElementById('league-art').textContent) || {}; }
+  catch (e) { return {}; }
+})();
+
 /* The whole of the difference between the two pages above. */
 var LIVE = DATA.live || null;
 
@@ -147,6 +156,13 @@ function renderRosters(host) {
 
 function renderHeader() {
   $('#league-name').textContent = DATA.league.league_name;
+  ['logo', 'banner'].forEach(function (name) {
+    if (!ART[name]) return;
+    var img = $('#league-' + name);
+    img.src = ART[name];
+    img.alt = DATA.league.league_name + ' ' + name;
+    img.hidden = false;
+  });
   $('#tournament').textContent = DATA.tournament.name;
   var k = DATA.sources.kalshi;
   $('#market').textContent = k.market_label + ' · ' + k.price_mode + ' · ' + k.event_ticker;

@@ -19,24 +19,41 @@ A team object is what the pool needs to draw a scoreboard row:
 The object form also carries the league's own identity, which the scoreboard puts
 in its masthead:
 
-    {"crest": "logos/crest.png", "banner": "logos/banner.png", "tagline": "10th Anniversary"}
+    {"logo": "wcw", "tagline": "10th Anniversary"}
 
-All three are optional. Paths are relative to the league file and are inlined as
-data: URIs at build time, exactly as team logos are, so an exported page still
-shows them on a plane. They are the one part of a league file that is about how
-the pool looks rather than who is in it, and they live here rather than in the
-template because a template that hard-coded one league's crest would be that
-league's template.
+Both are optional. `tagline` is a line of text. `logo` is NOT a path -- it is a
+slug naming a directory of art under `leagues/`, which holds one or both of:
 
-The crest and the banner may also be handed to `build_competition.py` as
-`--crest` / `--banner` when the competition is created, which beats what the file
-says; a build that is offered neither uses the art the tool ships. Everything
-about how the page looks apart from those two images -- the navy, the gold, the
-type, the layout -- belongs to the template and is the same for every league.
+    leagues/wcw/logo.png        the square badge beside the league name
+    leagues/wcw/banner.png      the wide image across the top of the page
 
-Unset is therefore not the same as none, and `crest` and `banner` take `false`
-for the second: no art, do not fill it in. `tagline` has no default and needs no
-such distinction.
+They are the one part of a league file that is about how the pool looks rather
+than who is in it, and they live here rather than in the template because a
+template that hard-coded one league's crest would be that league's template.
+Everything else about the page -- the navy, the gold, the type, the layout --
+belongs to the template and is the same for every league.
+
+The slug may also be handed to `build_competition.py` as `--logo wcw` when the
+competition is created, which beats what the file says.
+
+WHY A SLUG AND NOT TWO PATHS
+----------------------------
+The art used to be two paths that a build read, base64'd, and wrote into the
+result JSON. Every result file then carried half a megabyte of PNG it had no use
+for, every rebuild copied it forward, and the one document that describes a
+competition was mostly an envelope for two images.
+
+A slug is a name, and a name is all any of it needed. The league file names the
+art, the result file passes the name along, and the images are read exactly once
+-- at export, by `bundle_frontend.py`, into the single page that actually has to
+be portable. The exported HTML is still one file with nothing to fetch.
+
+The cost is that the art has to be findable later, which is why it lives under
+`leagues/<slug>/` at fixed names rather than wherever somebody happened to keep
+it. It is a small price for a result file that stays readable.
+
+There is no shipped default art any more, so unset means no art and nothing has
+to distinguish it from a refusal.
 
 WHY THE TEAM ID IS DERIVED RATHER THAN DRAWN
 --------------------------------------------
@@ -65,14 +82,20 @@ NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 REQUIRED_FIELDS = ("team_name", "player_name")
 OPTIONAL_FIELDS = ("team_logo", "team_id", "color", "abbreviation")
 
-# The league's own identity, for the scoreboard masthead. Every one of them is
-# optional and every one of them is null when absent -- see the module docstring.
-BRANDING_FIELDS = ("crest", "banner", "tagline")
+# The league's own identity, for the scoreboard masthead. Both are optional and both
+# are null when absent -- see the module docstring.
+BRANDING_FIELDS = ("logo", "tagline")
 
-# The two that are pictures. They are the fields a build can fill from a default or
-# from the command line, and so the only two where `false` needs to mean something
-# other than absent -- see _branding.
-ART_FIELDS = ("crest", "banner")
+# Where a league's art lives: leagues/<slug>/logo.png and leagues/<slug>/banner.png.
+# One fixed place, because two programs have to agree on it -- the build validates the
+# slug and the exporter reads the files, and they run minutes and a directory apart.
+LEAGUES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leagues")
+
+# The two images a slug names, and the extensions they may be saved under. The names
+# are fixed so a slug is enough to find them; PNG comes first because that is what the
+# checked-in art is, and SVG is last in the list and cheapest on the page.
+ART_NAMES = ("logo", "banner")
+ART_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".svg")
 
 
 def slugify(text):
@@ -187,35 +210,64 @@ def load_league(path):
 
 def _branding(path, raw):
     """
-    The three optional masthead fields, validated and always present as keys.
+    The two optional masthead fields, validated and always present as keys.
 
     Always present, and null when unset: a page that has to distinguish "this league
-    has no crest" from "this build predates crests" is a page that will get it wrong,
+    has no logo" from "this build predates logos" is a page that will get it wrong,
     and the difference is worth nothing to anybody. An empty string is treated as
     unset for the same reason -- it is what a hand-edited file grows when somebody
     clears a value, and rendering an <img> with no src is worse than rendering none.
 
-    `crest` and `banner` also take `false`, which is not the same as unset and is the
-    one distinction this function exists to keep. Unset means "I did not supply art",
-    and a build fills it with the default; false means "this league has none", and a
-    build leaves it empty. Both end up falsy, so nothing downstream has to care -- but
-    the build has to be able to tell them apart, and once it has, the difference is
-    spent.
+    That `logo` is a slug and not a path is checked here, and it is the whole reason
+    this is not a two-line comprehension. `"logos/wcw-crest.png"` is what every league
+    file said before the art moved into `leagues/<slug>/`; taken as a slug it names a
+    directory nobody will ever create, and the only symptom would be a masthead that
+    came out empty at the far end of a build. It is one comparison to say so instead.
     """
     out = {}
     for field in BRANDING_FIELDS:
         value = raw.get(field)
-        if value is False and field in ART_FIELDS:
-            out[field] = False
-            continue
         if value is None or (isinstance(value, str) and not value.strip()):
             out[field] = None
             continue
         if not isinstance(value, str):
-            allowed = "a string, false or null" if field in ART_FIELDS else "a string or null"
-            _fail(path, f"{field!r} must be {allowed}, got {type(value).__name__}")
-        out[field] = value.strip()
+            _fail(path, f"{field!r} must be a string or null, got {type(value).__name__}"
+                        + (". `false` used to mean \"no art\"; unset means that now."
+                           if value is False else ""))
+        value = value.strip()
+        if field == "logo" and value != slugify(value):
+            _fail(path, f"'logo' names a directory of art under leagues/ -- "
+                        f"leagues/<slug>/logo.png and leagues/<slug>/banner.png -- so it is a "
+                        f"slug like \"wcw\", not a path. Got {value!r}.")
+        out[field] = value
     return out
+
+
+def art_files(slug, leagues_dir=None):
+    """
+    The art a `logo` slug names: {"logo": path or None, "banner": path or None}.
+
+    One directory, two fixed names, whichever extension the file was saved under. Both
+    are optional and either may be missing -- a league with a badge and no banner is an
+    ordinary league and the page draws it -- so a slug that names nothing at all comes
+    back as two Nones rather than as an exception. Only the caller knows whether that
+    is worth a word: a build says so, a rebuild of a competition somebody deliberately
+    left bare should not.
+
+    `leagues_dir` exists for tests and for anyone keeping their leagues elsewhere; the
+    default is the one place both the build and the exporter look.
+    """
+    found = {name: None for name in ART_NAMES}
+    if not slug:
+        return found
+    directory = os.path.join(leagues_dir or LEAGUES_DIR, slug)
+    for name in ART_NAMES:
+        for ext in ART_EXTENSIONS:
+            candidate = os.path.join(directory, name + ext)
+            if os.path.isfile(candidate):
+                found[name] = candidate
+                break
+    return found
 
 
 def write_ids(path, league):
@@ -228,10 +280,8 @@ def write_ids(path, league):
     payload = {
         "league_id": league["league_id"],
         "league_name": league["league_name"],
-        # Written back only when set -- and `false` counts as set. This rewrites the
-        # user's file, and adding three null keys they never typed is how a tool
-        # teaches people not to run it; silently dropping the `"crest": false` they
-        # did type, and handing them the default crest next build, is worse.
+        # Written back only when set. This rewrites the user's file, and adding keys
+        # they never typed is how a tool teaches people not to run it.
         **{f: league[f] for f in BRANDING_FIELDS if league[f] is not None},
         "teams": league["teams"],
     }
@@ -248,6 +298,8 @@ def main(argv=None):
     ap.add_argument("league", help="path to the league JSON")
     ap.add_argument("--write-ids", action="store_true",
                     help="write the derived team ids back into the file, pinning them")
+    ap.add_argument("--leagues-dir", default=LEAGUES_DIR,
+                    help=f"where the art slugs live (default {LEAGUES_DIR})")
     args = ap.parse_args(argv)
 
     try:
@@ -258,9 +310,14 @@ def main(argv=None):
     print(f"{league['league_name']}  ({league['league_id']})")
     if league.get("tagline"):
         print(f"  {league['tagline']}")
-    for field in ART_FIELDS:
-        if league[field] is not None:
-            print(f"  {field}: {'none, by request' if league[field] is False else league[field]}")
+    if league["logo"]:
+        # Resolved rather than repeated back. "logo: wcw" says nothing a reader could
+        # not see in their own file; the two paths say whether the export will find
+        # anything, which is the question they opened this for.
+        found = art_files(league["logo"], args.leagues_dir)
+        print(f"  logo: {league['logo']}")
+        for name in ART_NAMES:
+            print(f"    {name}: {found[name] or 'not found'}")
     print(f"{len(league['teams'])} teams -> {len(league['teams'])} groups\n")
     width = max(len(t["team_name"]) for t in league["teams"])
     for t in league["teams"]:

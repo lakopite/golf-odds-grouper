@@ -326,7 +326,9 @@ def test_the_result_records_no_price_read_after_the_groups_were_drawn():
                    for g in result["golfers"])
         # The version is how a reader of an old file finds out the shape changed. A
         # silent drop would leave two incompatible documents both calling themselves 2.0.
-        assert result["schema_version"] == "2.1"
+        # 3.0 removed the inlined crest and banner in favour of an art slug; the one
+        # price per golfer this test is about is unchanged and still 2.1's doing.
+        assert result["schema_version"] == "3.0"
 
 
 def test_the_result_records_where_every_number_came_from():
@@ -472,7 +474,10 @@ def test_assembly_holds_at_several_league_sizes(n_teams):
 
 
 # ---------------------------------------------------------------------------
-# Logos
+# Team logos
+#
+# The one kind of image this half of the pipeline still opens. The league's own art is
+# a slug that stays a slug until export -- see the section below.
 # ---------------------------------------------------------------------------
 
 def test_a_local_logo_is_inlined(tmp_path):
@@ -504,201 +509,160 @@ def test_an_oversized_logo_is_refused_rather_than_inlined(tmp_path, capsys):
     assert "inline limit" in capsys.readouterr().out
 
 
-def test_a_warning_names_what_is_missing_rather_than_calling_it_a_logo(tmp_path, capsys):
-    """The same inliner runs over crests and banners, and a build that says "logo not
-    found" while looking for a banner sends somebody hunting through the wrong list."""
-    assert bc.inline_logo("nope.png", str(tmp_path), "banner") is None
-    assert "banner not found" in capsys.readouterr().out
-
-
 # ---------------------------------------------------------------------------
 # The league's own identity
 # ---------------------------------------------------------------------------
 
-def test_the_result_carries_the_leagues_crest_banner_and_tagline():
+def test_the_result_carries_the_leagues_logo_slug_and_tagline():
     result = make_result(n_teams=3, n_golfers=10)
-    assert set(("crest", "banner", "tagline")) <= set(result["league"])
-    assert result["league"]["crest"] is None       # make_result's league has no art
+    assert set(("logo", "tagline")) <= set(result["league"])
+    assert result["league"]["logo"] is None        # make_result's league has no art
 
 
-def test_finish_inlines_the_crest_and_the_banner_against_the_league_file(tmp_path):
+def test_the_result_carries_no_images_of_its_own(tmp_path):
     """
-    Relative to the league file, not to wherever the build was run from -- exactly as
-    the team logos are, and for the same reason: that is where somebody put them.
+    The point of the slug. A result file is the document that describes a competition,
+    and it used to be mostly an envelope for two base64 PNGs that nothing in it read.
+    Whatever else changes, no image belongs in the league block.
     """
-    (tmp_path / "logos").mkdir()
-    for name in ("crest.svg", "banner.svg"):
-        (tmp_path / "logos" / name).write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
-    league_path = tmp_path / "wcw.json"
-    league_path.write_text("{}")
-
     result = make_result(n_teams=2, n_golfers=6)
-    result["league"]["crest"] = "logos/crest.svg"
-    result["league"]["banner"] = "logos/banner.svg"
-
-    args = types.SimpleNamespace(league=str(league_path), from_result=None,
-                                 crest=None, banner=None, no_crest=False, no_banner=False,
-                                 output=str(tmp_path / "out" / "result.json"),
-                                 update_aliases=False, alias_file=str(tmp_path / "a.json"))
+    result["league"]["logo"] = "example"
+    args = art_args(league="leagues/example-league.json",
+                    output=str(tmp_path / "out" / "result.json"),
+                    update_aliases=False, alias_file=str(tmp_path / "a.json"))
     bc.finish(result, args, {"review": None, "decisions": {}, "matches": {}, "report": None},
               {}, 0.0)
 
-    assert result["league"]["crest"].startswith("data:image/svg+xml;base64,")
-    assert result["league"]["banner"].startswith("data:image/svg+xml;base64,")
+    assert result["league"]["logo"] == "example"
+    assert "data:" not in json.dumps(result["league"])
 
 
-def test_a_rebuild_carries_the_branding_forward(tmp_path):
+def test_a_rebuild_carries_the_branding_forward():
     """
-    By the time a result file exists these are data: URIs, and a rebuild has no league
-    file to read them out of again. Dropping them would quietly un-brand a page
-    somebody has already seen.
+    A rebuild has no league file to read the slug out of again, and dropping it would
+    quietly un-brand a page somebody has already seen.
     """
     result = make_result(n_teams=2, n_golfers=6)
-    result["league"].update(crest="data:image/png;base64,AA", banner=None,
-                            tagline="10th Anniversary")
+    result["league"].update(logo="wcw", tagline="10th Anniversary")
     league = bc.league_from_result(result)
-    assert league["crest"] == "data:image/png;base64,AA"
-    assert league["banner"] is None
+    assert league["logo"] == "wcw"
     assert league["tagline"] == "10th Anniversary"
 
 
 def test_a_result_file_written_before_branding_existed_still_rebuilds():
     result = make_result(n_teams=2, n_golfers=6)
-    for field in ("crest", "banner", "tagline"):
+    for field in ("logo", "tagline"):
         result["league"].pop(field)
-    assert bc.league_from_result(result)["crest"] is None
+    assert bc.league_from_result(result)["logo"] is None
+
+
+def test_a_2x_file_loses_its_inlined_art_and_is_told_so(capsys):
+    """
+    3.0 has nowhere to put two data: URIs and would not want one. Dropping them is the
+    change working as intended -- doing it silently would un-brand a page somebody has
+    already sent round, which is the kind of quiet difference this tool does not make.
+    """
+    result = make_result(n_teams=2, n_golfers=6)
+    result["league"].pop("logo")
+    result["league"].update(crest="data:image/png;base64,AA", banner=None)
+    league = bc.league_from_result(result)
+    assert league["logo"] is None and "crest" not in league
+    out = capsys.readouterr().out
+    assert "predates the art slug" in out and "--logo" in out
 
 
 # ---------------------------------------------------------------------------
-# Where the masthead art comes from
+# Which art slug a competition carries
 #
-# Three sources -- the command line, the league file, and the art the tool ships --
-# and the whole of the rule is which one wins. The chrome around the art is the
-# template's and is the same for every league; these two images are not.
+# Two sources -- the command line and the league file -- and the whole of the rule is
+# which one wins. Nothing here opens an image: the slug is a name until export, which
+# is what keeps the result file a document rather than an envelope.
 # ---------------------------------------------------------------------------
 
 def art_args(**kw):
-    """A parsed command line with only the fields resolve_league_art reads."""
-    base = dict(league="leagues/wcw.json", from_result=None,
-                crest=None, banner=None, no_crest=False, no_banner=False)
+    """A parsed command line with the fields resolve_league_logo and finish read."""
+    base = dict(league="leagues/wcw.json", from_result=None, logo=None, no_logo=False)
     base.update(kw)
     return types.SimpleNamespace(**base)
 
 
-def art(said=None, **cli):
+def art(said=None, leagues_dir=None, **cli):
     """
-    Resolve one competition's masthead art.
+    Settle one competition's art slug.
 
-    `said` is what the league file (or, on a rebuild, the result file) carries, as
-    {"crest": ..., "banner": ...}; the keyword arguments are the command line. Kept
-    apart because `--crest` and a file's `crest` are exactly the two things these
-    tests are about telling apart.
+    `said` is what the league file (or, on a rebuild, the result file) carries; the
+    keyword arguments are the command line. Kept apart because `--logo` and a file's
+    `logo` are exactly the two things these tests are about telling apart.
     """
-    result = {"league": dict({"crest": None, "banner": None}, **(said or {}))}
-    return bc.resolve_league_art(result, art_args(**cli))["league"]
+    result = {"league": dict({"logo": None}, **(said or {}))}
+    return bc.resolve_league_logo(result, art_args(**cli), leagues_dir)["league"]
 
 
-def test_a_league_that_supplies_no_art_gets_the_default():
-    """The point of shipping a default: a competition created with nothing but a roster
-    still opens looking like the design, not like a page whose images 404'd."""
-    league = art()
-    assert league["crest"] == bc.DEFAULT_CREST
-    assert league["banner"] == bc.DEFAULT_BANNER
-    assert os.path.isfile(league["crest"]) and os.path.isfile(league["banner"])
+def test_a_league_that_supplies_no_art_gets_none():
+    """There is no shipped default any more. Filling one in meant a page could open
+    wearing another league's crest, and a masthead with just a name in it is a shape
+    the design draws."""
+    assert art()["logo"] is None
 
 
-def test_the_league_file_beats_the_default():
-    assert art({"crest": "logos/ours.png"})["crest"] == "logos/ours.png"
+def test_the_league_file_is_where_the_slug_usually_comes_from(tmp_path):
+    assert art({"logo": "ours"}, leagues_dir=str(tmp_path))["logo"] == "ours"
 
 
 def test_the_command_line_beats_the_league_file(tmp_path):
-    """`--crest` is how the image arrives beside the league JSON when a competition is
-    created, so it has to win over art the file happens to carry."""
-    mine = tmp_path / "mine.png"
-    mine.write_bytes(b"\x89PNG")
-    assert art({"crest": "logos/ours.png"}, crest=str(mine))["crest"] == str(mine)
+    assert art({"logo": "ours"}, leagues_dir=str(tmp_path), logo="mine")["logo"] == "mine"
 
 
-def test_a_typed_path_is_resolved_against_the_working_directory(tmp_path, monkeypatch):
+def test_no_logo_wins_over_everything(tmp_path):
+    assert art({"logo": "ours"}, leagues_dir=str(tmp_path), no_logo=True)["logo"] is None
+
+
+def test_a_rebuild_keeps_the_slug_the_first_build_settled(tmp_path):
+    league = art({"logo": "wcw"}, leagues_dir=str(tmp_path),
+                 league=None, from_result="build/result.json")
+    assert league["logo"] == "wcw"
+
+
+def test_a_slug_that_names_nothing_is_said_out_loud(tmp_path, capsys):
+    """A build that recorded art the export cannot find is a blank masthead somebody
+    discovers after sending the page round. It costs one line to say it here."""
+    assert art({"logo": "ghost"}, leagues_dir=str(tmp_path))["logo"] == "ghost"
+    assert "names no art" in capsys.readouterr().out
+
+
+def test_half_the_art_is_a_note_rather_than_a_warning(tmp_path, capsys):
+    (tmp_path / "half").mkdir()
+    (tmp_path / "half" / "logo.png").write_bytes(b"\x89PNG")
+    art({"logo": "half"}, leagues_dir=str(tmp_path))
+    out = capsys.readouterr().out
+    assert "no banner image" in out and "names no art" not in out
+
+
+def test_a_path_typed_where_a_slug_belongs_is_an_error_not_a_warning(capsys):
     """
-    Not against the league file, which is where a path *inside* that file resolves.
-    Making it absolute here is what keeps the inliner from later joining a relative
-    `--crest` onto the league directory and looking in a place nobody meant.
-    """
-    (tmp_path / "art.png").write_bytes(b"\x89PNG")
-    monkeypatch.chdir(tmp_path)
-    resolved = art(crest="art.png")["crest"]
-    assert os.path.isabs(resolved) and os.path.isfile(resolved)
-
-
-@pytest.mark.parametrize("field", ["crest", "banner"])
-def test_no_crest_and_no_banner_win_over_everything(field):
-    assert art({field: "logos/ours.png"}, **{f"no_{field}": True})[field] is None
-
-
-@pytest.mark.parametrize("field", ["crest", "banner"])
-def test_false_in_the_league_file_means_none_rather_than_the_default(field):
-    """A league that wants a bare masthead has to be able to say so once, in the file,
-    rather than remembering a flag on every build."""
-    assert art({field: False})[field] is None
-
-
-def test_a_rebuild_does_not_fill_in_art_the_first_build_left_empty():
-    """
-    The first build settled this. A rebuild that re-answered it would put a crest on a
-    page that has already gone round without one -- and the competition would change
-    its appearance on a run that was supposed to be about the leaderboard.
-    """
-    league = art(league=None, from_result="build/result.json")
-    assert league["crest"] is None and league["banner"] is None
-
-
-def test_a_rebuild_still_takes_art_it_is_handed(tmp_path):
-    """Not filling in a default is not the same as refusing to be told."""
-    mine = tmp_path / "new.png"
-    mine.write_bytes(b"\x89PNG")
-    league = art({"crest": "data:image/png;base64,AA"},
-                 league=None, from_result="build/result.json", crest=str(mine))
-    assert league["crest"] == str(mine)
-
-
-def test_a_rebuild_carries_an_already_inlined_crest_through_untouched():
-    league = art({"crest": "data:image/png;base64,AA"},
-                 league=None, from_result="b.json")
-    assert league["crest"] == "data:image/png;base64,AA"
-
-
-def test_the_default_art_survives_the_inliner(tmp_path):
-    """
-    The default is only a default if it actually lands in the page. It is a real file
-    of a real size, and the inliner refuses anything over the limit -- so this is the
-    test that fails if somebody drops a 3 MB banner in as the default.
-    """
-    for what, path in (("crest", bc.DEFAULT_CREST), ("banner", bc.DEFAULT_BANNER)):
-        assert os.path.getsize(path) <= bc.MAX_INLINE_LOGO_BYTES, what
-        assert bc.inline_logo(path, str(tmp_path), what).startswith("data:image/png;base64,")
-
-
-@pytest.mark.parametrize("field", ["crest", "banner"])
-def test_a_typo_in_a_typed_path_is_an_error_not_a_warning(field, capsys):
-    """
-    A path somebody typed is a thing they meant, unlike art a league file merely
-    mentions. And the check has to come before the build: everything between the
-    command line and the inliner is network, so a shrug here costs the Kalshi fetch
-    and the ESPN join twice.
+    A slug somebody typed is a thing they meant, unlike a slug a league file merely
+    carries. And the check has to come before the build: everything between the command
+    line and the end is network, so a shrug here costs the Kalshi fetch and the ESPN
+    join twice.
     """
     with pytest.raises(SystemExit):
         bc.main(["--league", "leagues/example-league.json", "--tournament", "Wyndham",
-                 f"--{field}", "nope.png"])
-    assert f"--{field} nope.png is not a file" in capsys.readouterr().err
+                 "--logo", "leagues/wcw/logo.png"])
+    assert "is a slug" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("field", ["crest", "banner"])
-def test_asking_for_art_and_no_art_at_once_is_refused(field, capsys):
+def test_a_typed_slug_that_names_no_art_is_an_error(capsys):
     with pytest.raises(SystemExit):
         bc.main(["--league", "leagues/example-league.json", "--tournament", "Wyndham",
-                 f"--{field}", "leagues/logos/wcw-crest.png", f"--no-{field}"])
-    assert f"--{field} and --no-{field}" in capsys.readouterr().err
+                 "--logo", "nosuchleague"])
+    assert "names no art" in capsys.readouterr().err
+
+
+def test_asking_for_art_and_no_art_at_once_is_refused(capsys):
+    with pytest.raises(SystemExit):
+        bc.main(["--league", "leagues/example-league.json", "--tournament", "Wyndham",
+                 "--logo", "example", "--no-logo"])
+    assert "--logo and --no-logo" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

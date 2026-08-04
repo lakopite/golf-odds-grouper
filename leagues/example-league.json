@@ -1,13 +1,12 @@
 {
   "league_name": "Sunday Fivesome",
   "tagline": "Season 4",
-  "crest": "logos/example-crest.svg",
-  "banner": "logos/example-banner.svg",
+  "logo": "example",
   "teams": [
-    { "team_name": "Bogey Boys",      "player_name": "Mo",     "team_logo": "logos/bogey-boys.svg" },
-    { "team_name": "Fairway to Heaven","player_name": "Diogo", "team_logo": "logos/fairway.svg" },
-    { "team_name": "Mulligan Mafia",  "player_name": "Luis",   "team_logo": "logos/mulligan.svg" },
-    { "team_name": "Sand Trap Society","player_name": "Cody",  "team_logo": "logos/sandtrap.svg" },
-    { "team_name": "Albatross Alliance","player_name": "Darwin","team_logo": "logos/albatross.svg" }
+    { "team_name": "Bogey Boys",      "player_name": "Mo",     "team_logo": "example/bogey-boys.svg" },
+    { "team_name": "Fairway to Heaven","player_name": "Diogo", "team_logo": "example/fairway.svg" },
+    { "team_name": "Mulligan Mafia",  "player_name": "Luis",   "team_logo": "example/mulligan.svg" },
+    { "team_name": "Sand Trap Society","player_name": "Cody",  "team_logo": "example/sandtrap.svg" },
+    { "team_name": "Albatross Alliance","player_name": "Darwin","team_logo": "example/albatross.svg" }
   ]
 }

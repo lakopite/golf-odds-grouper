@@ -81,19 +81,23 @@ rather than written: ESPN does not unpublish a field, so that is a failed read, 
 writing it would turn a working scoreboard back into a groups sheet with no sign that
 anything went wrong.
 
-A league's own art rides along. The crest and the banner can be handed in when the
-competition is created, beside the roster:
+A league's own art rides along. Drop the two images into a directory named for the
+league and name that directory in the league file:
 
-```bash
-python build_competition.py --league leagues/my-league.json --tournament "Wyndham" \
-    --crest art/crest.png --banner art/banner.png
+```
+leagues/my-league/logo.png      the badge beside the league name
+leagues/my-league/banner.png    the wide image across the top
+```
+```json
+{ "league_name": "My League", "logo": "my-league", "teams": [ … ] }
 ```
 
-Both are inlined into the exported page, so it stays one portable file. They can also
-be named in the league file, and a build offered neither uses the art the tool ships —
-so a page always looks finished. Those two images are the only thing that changes
-between leagues: everything else about how the page looks belongs to the template.
-`leagues/README.md` has the precedence rules and how to ask for no art at all.
+The result JSON carries the *name* `"my-league"` and none of the pixels; the export
+reads those two files and inlines them, so the page is still one portable file and the
+JSON stays a document about a competition. `--logo my-league` supplies the slug at
+creation instead, and `--no-logo` builds without art. Those two images are the only
+thing that changes between leagues: everything else about how the page looks belongs
+to the template. `leagues/README.md` has the details.
 
 Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
 sentence: *"build this week's pool for my-league at the Wyndham"*.

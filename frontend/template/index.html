@@ -6,10 +6,12 @@
   {{token}}s below, and replaces the marker in the data script with the result JSON.
   The result is one self-contained file that opens from disk.
 
-  A designed replacement only has to keep three things:
+  A designed replacement only has to keep four things:
     * the <script id="competition-data"> element with the marker inside it
     * local asset references the bundler can inline
     * whatever {{tokens}} it wants filled
+    * the <script id="league-art"> element, if it draws the league's art at all --
+      the bundler fills it with the two images the result file's slug names
   See docs/FRONTEND-SPEC.md, and frontend/scoreboard/ for the designed page this
   repository actually ships. `lib.js` sits above both templates, at ../lib.js, so the
   standings rule exists once and the parity test covers every page built from it.
@@ -24,6 +26,11 @@
 <body>
 <main>
   <header class="page">
+    <!-- No src: app.js fills these from the league-art element below, or leaves them
+         hidden. A league with no art gets a header with its name in it, and that is a
+         finished header. -->
+    <img id="league-banner" class="banner" alt="" hidden>
+    <img id="league-logo" alt="" width="48" height="48" hidden>
     <h1><span id="league-name">{{league_name}}</span></h1>
     <p class="sub"><span id="tournament">{{tournament}}</span> · <span id="market">{{market}}</span></p>
     <p class="sub" id="round"></p>
@@ -46,6 +53,9 @@
 </main>
 
 <script id="competition-data" type="application/json">/*__COMPETITION_JSON__*/</script>
+<!-- The league's art as data: URIs, read by the bundler out of leagues/<slug>/. The
+     result file names the slug and carries no images; this is where they arrive. -->
+<script id="league-art" type="application/json">/*__LEAGUE_ART_JSON__*/</script>
 <script src="../lib.js"></script>
 <script src="app.js"></script>
 </body>

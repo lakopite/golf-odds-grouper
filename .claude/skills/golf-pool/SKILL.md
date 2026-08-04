@@ -112,9 +112,8 @@ Useful flags:
 | `--kalshi-event KXPGATOUR-WYC26` | pin the event; skips name resolution |
 | `--espn-event 401811961` | pin the ESPN event; skips name resolution |
 | `--seed 42` | reproducible deal of groups to teams |
-| `--crest art/crest.png` | the league's badge, supplied at creation; beats the league file (§2) |
-| `--banner art/banner.png` | the wide image across the top, same (§2) |
-| `--no-crest` / `--no-banner` | build with none, whatever the league file says |
+| `--logo wcw` | the league's art directory, supplied at creation; beats the league file (§2) |
+| `--no-logo` | build with no art, whatever the league file says |
 | `--exclude "Scottie Scheffler"` | drop a named golfer; repeatable |
 | `--no-auto-exclude` | keep golfers over the fair-share threshold |
 | `--match-review build/match-review.json` | the file reviewed name decisions are read from and written to; defaults to `match-review.json` beside `--output` (§4.2) |
@@ -153,6 +152,11 @@ python bundle_frontend.py --result build/result.json --out dist/
 
 Writes `dist/<league>-<tournament>.html` (self-contained — opens from disk, no server)
 and a matching `.zip` holding the page, `result.json`, and a manifest.
+
+This is also the step that reads the league's art: the result file names it with a slug
+and the page gets the pixels, so the two files in the zip differ by exactly those two
+images (§2). If the export says a slug names no art, the files are missing from
+`leagues/<slug>/` — fix that and bundle again rather than editing the result file.
 
 No `--template` is the right call: the default is the designed scoreboard
 (`frontend/scoreboard/`), which is the page people want to be handed. There is a plain
@@ -197,10 +201,9 @@ A league file lives in `leagues/`. Two shapes work; prefer the first.
 {
   "league_name": "Sunday Fivesome",
   "tagline": "Season 4",
-  "crest": "logos/example-crest.svg",
-  "banner": "logos/example-banner.svg",
+  "logo": "example",
   "teams": [
-    { "team_name": "Bogey Boys", "player_name": "Mo", "team_logo": "logos/bogey-boys.svg" },
+    { "team_name": "Bogey Boys", "player_name": "Mo", "team_logo": "example/bogey-boys.svg" },
     { "team_name": "Mulligan Mafia", "player_name": "Luis", "team_logo": null }
   ]
 }
@@ -219,46 +222,51 @@ A bare list of team objects also works and takes its league name from the filena
 
 ### The masthead
 
-`crest`, `banner` and `tagline` fill the scoreboard's masthead — a crest beside the
-name, a wide banner across the top, a line of small caps under the name. They are the
-only part of the page that differs between leagues: the navy-and-gold chrome, the type
-and the layout are the template's and are identical for every competition. Do not
-restyle the page for a league; swap its two images.
+`logo` and `tagline` fill the scoreboard's masthead — a badge beside the name, a wide
+banner across the top, a line of small caps under the name. They are the only part of
+the page that differs between leagues: the navy-and-gold chrome, the type and the
+layout are the template's and are identical for every competition. Do not restyle the
+page for a league; swap its art.
 
-The two images can also be handed in when the competition is created, which is the
-usual route when somebody supplies art alongside the roster:
+**`logo` is a slug, not a path.** It names a directory in `leagues/` holding the art at
+fixed names — `.png`, `.jpg`, `.webp` or `.svg`:
 
-```bash
-python build_competition.py --league leagues/wcw.json --tournament Wyndham \
-    --crest art/crest.png --banner art/banner.png
+```
+leagues/wcw/logo.png      the square badge, around 256 px
+leagues/wcw/banner.png    the wide image, around 720 px across
 ```
 
-`--crest` / `--banner` beat what the league file says; those paths resolve against the
-working directory. If neither is given and the file says nothing, the build uses the
-art the tool ships and prints a note saying so — so **a league with no art still gets a
-finished-looking page, and you do not need to go and find some.** `--no-crest` /
-`--no-banner` build with none, and `"crest": false` in the file is the standing form of
-that. `tagline` has no default: do not invent one nobody asked for.
+So supplying art for a league means putting two files in `leagues/<slug>/` and writing
+`"logo": "<slug>"` in the league file — or `--logo <slug>` at creation, which beats the
+file. `--no-logo` builds one competition with none.
 
-Paths in the file resolve against the league file and are inlined as data URIs like the
-team logos, so **keep them small**: anything over 512 KB is refused and left as a path
-that will not resolve in the export, and every inlined byte lands in every copy of the
-page. A crest around 256 px and a banner around 720 px wide is the right order of
-magnitude; a JPEG beats a PNG for a photographic banner by roughly five to one. The
-banner is centre-cropped into a wide, short slot, so art with detail at the top and
-bottom edges loses it.
+Both images are optional and there is no default. **A league with no art gets a
+masthead with its name in it, which is a shape the design draws — do not go and find
+some.** `tagline` likewise: do not invent one nobody asked for.
 
-Once built it is settled: the result file holds the data URIs, and a rebuild carries
-them forward — including a deliberate absence. A rebuild never grows a crest the first
-build did not have.
+The images never enter the result JSON; they are read out of `leagues/<slug>/` at
+export and inlined into the page, which stays one portable file. That means the art has
+to be **in the repository** — a path to somebody's Desktop is not a slug and will not
+resolve when the page is built. It also means **replacing the files and re-exporting
+updates a competition already drawn**, which is the only way to change its art.
 
-Validate before building:
+Keep them reasonable. A 2 MB banner becomes 2.7 MB of base64 in every copy of the page;
+a JPEG beats a PNG for photographic art by roughly five to one, and the export prints
+the size of anything over 1 MB. The banner is centre-cropped into a wide, short slot, so
+art with detail at the top and bottom edges loses it.
+
+Once built it is settled: the result file holds the slug, and a rebuild carries it
+forward — including a deliberate absence. A rebuild never grows art the first build did
+not have.
+
+Validate before building — this resolves the slug and prints the files it finds:
 
 ```bash
 python league.py leagues/<name>.json
 ```
 
-`leagues/example-league.json` is a working five-team example with SVG logos.
+`leagues/example-league.json` is a working five-team example with SVG art in
+`leagues/example/`.
 
 ---
 
@@ -531,7 +539,8 @@ join settled and a handful listed for review (§4.2).
 |---|---|
 | `build_competition.py` | the pipeline → result JSON, and the rebuild of one (§4) |
 | `bundle_frontend.py` | result JSON + template → self-contained page + zip |
-| `league.py` | league file loading, validation, team ids |
+| `league.py` | league file loading, validation, team ids, and where an art slug resolves |
+| `leagues/<slug>/` | one league's art — `logo.png` and `banner.png`, read at export (§2) |
 | `espn_leaderboard.py` | ESPN event resolution, leaderboard parsing, and the name join against one published field — three exact tiers, plus the suggester for whatever they leave |
 | `match_review.py` | the worksheet those leftover names get settled in, and the aliases a settlement is worth keeping (§4.2) |
 | `data/espn_aliases.json` | the learned Kalshi → ESPN name aliases. Written only by `--update-aliases`, created on first use, safe to hand-edit |
