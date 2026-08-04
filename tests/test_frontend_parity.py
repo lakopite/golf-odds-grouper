@@ -25,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(ROOT, "frontend", "lib.js")
 FINAL = os.path.join(ROOT, "tests", "fixtures", "espn_final_with_cut.json")
 MID = os.path.join(ROOT, "espn-api", "lb.json")
+PRE = os.path.join(ROOT, "tests", "fixtures", "espn_pre_tournament.json")
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 
@@ -48,7 +49,8 @@ const INPUT = JSON.parse(fs.readFileSync(0, 'utf8'));
 # Leaderboard parsing
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("fixture", [MID, FINAL], ids=["mid-round", "final-with-cut"])
+@pytest.mark.parametrize("fixture", [MID, FINAL, PRE],
+                         ids=["mid-round", "final-with-cut", "pre-tournament"])
 def test_leaderboard_parsing_agrees(fixture):
     with open(fixture) as f:
         payload = json.load(f)
@@ -71,6 +73,34 @@ def test_leaderboard_parsing_agrees(fixture):
         assert js["positionNumber"] == py["position_number"]
         assert js["toPar"] == py["to_par"]
         assert js["tied"] == py["tied"]
+
+
+@pytest.mark.parametrize("fixture,expected", [(PRE, False), (MID, True), (FINAL, True)],
+                         ids=["pre-tournament", "mid-round", "final-with-cut"])
+def test_both_sides_agree_on_whether_play_has_started(fixture, expected):
+    """
+    The gate that decides whether anything is ranked at all, checked on both sides.
+
+    It has to be here rather than only in Python, because it is the second rule this
+    project implements twice and the browser is where it runs. If the two ever disagree,
+    a page ranks a field nobody has played -- 147 golfers at position "-", ordered by
+    ESPN's pre-tournament sortOrder and presented as a leaderboard, which is a far more
+    convincing way to be wrong than showing nothing.
+
+    The pre-tournament fixture is the real 2026 Wyndham payload, captured two days
+    before the first round: a full field, and not one position in it.
+    """
+    with open(fixture) as f:
+        payload = json.load(f)
+
+    py_meta, _ = espn_leaderboard.parse_leaderboard(payload)
+    js_started = run_node("""
+      const {meta} = GolfPool.parseLeaderboard(INPUT);
+      console.log(JSON.stringify(meta.started));
+    """, payload)
+
+    assert py_meta["started"] is expected
+    assert js_started is expected
 
 
 # ---------------------------------------------------------------------------

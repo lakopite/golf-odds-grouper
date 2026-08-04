@@ -1,6 +1,6 @@
 ---
 name: golf-pool
-description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file, to rebuild an existing competition from its result.json ("update the scoreboard", "the tournament has started", "redraw the groups", or "refresh the odds" - which routes here so §6 can explain that odds are read once, at the draw, and never re-read), or to match Kalshi golfer names to ESPN athletes - including settling the golfers a build reported as NEEDS REVIEW or unresolved, by filling in the decisions in a match-review.json and rebuilding.
+description: Run a golf pool competition end to end for a league in this repo - pull a tournament's odds from Kalshi, partition the field into equal-value groups, deal them to the league's teams, and export a self-contained scoreboard. Use when the user names a league and a tournament, asks to "build/run/draw the groups", "make this week's pool", "set up a league", "export the scoreboard", or mentions a Kalshi event ticker, an odds type (winner/top5/top10/makecut), or a league JSON. Also use to create or validate a new league file, to rebuild an existing competition from its result.json ("update the scoreboard", "redraw the groups", or "refresh the odds" - which routes here so §6 can explain that odds are read once, at the draw, and never re-read), or to match Kalshi golfer names to ESPN athletes - including settling the golfers a build reported as NEEDS REVIEW or unresolved, by filling in the decisions in a match-review.json and rebuilding. Also use when they say "the tournament has started" and want the standings - the answer there is that the page they already have ranks on its own (§6), not a rebuild.
 ---
 
 # Golf pool
@@ -18,11 +18,12 @@ The result file is the source of truth for that competition: teams, groups, the 
 at creation, both endpoints, and the grouping's optimality certificate. The bundle is
 the same file baked into a static page.
 
-**A normal week is two runs of that pipeline over one competition.** Before the
-tournament ESPN has published no field, so the first run puts out a groups sheet —
-rosters and the odds they were drawn on, nothing scored. Once play starts, the same
-competition is rebuilt from its own result file and becomes a scoreboard. §1 is the
-first run, §4 is the second; neither is a workaround for the other.
+**A normal week is one run of that pipeline, the night before.** ESPN posts a
+tournament's field about two days before the first round, so the Kalshi names join
+onto real athlete ids while the event is still `pre` and every golfer on the page is
+already identified. What is missing that night is scores, and nothing needs rebuilding
+to get them: the page polls ESPN, shows the draw until somebody tees off, and starts
+ranking by itself (§6). There is no second run.
 
 **Neither is written back into the repository.** Build into `build/` and `dist/`
 (both gitignored), hand the files over with SendUserFile, and do not commit them.
@@ -37,13 +38,14 @@ first run, §4 is the second; neither is a workaround for the other.
 | A new league defined, or an existing one checked | §2 |
 | To know what tournaments are available | §3 |
 | An existing competition updated, refreshed or re-drawn | §4 |
-| The scoreboard now that play has started | §4 — it is a rebuild, not a new build |
+| The scoreboard now that play has started | Nothing to run — §6. The page they were sent ranks on its own; tell them to open it again |
 | The golfers a build called NEEDS REVIEW settled | §4.2 |
 | To understand a number in an existing result file | §5 |
 
-**If they have a `result.json` already, §4 is almost always the answer, not §1.**
-Rebuilding from it keeps the groups people have been told about; building again from
-scratch does not.
+**If they have a `result.json` already and want something in it changed, §4 is the
+answer, not §1.** Rebuilding from it keeps the groups people have been told about;
+building again from scratch deals everybody new golfers. If all they want is the
+standings, neither: the page already does that.
 
 ---
 
@@ -71,29 +73,31 @@ so never construct one; look it up (§3).
 Ask only for what is genuinely missing. A message naming a league and a tournament is
 a complete instruction — build it.
 
-### 1.2 Check the timing, and expect to build twice
+### 1.2 Check the timing — one build, the night before
 
 Winner markets post **Sunday ~23:00Z of tournament week**, and markets keep being
-*added* through Wednesday as the field firms up. **Pull Wednesday night.** A Sunday
-pull groups an incomplete field, and it will not look incomplete.
+*added* through Wednesday as the field firms up. ESPN posts the tournament's field
+about **two days before the first round**. So Wednesday night is the first moment both
+APIs are complete, and it is when a pool wants to be drawn anyway. **Build Wednesday
+night.**
+
+That is now a floor as well as advice. A published ESPN field is a **precondition**:
+the build stops without writing if it cannot read one, because every golfer's athlete
+id comes from that field and a page built without them could never score. A Sunday-night
+build has odds but no field and will fail; it would also have grouped an incomplete
+field, so both halves of the timing agree.
 
 If the field looks short (well under ~140 for a full-field event), say so before
 building rather than after.
 
-ESPN runs on the other clock: it publishes **zero competitors until the first tee
-time** (§6). The build reads that off the leaderboard payload and picks its own mode.
-There is no flag for this and nothing to decide:
+**What the build cannot do that night is rank**, and it does not try. A `pre` payload
+lists every competitor and gives none of them a position. So the page that comes out
+shows the draw — every team, every roster, every price — and it polls ESPN from the
+moment it opens. At the first tee time it starts ranking, by itself, in whatever
+browser has it open. Nothing is re-run and nobody is sent a second link (§6).
 
-| When it runs | `build_mode` | What comes out |
-|---|---|---|
-| Before the first tee time | `groups` | rosters and the odds they were drawn on. `live` is null, every golfer's `espn` is null, and the page fetches nothing at all |
-| Once play has started | `live` | the same groups, an ESPN athlete id on every golfer the join settled, and a page that polls the leaderboard and ranks |
-
-**A groups build is not a half-built one.** It is the groups sheet — the thing that
-exists on Wednesday and the thing people want on Wednesday — and it is finished:
-bundle it, send it, say that the ranking arrives when play does. Then run §4 against
-that same result file on Thursday. That second run is what turns the competition into
-a scoreboard, and it re-draws nothing.
+**So the Wednesday build is the finished article**, not a half-built one: bundle it,
+send it, and say once that the ranking appears on its own when play starts.
 
 ### 1.3 Run it
 
@@ -131,18 +135,17 @@ Useful flags:
   If it is not optimal, the run names the golfer responsible — someone worth more than
   a whole group's fair share, whom no partition can balance around. The fix is to
   exclude them, not to search harder;
-- the `ESPN:` line, which is where you find out which of the two builds this was. Three
-  answers, and only the third is a problem:
-  - `no field published` — the normal Wednesday answer. This is a groups build, nothing
-    is scored, nothing needs fixing, and §4 is what adds the scoring later;
-  - `N competitors in the field` — the join ran, and the `Match:` line underneath says
-    how many Kalshi names it settled and by which tier (exact, alias, reviewed). The
-    names it will not guess at come back as **NEEDS REVIEW**, listed, with a file to
-    settle them in: that is §4.2, and it is a normal part of a live build rather than a
-    failure;
-  - `unreadable` — ESPN did not answer. The build falls back to a groups sheet, which is
-    honest but is a groups sheet by accident on a day that should have had scoring.
-    Re-run before handing anything over.
+- the `ESPN:` line — how many competitors were in the field, and what state ESPN had
+  the tournament in. `147 competitors in the field [pre] -- not started` is the normal
+  Wednesday-night answer and is exactly right: the join ran against the real field, and
+  the page will rank when play starts. The `Match:` line underneath says how many Kalshi
+  names it settled and by which tier (exact, alias, reviewed). Names it will not guess at
+  come back as **NEEDS REVIEW**, listed, with a file to settle them in — that is §4.2,
+  and it is a normal part of a build rather than a failure.
+
+  There is no other outcome to read: a build that could not read a field, or read an
+  empty one, has already stopped and told you which of three things went wrong. Nothing
+  was written, so fix it and run again.
 
 ### 1.4 Bundle and hand over
 
@@ -184,8 +187,10 @@ Short. The groups are in the file; do not paste 150 golfers into chat. Say:
 - the partition quality in one line, and whether it is provably optimal;
 - who was excluded and why, if anyone;
 - each team's total odds, so they can see the draw was even;
-- **which of the two builds this is** — a groups sheet with the ranking still to come,
-  or a live scoreboard — and, if it is live, how many golfers need a decision (§4.2);
+- **that the page starts ranking on its own at the first tee time**, so nobody needs a
+  new file — say it once, plainly, or they will come back on Thursday asking for the
+  scoreboard;
+- how many golfers came back needing a decision (§4.2), if any;
 - anything odd — a fuzzy tournament match, a short field.
 
 If odds come up, say once that the page's odds are the snapshot from the draw and never
@@ -299,36 +304,39 @@ creation are carried forward untouched, and anything typed on the command line o
 what was recorded. `--from-result` also takes an exported `.zip` directly — that is
 usually the copy the user still has.
 
-**This is the second run of the normal week** (§1.2), and it is the same result file
-both times: one competition, one file, brought up to date. Writing it back in place is
-the ordinary thing to do — the rebuild carries the draw forward verbatim, records what
-it was rebuilt from, and only writes once everything upstream of it succeeded. Give
-`--output` a different path only when they want the old file kept as well; keep it in
-the same directory either way, because the review file (§4.2) lives beside `--output`.
+**A normal week does not need this** (§1.2): the page starts ranking on its own, so a
+rebuild is never for scoring. It is for changing something in the file. When you do run
+one, write it back in place — one competition, one file, brought up to date. The rebuild
+carries the draw forward verbatim, records what it was rebuilt from, and only writes once
+everything upstream of it succeeded. Give `--output` a different path only when they want
+the old file kept as well; keep it in the same directory either way, because the review
+file (§4.2) lives beside `--output`.
 
 | They want | Add |
 |---|---|
-| The scoreboard, now play has started | *(nothing — this is the default)* |
 | The golfers that came back NEEDS REVIEW settled | `--match-review build/match-review.json` (§4.2) |
 | Those name bindings kept for next week | `--update-aliases` (§4.2) |
+| A wrong `--espn-event` fixed, or a name that could not be settled at build time | *(nothing — the join is redone by default)* |
+| A golfer who withdrew after the draw | **nothing at all** — the page scores them nothing on its own. The draw is frozen, so there is nobody to swap them for |
 | A genuinely new draw | `--regroup` |
 | The same groups, a new frontend | nothing — re-bundle (§4.3) |
+| The standings, now play has started | **nothing at all** — §6. Do not run a rebuild for this; it changes nothing they can see |
 
 ### 4.1 Which one they actually want
 
 **Default (`--from-result` alone).** Reads no odds at all. Redoes the ESPN join, updates
-the tournament state, and rewrites the file. This is the Thursday-morning run and the
-one that flips `build_mode` from `groups` to `live`: the field is posted, so every
-golfer the join settles gets an athlete id and a headshot, the page starts polling and
-ranking, and the names it will not guess at are listed for review (§4.2). It also works
-after the tournament has finished, which a fresh build does not — settled markets quote
-nothing, so a `--regroup` at that point fails by design.
+the tournament state, and rewrites the file. Run it when the **join** changed: names
+settled in the review file (§4.2), a golfer who has withdrawn since the draw, or an ESPN
+event that was pinned to the wrong id. It also works after the tournament has finished,
+which a fresh build does not — settled markets quote nothing, so a `--regroup` at that
+point fails by design.
 
-It refuses one thing, loudly: a rebuild of a competition that **had** a field and now
-finds none stops without writing. ESPN does not unpublish a field, so that is a failed
-read rather than news, and rebuilding on it would null out a working scoreboard and look
-like a normal build. The file you passed is untouched; try again, or pin the event with
-`--espn-event <id>` if the lookup is what is failing.
+It refuses exactly what a first build refuses, in the same code: no readable ESPN field,
+no rebuild. Mid-tournament that matters most — ESPN blinks, the rebuild finds nothing,
+and writing on it would strip every athlete id off a working scoreboard and present that
+as a normal build. Nothing is written, the file you passed is untouched and still
+correct, and the run says so. Try again, or pin the event with `--espn-event <id>` if the
+lookup is what is failing.
 
 **`--regroup`.** Pulls fresh odds and partitions again. **Every team gets a different
 group.** Only do this if they have asked for a redraw and nobody is holding the old
@@ -336,7 +344,7 @@ groups. It refuses to overwrite the file it read unless given `--overwrite`.
 
 ### 4.2 Settle the golfers that came back NEEDS REVIEW
 
-A live build joins the Kalshi names onto this week's ESPN field in three tiers, and all
+Every build joins the Kalshi names onto this week's ESPN field in three tiers, and all
 three are exact: a decision somebody recorded, an explicit alias, or two normalised
 names being equal. There is deliberately no fuzzy tier — a first-initial-and-last-name
 rule binds Nicolas Echavarria to Nico Echavarria correctly and binds one of two
@@ -351,8 +359,9 @@ Review -> build/match-review.json  (12 golfer(s) need a decision)
 Expect a handful. On the measured Rocket Classic field, 139 of 151 Kalshi names resolved
 outright, 12 came back for review, and 4 of those 12 turned out to be withdrawals.
 
-**This is not a blocker.** The build already wrote a complete result file and it is
-deployable exactly as it stands; the golfers left open simply score nothing, and their
+**This is not a blocker, but Wednesday night is now the only join**, so clearing it
+before the page goes out is worth more than it used to be. The build already wrote a
+complete result file and it is deployable exactly as it stands; the golfers left open simply score nothing, and their
 teams score nothing from them. If the user asked for the groups, hand the build over and
 mention the number. The review is what you do when the standings matter — an unresolved
 golfer worth 4% sitting in somebody's roster is the whole scoreboard.
@@ -408,8 +417,22 @@ Two ways to get this wrong, both easy:
 
 **An empty `suggestions` list is an answer, not a gap.** It means nobody left in the
 field resembles that name even loosely, and a Kalshi field and an ESPN field for the
-same tournament are very nearly the same people — so check `espn_athletes_nobody_claimed`
-once, and if they are not in it either, they withdrew. Record the absence.
+same tournament are very nearly the same people — so check
+`espn_athletes_nobody_claimed` once, and if they are not in it either, they are not in
+the field ESPN published.
+
+**Before the first tee time, that is not yet the same thing as a withdrawal.** The build
+runs a day or two early now, and ESPN's field still moves in that window — a golfer
+Kalshi already prices may be an alternate ESPN has not listed yet. Both cases look
+identical in one snapshot: no row, no suggestions. So record `absent` only when you can
+say what happened, and leave the rest unresolved. An unresolved golfer costs nothing
+until play starts and is settled by the next rebuild; an `absent` recorded wrongly is a
+decision that sticks and stops anybody looking again.
+
+Two reads are what tell them apart. Measured on the Wyndham, 2026-08-04: Daniel Berger
+was in ESPN's field at 18:16 and gone by 19:55, with David Skinns listed in his place
+and the field size unchanged at 147. That is a withdrawal, and it is knowable because
+somebody looked twice.
 
 Then rebuild, and the decisions take effect:
 
@@ -448,18 +471,17 @@ python bundle_frontend.py --result <existing result.json> --template <dir> --out
 
 ### 4.4 Matching golfer names to ESPN on its own
 
-The join runs inside every live build, but it is also a step you can run and read
-without writing anything:
+The join runs inside every build, but it is also a step you can run and read without
+writing anything:
 
 ```bash
 python espn_leaderboard.py --event 401811961 --match build/result.json \
   --aliases data/espn_aliases.json --decisions build/match-review.json
 ```
 
-`--match` requires `--event`, because the join is against one published field and there
-is exactly one: before the first tee time there is nothing to match against, and the
-command says so rather than reaching for a substitute. `--season 2026 --find "wyndham"`
-is how you get the id (§3).
+`--match` requires `--event`, because an athlete id is only an id inside one field: the
+join is against the competitors ESPN published for that event, and the command reaches
+for no substitute. `--season 2026 --find "wyndham"` is how you get the id (§3).
 
 It prints each Kalshi name, the ESPN athlete it resolved to and the tier that found it,
 then the unresolved ones with the same ranked candidates the review file carries.
@@ -476,7 +498,7 @@ Everything is in there; read it rather than recomputing.
 
 | Question | Where |
 |---|---|
-| Is this a groups sheet or a scoreboard? | `build_mode` — `groups` or `live`. Read it first; it says which half of the file exists |
+| Had anybody teed off when this was built? | `sources.espn.started_at_build`, with `tournament.state_at_build` for ESPN's own word. Normally false, because pools are drawn the night before. It is a record of the clock, **not** what the page ranks on — the page asks the leaderboard on every poll |
 | Why did I get this group? | `grouping.summary`, `grouping.optimal`, `generator.seed` |
 | Was the draw fair? | `teams[].total_odds` — all ≈ 1/n |
 | Why is X missing? | `odds_snapshot.excluded[]`, with a reason each |
@@ -493,10 +515,11 @@ Everything is in there; read it rather than recomputing.
 sum, and `grouping_weight` is what the partitioner actually saw after exclusions —
 those sum to 1.0 across every grouped golfer.
 
-In a `groups` build, `live`, `sources.espn.match_report` and every golfer's `espn` are
-**null** — absent rather than empty, because there was no field to ask about and a shell
-of nulls would read as a join that was tried and failed.
-`sources.espn.field_size_at_build` is 0, and that is the reason it is a groups build.
+`live`, `sources.espn.match_report` and every golfer's `espn` block are **always
+present**. There is one kind of build and it cannot complete without a published ESPN
+field, so nothing in the file is null because of when it ran, and
+`sources.espn.field_size_at_build` is never 0. A file that does have those nulls is
+pre-4.0; rebuilding it fills them in (§4).
 
 ---
 
@@ -516,20 +539,23 @@ and one from three days later — reads as a draw being adjusted after the fact.
 reading per competition, taken when the groups are drawn. `--regroup` prices a field
 again only because it is dealing a completely new draw.
 
-**ESPN publishes no field before the tournament starts.** A `pre` event returns zero
-competitors, so on Wednesday night there is nobody to join the Kalshi names against — no
-athlete ids, no headshots, and nothing to score. The build does not work around that. It
-reads the field size off the payload, writes `build_mode: "groups"`, leaves `live` and
-every golfer's `espn` block null, and produces a page that fetches nothing and ranks
-nothing. In particular it does **not** match the field against last month's leaderboards
-to recover identities: that answers a question the page cannot use — it needs this
-week's scores — with a join nothing can check.
+**ESPN posts the field about two days early and the positions only when play starts, so
+the page changes over by itself.** A `pre` event returns the whole field — 147
+competitors with athlete ids, headshots and tee times, measured on the Wyndham two days
+out — and gives not one of them a position. So a Wednesday-night build joins every name
+against the real field and bakes in every id, and the only thing it cannot do is rank.
 
-So a page built on Wednesday is the groups sheet: every team, every roster, the odds
-each golfer was drawn at, no standings. It is complete, it is deployable, and it opens
-from disk on a plane. The ranking arrives on the second run (§4), once the field exists
-— the same file and the same groups, now with an ESPN athlete id on every golfer the
-join settled and a handful listed for review (§4.2).
+It does not need to. The exported page polls ESPN from the moment it opens, asks each
+payload whether anybody has teed off, and shows the draw until somebody has. At the first
+tee time it starts ranking, in whatever browser has it open, with nothing re-run and no
+new link. **Never offer a rebuild to "add the scoring".** It would produce a file
+identical in every way anybody can see, and telling somebody to wait for one is telling
+them to wait for something that has already happened.
+
+So the page built on Wednesday is the groups sheet on Wednesday and the scoreboard on
+Thursday, and it is the same file. It is complete, it is deployable, and it opens from
+disk on a plane — the draw is baked in, and a failed poll costs the ranking and nothing
+else.
 
 ---
 

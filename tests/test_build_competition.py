@@ -158,24 +158,19 @@ def _spell(i):
     return _TENS[i // 10] + ("" if i % 10 == 0 else f" {_ONES[i % 10]}")
 
 
-def groups_stage():
+def espn_stage(names, players=None, matches=None, report=None, decisions=None,
+               started=False):
     """
-    The ESPN half of a build made before the field existed.
-
-    This is what `espn_stage` returns in groups mode, and it is mostly nulls on purpose:
-    there was no join, so there is no join to report on. See build_competition's module
-    docstring.
-    """
-    return {"mode": "groups", "meta": None, "players": [], "matches": {}, "report": None,
-            "decisions": {}, "error": None, "review": None}
-
-
-def live_stage(names, players=None, matches=None, report=None, decisions=None):
-    """
-    The ESPN half of a build made once the field was published.
+    The ESPN half of a build: what build_competition.espn_stage returns.
 
     `matches` is keyed by Kalshi name and shaped as espn_leaderboard.match_field returns
     it. Anything not in it and not named in `report["absent"]` comes out `unresolved`.
+
+    `started` defaults to False because that is the ordinary case: a pool is drawn the
+    night before, when ESPN has posted the field and nobody has teed off. It changes
+    nothing about the file except the one fact that records the clock -- the join, the
+    athlete ids and the `live` block are identical either way, which is the whole point
+    of there being one build.
     """
     players = players if players is not None else [
         {"athlete_id": f"a{i:02d}", "name": name, "headshot": None, "country": None,
@@ -190,17 +185,19 @@ def live_stage(names, players=None, matches=None, report=None, decisions=None):
         "absent": [], "unresolved": [n for n in names if n not in matches],
         "ambiguous_names": [], "problems": [],
     }
-    return {"mode": "live", "meta": {"state": "in", "course": "Sedgefield", "par": 70},
+    return {"meta": {"state": "in" if started else "pre", "course": "Sedgefield", "par": 70,
+                     "started": started},
             "players": players, "matches": matches, "report": report,
-            "decisions": decisions or {}, "error": None, "review": None}
+            "decisions": decisions or {}, "review": None}
 
 
 def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None, espn=None):
     """
     Run the whole assembly with a synthetic field and no network.
 
-    Groups mode by default, because that is the first build of any competition. Pass
-    `espn=live_stage([...])` for the Thursday one.
+    By default the ESPN join resolves the whole field and play has not started, which is
+    what a build made the night before looks like. Pass `espn=espn_stage([...],
+    started=True)` for one made once play is under way.
     """
     teams = [{"team_id": f"t{i}", "team_name": f"Team {i}", "player_name": f"P{i}",
               "team_logo": None} for i in range(n_teams)]
@@ -230,7 +227,7 @@ def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None, espn=
         market_label="Outright Winner", exclusive=True, event_ticker="KXPGATOUR-WYC26",
         tournament_name="Wyndham Championship", season=2026,
         espn_event={"event_id": "401811961", "name": "Wyndham Championship", "state": "pre"},
-        espn=espn if espn is not None else groups_stage(),
+        espn=espn if espn is not None else espn_stage([g["golfer_name"] for g in raw]),
         field=raw, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity={"golfers": n_golfers}, raw_sum=sum(g["odds"] for g in raw),
         auto_exclude=True,
@@ -317,18 +314,18 @@ def test_the_result_records_no_price_read_after_the_groups_were_drawn():
     assemble() still writing `"current": null` onto all 150 golfers forever -- leaves
     the suite completely green.
     """
-    both_halves = (make_result(),
-                   make_result(espn=live_stage([golfer_name(0), golfer_name(1)])))
-    for result in both_halves:
+    for result in (make_result(), make_result(espn=espn_stage(
+            [golfer_name(0), golfer_name(1)], started=True))):
         assert "refreshed" not in result["odds_snapshot"]
         assert all("current" not in g["odds"] for g in result["golfers"])
         assert all(set(g["odds"]) == {"raw", "devigged", "grouping_weight"}
                    for g in result["golfers"])
         # The version is how a reader of an old file finds out the shape changed. A
         # silent drop would leave two incompatible documents both calling themselves 2.0.
-        # 3.0 removed the inlined crest and banner in favour of an art slug; the one
-        # price per golfer this test is about is unchanged and still 2.1's doing.
-        assert result["schema_version"] == "3.0"
+        # 4.0 removed `build_mode`; 3.0 removed the inlined crest and banner in favour of
+        # an art slug. The one price per golfer this test is about is unchanged through
+        # both and is still 2.1's doing.
+        assert result["schema_version"] == "4.0"
 
 
 def test_the_result_records_where_every_number_came_from():
@@ -352,29 +349,55 @@ def test_the_result_says_kalshi_is_unreachable_from_a_browser():
     assert result["sources"]["espn"]["browser_reachable"] is True
 
 
-def test_a_live_build_offers_the_page_espn_and_nothing_else_to_fetch():
+def test_the_build_offers_the_page_espn_and_nothing_else_to_fetch():
     """
     `live` is what the page does while it is open, and that is ESPN and nothing else. A
     Kalshi URL or a relay slot in here is an invitation to write a fetch that can only
     403, which is the panel this simplification removed.
 
-    There is no name-matching block either. A live build has already written an athlete
-    id onto every golfer it resolved, so the page joins on the id and needs nothing
-    here to do it with.
+    There is no name-matching block either. The build has already written an athlete id
+    onto every golfer it resolved, so the page joins on the id and needs nothing here to
+    do it with.
     """
-    live = make_result(espn=live_stage([golfer_name(0), golfer_name(1)]))["live"]
+    live = make_result(espn=espn_stage([golfer_name(0), golfer_name(1)]))["live"]
     assert set(live) == {"espn_leaderboard_url", "espn_event_id", "poll_interval_seconds"}
     assert "espn.com" in live["espn_leaderboard_url"]
 
 
-def test_a_groups_build_gives_the_page_nothing_to_fetch_at_all():
+def test_a_build_made_before_the_first_tee_time_still_tells_the_page_where_to_poll():
     """
-    Null, not an empty object, and the difference is the whole instruction. An empty
-    object is a page that polls an endpoint it was not given; null is a page that does
-    not poll. Before the first tee time there is no field to score against, so a fetch
-    would be asking a question whose answer it could not use.
+    The heart of the simplification, and the thing most easily lost by accident.
+
+    A competition drawn the night before is a FINISHED competition. ESPN has posted the
+    field, so every golfer already carries an athlete id, and `live` is present and
+    populated -- because the page has to be polling from the moment it opens. That poll
+    is how it discovers the first tee time and starts ranking, with nothing re-run and
+    no second link. `live: null` here would freeze the page as a groups sheet forever,
+    which is exactly what this used to do and no longer does.
     """
-    assert make_result()["live"] is None
+    result = make_result()
+    assert result["sources"]["espn"]["started_at_build"] is False
+    assert set(result["live"]) == {"espn_leaderboard_url", "espn_event_id",
+                                   "poll_interval_seconds"}
+    assert all(g["espn"]["athlete_id"] for g in result["golfers"])
+
+
+def test_the_file_has_no_build_mode_and_no_half_that_can_be_null():
+    """
+    4.0 removed `build_mode` and the nulled-out half it selected. A reader no longer has
+    to work out which document they are holding before reading it, and nothing should
+    reintroduce a key that says they do.
+
+    Checked over a build made before play and one made during it, because the claim is
+    that those two files differ only in `started_at_build` and whatever ESPN said.
+    """
+    for started in (False, True):
+        result = make_result(espn=espn_stage([golfer_name(i) for i in range(40)],
+                                             started=started))
+        assert "build_mode" not in result
+        assert result["live"] is not None
+        assert result["sources"]["espn"]["match_report"] is not None
+        assert all(g["espn"] is not None for g in result["golfers"])
 
 
 def test_the_result_carries_the_grouping_certificate():
@@ -386,35 +409,37 @@ def test_the_result_carries_the_grouping_certificate():
     assert sum(g["group_sizes"]) == len(result["golfers"])
 
 
-def test_a_groups_build_says_nothing_at_all_about_espn_athletes():
+def test_the_clock_at_build_time_is_recorded_and_is_the_only_thing_it_changes():
     """
-    Before the first tee time nobody knows who this week's competitors are, so the file
-    says nothing rather than something empty. `espn: null` on a golfer is the absence of
-    a claim; a block of null fields would read as a join that ran and failed.
+    `started_at_build` is a record of when this ran, not an instruction to the page --
+    the page asks the leaderboard the same question on every poll and believes that.
 
-    `match_report` is null for the same reason. There was no join, so there is no report
-    on one -- which is a different thing from a join that matched nobody, and a file
-    that cannot tell those apart cannot say whether the build is finished.
+    So it is worth stating that it changes nothing else. Two builds of the same
+    competition, one before play and one during it, must agree on every golfer's athlete
+    id and on the whole `live` block. If they ever diverge, the second build is doing
+    something the first could have done, and the two-step week is back.
     """
-    result = make_result()
-    assert result["build_mode"] == "groups"
-    assert result["sources"]["espn"]["field_size_at_build"] == 0
-    assert result["sources"]["espn"]["match_report"] is None
-    assert all(g["espn"] is None for g in result["golfers"])
-    # The event is still recorded. The tournament was resolved on ESPN even though its
-    # field was not published, and the next build needs the id to ask again.
-    assert result["sources"]["espn"]["event_id"] == "401811961"
+    names = [golfer_name(i) for i in range(40)]
+    early = make_result(espn=espn_stage(names))
+    late = make_result(espn=espn_stage(names, started=True))
+
+    assert early["sources"]["espn"]["started_at_build"] is False
+    assert late["sources"]["espn"]["started_at_build"] is True
+    assert early["live"] == late["live"]
+    assert ([g["espn"] for g in early["golfers"]] == [g["espn"] for g in late["golfers"]])
+    # The event is recorded either way; it is what every poll is aimed at.
+    assert early["sources"]["espn"]["event_id"] == "401811961"
 
 
-def test_a_live_build_bakes_an_athlete_id_onto_every_golfer_it_resolved():
+def test_the_build_bakes_an_athlete_id_onto_every_golfer_it_resolved():
     """
     The page joins on this id and on nothing else, so a golfer without one scores
     nothing for the life of that page. That makes this the single most load-bearing
-    field in a live result file.
+    field in a result file -- and, since the join now happens the night before, the
+    single best reason to read the build's output before handing the page over.
     """
     names = [golfer_name(i) for i in range(12)]
-    result = make_result(n_teams=3, n_golfers=12, espn=live_stage(names))
-    assert result["build_mode"] == "live"
+    result = make_result(n_teams=3, n_golfers=12, espn=espn_stage(names))
     assert result["sources"]["espn"]["field_size_at_build"] == 12
     for golfer in result["golfers"]:
         assert golfer["espn"]["athlete_id"], golfer["name"]
@@ -439,7 +464,7 @@ def test_a_golfer_nobody_has_looked_at_is_not_reported_as_a_withdrawal():
     matches, report = espn_leaderboard.match_field(
         names, players, decisions={golfer_name(0): {"absent": True}})
     result = make_result(n_teams=3, n_golfers=12,
-                         espn=live_stage(names, players=players, matches=matches, report=report))
+                         espn=espn_stage(names, players=players, matches=matches, report=report))
 
     by_name = {g["name"]: g["espn"] for g in result["golfers"]}
     assert by_name[golfer_name(0)] == {"athlete_id": None, "display_name": None, "headshot": None,

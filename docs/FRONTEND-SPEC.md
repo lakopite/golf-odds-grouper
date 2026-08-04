@@ -20,8 +20,9 @@ in §6 actually lives. See `frontend/README.md`.
 > they were captured. Any design that treats "live odds" as a thing the page can fetch
 > is designing a panel that is permanently empty for every user.
 >
-> **The second thing.** §2. `DATA.build_mode` says whether this page is a scoreboard or
-> a groups sheet, and a groups sheet fetches nothing at all.
+> **The second thing.** §2. Whether the page is a scoreboard or a groups sheet is not a
+> fact in the file — it is a fact about the clock, read off every poll. The page is
+> built the night before and shows the draw until somebody tees off.
 
 ---
 
@@ -58,26 +59,46 @@ other and the interesting information is the *margin*, not the standings.
 
 **ESPN is the only row on the right, and that is the whole of the page's network.**
 
-### `build_mode` — read it before anything else
+### The file is never half-empty, and the clock is not in it
 
-ESPN publishes zero competitors until the first tee time, so half the pages this spec
-describes are built before there is anything to score. That is not a degraded state to
-design around; it is a different document, and `DATA.build_mode` says which one you
-have:
+ESPN posts a tournament's field about **two days before the first round** — measured
+2026-08-04 against the Wyndham, whose first round was the 6th: 147 competitors with
+athlete ids, headshots and tee times, while the event was still `state: "pre"`. So a
+competition drawn the night before is a complete one. Every golfer already carries an
+athlete id, `DATA.live` is always an object, and `golfers[].espn` is always an object.
+**Assume both are present.** (Before schema 4.0 they could be `null`; a file that old
+is refused by the bundler rather than rendered.)
 
-| `build_mode` | `DATA.live` | `golfers[].espn` | What the page does |
-|---|---|---|---|
-| `"groups"` | `null` | `null` on every golfer | renders rosters and odds, requests nothing from anywhere, ranks nothing |
-| `"live"` | an object (§7) | an object per golfer, carrying an ESPN athlete id when the build resolved one | polls ESPN, joins on that id, ranks |
+What a `pre` payload does **not** carry is a position. All 147 came back at `"-"`, with
+`sortOrder` a dense 1..147. So a field is joinable long before it is rankable, and the
+one question every page has to ask is which of those two it is looking at:
 
-Branch on `DATA.live` once, at the top, exactly as the reference does
-(`var LIVE = DATA.live || null`). A `groups` page that starts a poll loop is asking a
-question whose answer it could not use, and one that renders a spinner is apologising
-for a fetch that was never going to happen.
+```js
+const {meta, players} = GolfPool.parseLeaderboard(payload);
+if (meta.started) { /* rank */ } else { /* draw the groups */ }
+```
 
-*A note on the word.* Three unrelated things in this project are called "live": that
-`build_mode` value, the `live` block in the result JSON, and the test suites that hit
-the real APIs. This document always says which one it means.
+**`meta.started` is the gate, and it is not `state === "in"`.** `GolfPool.hasStarted`
+(mirrored by `espn_leaderboard.has_started`, and the two are held together by
+`tests/test_frontend_parity.py`) answers true on `state` in `"in"`/`"post"` **or** on
+any golfer holding a real position. Two signals, either sufficient, because they fail
+in opposite directions: the state is read off the event envelope, so a stale or missing
+one would blank a board that is plainly live, and a golfer with a position is proof
+from the field itself. A page that ranks on `players.length` alone will order the
+league by ESPN's pre-tournament sort and print it as a leaderboard — complete, ordered,
+with a leader and tie-breaks, and entirely invented. That is a far more convincing way
+to be wrong than showing nothing.
+
+This is also what makes a page change over **by itself**. It polls from the moment it
+opens, days early, because that poll is how it learns the tournament has started; the
+draw becomes a scoreboard while the tab is sitting open, with nothing rebuilt and no
+second link. Anything that switches on it — the heading, the tab label, the column
+headers — must therefore be set on every render and not once at load.
+
+*A note on the word.* Two unrelated things in this project are called "live": the
+`live` block in the result JSON, and the test suites that hit the real APIs. This
+document always says which one it means. (A third, the `build_mode` value `"live"`, was
+removed in 4.0 along with the mode itself.)
 
 Everything baked in is one JSON object embedded in the page:
 
@@ -97,8 +118,8 @@ it belongs in the file, not in the page.
 
 ## 3. ESPN — the leaderboard
 
-Everything in this section is about a `live`-mode page. A `groups`-mode page has
-`DATA.live === null` and makes no request at all (§2).
+Every page does this, including one opened days before the tournament: the poll is what
+tells it play has started (§2). Until then it changes nothing on screen.
 
 ```
 https://site.web.api.espn.com/apis/site/v2/sports/golf/leaderboard?league=pga&event=<id>
@@ -142,8 +163,8 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 
 | State | What ESPN returns | What the page shows |
 |---|---|---|
-| Built before the field posted | nothing — a `groups` page never asks | every roster, with odds at creation; "not started"; **no positions and no ranking** |
-| Not started yet | `state: "pre"`, **zero competitors** | the same: rosters and odds, **nothing ranked** |
+| Not started yet | `state: "pre"`, **the full field, every position `"-"`** | every roster with its odds at creation, "not started", **nothing ranked**. This is how every page spends its first day or two |
+| No field at all | zero competitors | the same, but say so differently — an empty field once a tournament is under way is a bad answer, not an early one |
 | In progress | `state: "in"`, positions moving | the full board |
 | After the cut | 74 of 147 have position `"-"` | cut golfers visibly out, still listed |
 | Withdrawn / DQ | `status.type` `STATUS_WD`/`STATUS_DQ`, no position | same treatment as cut, labelled |
@@ -152,9 +173,8 @@ And `status.position.isTie` is already a boolean — no need to parse the `T`.
 
 ### Never rank an empty board
 
-This guard has nothing to do with the name join and survives every change to it. Since
-2.0 the Wednesday-night page is a `groups` page that does not fetch, so the *first* row
-above is settled at build time — but a `live` page can be handed an empty board any
+This guard has nothing to do with the name join, and it is a separate thing from the
+`meta.started` gate above — keep both. A page can be handed an empty board any
 afternoon of the week: ESPN unreachable, a payload refused for the wrong event (above),
 a fetch that fails on a train, a first poll that has not returned yet. All of those
 arrive as zero competitors, and none of them is rare.
@@ -191,10 +211,12 @@ design answers it by not fetching odds at all.
 
 ### What this means for the page
 
-**The page has at most one network dependency: ESPN** — and a `groups` page has none
-(§2). There is no odds request in either mode, no relay setting, no "live odds
-unavailable" state to design, and no empty panel to fill. The result file carries no
-Kalshi URL for the page to try, because trying it can only fail.
+**The page has exactly one network dependency: ESPN.** There is no odds request, no
+relay setting, no "live odds unavailable" state to design, and no empty panel to fill.
+The result file carries no Kalshi URL for the page to try, because trying it can only
+fail. And ESPN is a dependency for the *ranking* only: the draw is baked in, so a page
+that cannot reach anything still opens from disk with every roster and every price on
+it. Losing the network must cost the positions and nothing else.
 
 **The snapshot is the odds display.** Every golfer's price at the moment the groups
 were drawn is in `DATA.golfers[].odds`, along with the book it came from and the time
@@ -251,8 +273,12 @@ position · name · score to par · thru · what they were worth at creation
 
 Sorted by the rank key (§6), so the golfer carrying the team is always first. Cut,
 withdrawn and unscoreable golfers stay listed — a team's roster does not shrink — but
-must be visibly out of it. On a `groups` page nobody is out of anything yet, so the
-"out" treatment belongs on the board existing, not on the golfer having no score.
+must be visibly out of it. Before the first tee time nobody is out of anything yet, so
+the "out" treatment belongs on `meta.started`, not on the golfer having no score and
+not on the field being non-empty — the field is full for two days before it means
+anything. Watch `player.statusShort` there too: for a golfer who has not teed off it is
+a raw ISO tee time, where a cut golfer gets `"CUT"`. Their `status` is
+`STATUS_SCHEDULED`, which is the thing to branch on.
 
 `golfers[].espn.match` distinguishes the two ways a golfer can have no leaderboard row
 at all: `"absent"` means somebody checked this week's field and confirmed the golfer is
@@ -419,15 +445,21 @@ Abridged; every field is present in a real file. Run
 `python build_competition.py --league leagues/example-league.json --tournament wyndham`
 for a complete one.
 
-The example below is a `live`-mode file, because that is the one with everything in it.
-**Three of these blocks are `null` in `groups` mode** — `live`, `golfers[].espn` and
-`sources.espn.match_report` — and null rather than empty on purpose: an empty object
-reads as a join that was attempted and came back with nothing, which is a different and
-much worse fact than no join having been possible. See §2.
+**Every block below is always present.** Since 4.0 there is one kind of build — it
+cannot complete without a published ESPN field — so `live`, `golfers[].espn` and
+`sources.espn.match_report` are never `null` because of when the build ran, and a
+reader never has to establish which document they are holding. See §2.
 
 ```jsonc
 {
-  "schema_version": "3.0",   // 3.0 replaced league.crest and league.banner -- two
+  "schema_version": "4.0",   // 4.0 removed `build_mode` and the nulled-out half it
+                             // selected. ESPN posts fields about two days early now,
+                             // so the premise 2.0 split the file on -- no field before
+                             // the first tee time -- is no longer true. There is one
+                             // kind of build; `live` and `golfers[].espn` are always
+                             // objects. The distinction moved to the page, which asks
+                             // the leaderboard whether anybody has teed off. See §2.
+                             // 3.0 replaced league.crest and league.banner -- two
                              // inlined data: URIs -- with league.logo, the NAME of a
                              // directory of art. The images are read at export and
                              // land in the page; this file carries none. See §5.5.
@@ -444,23 +476,18 @@ much worse fact than no join having been possible. See §2.
                              // (1.2 had dropped live.kalshi_markets_url and
                              // live.kalshi_proxy_url_template. See §4.)
 
-  // "groups" or "live", and a fact about the ESPN leaderboard at build time rather
-  // than a setting somebody chose. READ THIS FIRST: it says whether the rest of the
-  // file describes a draw or a scoreboard.
-  "build_mode": "live",
-
   "competition_id": "uuid5, stable for this league+event+market",
   "generated_at": "2026-08-03T20:41:00+00:00",
   // poll_interval_seconds lives here as well as under `live`, because it is an input
-  // somebody typed: a groups build has no `live` block to keep it in, and it has to
-  // survive the rebuild that turns that groups sheet into a scoreboard.
+  // somebody typed rather than a fact about the world. `live` mirrors it so the page
+  // reads its own settings in one place.
   "generator": { "tool": "...", "git_commit": "e581c23", "seed": 42,
                  "poll_interval_seconds": 60 },
 
   // null on a first build. On a rebuild (--from-result), what it was rebuilt from and
-  // how: mode is "refresh" | "regroup". A file carrying Wednesday's
-  // odds and Sunday's leaderboard says so here — and a groups sheet rebuilt into a
-  // scoreboard is exactly that file.
+  // how: mode is "refresh" | "regroup". A file carrying Wednesday's odds and Sunday's
+  // leaderboard says so here. A rebuild is not part of a normal week any more — the
+  // page ranks by itself — so this is usually null.
   "rebuilt_from": { "source_file": "build/result.json", "mode": "refresh",
                     "source_generated_at": "…", "source_schema_version": "2.0",
                     "first_built_at": "…", "rebuild_count": 2 },
@@ -505,9 +532,9 @@ much worse fact than no join having been possible. See §2.
       // Three numbers, all read at the same instant, and there is never a fourth.
       // See §4: a rebuild does not go back to the market.
     },
-    // NULL on every golfer in groups mode — there was no field, so there is nothing
-    // to say. In live mode every golfer has this block, and a golfer no tier settled
-    // carries it with athlete_id, display_name, headshot and country all null. See §8.
+    // Always an object: the build had a field or it stopped, so every golfer has been
+    // looked for. A golfer no tier settled carries it with athlete_id, display_name,
+    // headshot and country all null, and `match` says which way it went. See §8.
     "espn": {
       "athlete_id": "4425906", "display_name": "Cameron Young",
       "headshot": "https://a.espncdn.com/…", "country": "USA",
@@ -523,9 +550,10 @@ much worse fact than no join having been possible. See §2.
     }
   }],
 
-  // "pre" on the groups build, "in" once play starts. Dates and course survive a
-  // rebuild that could not reach ESPN; the state does not, because a run that could
-  // not read it does not know it.
+  // "pre" on a build made the night before, "in" once play starts. It is a record of
+  // when the build ran, NOT the page's gate — the page reads `started` off each poll.
+  // Dates and course survive a payload that omits them; the state does not, because a
+  // run that did not read it does not know it.
   "tournament": { "name": "…", "season": 2026, "start": "…", "end": "…",
                   "state_at_build": "in", "course": { "name": "…", "par": 70 } },
 
@@ -541,9 +569,14 @@ much worse fact than no join having been possible. See §2.
     "espn":   { "league": "pga", "event_id": "401811961",
                 "leaderboard_endpoint": "https://…", "scoreboard_endpoint": "https://…",
                 "browser_reachable": true, "browser_note": "…allow-origin: *…",
-                // 0 in groups mode, and the reason it is a groups build.
+                // Never 0: a build with no field to join against stops instead.
                 "field_size_at_build": 147,
-                // NULL in groups mode: there was no join, so there is no report on one.
+                // Had anybody teed off when this ran? Normally false, because a pool is
+                // drawn the night before. A record of the clock and nothing else — do
+                // NOT gate the page on it; it is false for the life of the file while
+                // the tournament it describes comes and goes. Use `meta.started` off
+                // the poll (§2).
+                "started_at_build": false,
                 // `matched` can legitimately be lower than `requested` — see §8.
                 // `requested` is the Kalshi field, odds_snapshot.field_size below.
                 "match_report": { "espn_field_size": 147, "requested": 150,
@@ -589,9 +622,9 @@ much worse fact than no join having been possible. See §2.
   // build has already written an ESPN athlete id onto every golfer it resolved, and
   // the page joins on that. See §8.
   //
-  // NULL in groups mode, and that is the whole instruction: fetch nothing, poll
-  // nothing, rank nothing. `espn_event_id` is the id to check an arriving payload
-  // against (§3).
+  // Always present, so the page polls from the moment it opens — which is how it
+  // notices the first tee time and starts ranking on its own (§2).
+  // `espn_event_id` is the id to check an arriving payload against (§3).
   "live": {
     "espn_leaderboard_url": "https://…&event=401811961",
     "espn_event_id": "401811961",
@@ -777,13 +810,15 @@ number is lying about the rules.
 **Refresh honestly.** Show when the board was last updated. When ESPN fails, keep the
 last-known board and mark it stale rather than blanking or silently freezing.
 
-**Design the empty states.** A page built before the field was posted, after ESPN goes
+**Design the empty states.** A page open before the first tee time, after ESPN goes
 down, when a team's golfers have all been cut, when a logo is null. Every one of these
-happens in a normal week, and the first is half of all the pages this repo produces —
-it is a groups sheet, not a scoreboard with the numbers missing, and it should look
-finished rather than early (§2). What is *not* on that list any more is live odds:
-there is no such state, because there is no such fetch — the odds are simply there,
-dated.
+happens in a normal week, and the first one happens to every page: it is how each of
+them spends its first day or two, because pools are drawn the night before. That state
+is a groups sheet, not a scoreboard with the numbers missing, and it should look
+finished rather than early (§2). Design the changeover too — the same page becomes a
+leaderboard while somebody is looking at it, and nothing should jump or need a reload.
+What is *not* on that list any more is live odds: there is no such state, because there
+is no such fetch — the odds are simply there, dated.
 
 **Accessibility.** Position and score must not be conveyed by colour alone — a page
 read across a room is exactly where that fails. Support both colour schemes; the
@@ -797,8 +832,12 @@ reference honours `prefers-color-scheme`.
 - [ ] Contains `/*__COMPETITION_JSON__*/` inside that script tag
 - [ ] No CDN, no external module, no build step
 - [ ] **ESPN is the only host it ever requests** — no odds fetch, no relay, at all
-- [ ] Branches on `DATA.live` once: a `groups` page (`live: null`) starts no poll loop,
-      issues no request at all, and says so rather than looking like it is waiting
+- [ ] Assumes `DATA.live` and `golfers[].espn` are objects — 4.0 has no half-empty file
+- [ ] **Ranks only when `meta.started` is true** (§2), never on `players.length` alone:
+      a field is posted about two days early with no positions in it, and ranking that
+      produces a complete invented league table
+- [ ] Polls from load, days early if need be, and relabels itself when play starts —
+      heading, tab and column headers set on every render, never once at load
 - [ ] Polls ESPN on `live.poll_interval_seconds`, using `live.espn_leaderboard_url`
 - [ ] Refuses a leaderboard whose event id is not `live.espn_event_id`
 - [ ] Joins golfers to the board on `golfers[].espn.athlete_id` and nothing else — no
@@ -815,8 +854,11 @@ reference honours `prefers-color-scheme`.
       the exclusions, the certificate, and the full draw group by group with every
       golfer's odds at creation — and no name-join report or endpoint list
 - [ ] Which Kalshi event and which ESPN event are named somewhere on the page (§5.4)
-- [ ] Handles `pre` (zero competitors), ESPN down, null logos
-- [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
+- [ ] Handles `pre` (a full field, no positions), an empty field, ESPN down, null logos
+- [ ] Opens from disk with no network at all: every roster and its odds shown, nothing
+      ranked, and no error where the draw should be
+- [ ] `player.statusShort` is never printed for a `STATUS_SCHEDULED` golfer — it is a
+      raw ISO tee time
 - [ ] The league's own art is read from `#league-art` and **not** from
       `DATA.league.logo`, which is a slug; the tagline is shown when `DATA.league`
       carries one, and the page looks finished with neither (§5.5)

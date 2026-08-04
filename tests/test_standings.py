@@ -251,6 +251,37 @@ def test_every_golfer_on_the_real_field_lands_in_tier_zero_or_one(espn_players):
         assert (tier == 0) == (p["position_number"] is not None)
 
 
+def test_a_pre_tournament_field_ranks_confidently_and_means_nothing(espn_pre_payload):
+    """
+    Why nothing may call this rule until play has started, demonstrated rather than
+    asserted in a comment.
+
+    Handed a posted-but-unplayed field, the rule does not fail and does not refuse. Every
+    golfer has a row and none has a position, so all 147 fall to tier 1 and are ranked on
+    `sortOrder` -- which before a tournament is ESPN's own pre-tournament ordering and
+    not a leaderboard at all. Out comes a complete league table, with a leader, ordered,
+    plausible and meaningless.
+
+    Nothing here is wrong: this rule's contract is a leaderboard, and it was handed
+    something else. The guard belongs in front of it, which is what
+    `espn_leaderboard.has_started` and its mirror in lib.js are, and why the pages ask
+    before they rank.
+    """
+    import espn_leaderboard
+
+    meta, players = espn_leaderboard.parse_leaderboard(espn_pre_payload)
+    assert meta["started"] is False
+
+    tiers = {standings.golfer_rank(p)[0] for p in players}
+    assert tiers == {1}, "every golfer looks exactly like a cut golfer"
+
+    teams = [{"team_id": f"T{i}", "golfers": [{"name": p["name"], "espn": {
+        "athlete_id": p["athlete_id"]}} for p in players[i::4]]} for i in range(4)]
+    rows = standings.compute(teams, standings.index_players(players))
+    assert [r["rank"] for r in rows] == [1, 2, 3, 4], "a total order, out of nothing"
+    assert not any(r["tied"] for r in rows)
+
+
 # ---------------------------------------------------------------------------
 # The golden vector -- the contract with the frontend
 # ---------------------------------------------------------------------------

@@ -193,11 +193,12 @@ def rocket_classic(espn_final_payload):
     account separately.
     """
     import espn_leaderboard
-    from test_build_competition import golfer_name, live_stage, make_result
+    from test_build_competition import espn_stage, golfer_name, make_result
 
     _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
     names = [golfer_name(i) for i in range(len(players))]
-    result = make_result(n_teams=4, n_golfers=len(players), espn=live_stage(names))
+    result = make_result(n_teams=4, n_golfers=len(players),
+                         espn=espn_stage(names, started=True))
 
     # Re-label the synthetic field with the real one, keeping the odds and the deal.
     # Round-robin by rank, so team 0 holds the winner and the leaderboard order of the
@@ -225,19 +226,42 @@ def rocket_classic(espn_final_payload):
 
 
 @pytest.fixture
-def groups_result(rocket_classic):
+def espn_pre_payload():
     """
-    The same competition as the build makes it before the first tee time: `live` is
-    null, no ESPN block on any golfer, and nothing for the page to fetch.
+    A real `pre` leaderboard: the 2026 Wyndham, captured 2026-08-04, two days before the
+    first round. 147 competitors with athlete ids, headshots and tee times, and not one
+    position between them.
+
+    This is the payload the whole simplification rests on -- it is what ESPN answers on
+    the night a pool is drawn -- so it is checked in verbatim rather than synthesised.
     """
-    result = json.loads(json.dumps(rocket_classic["result"]))
-    result["build_mode"] = "groups"
-    result["live"] = None
-    result["sources"]["espn"]["field_size_at_build"] = 0
-    result["sources"]["espn"]["match_report"] = None
-    for golfer in result["golfers"]:
-        golfer["espn"] = None
-    return result
+    return load_fixture("espn_pre_tournament.json")
+
+
+@pytest.fixture
+def espn_not_started_payload(espn_final_payload):
+    """
+    The Rocket Classic field as it looked before anybody teed off: the same competitors,
+    the same athlete ids, the positions and scores taken away.
+
+    Derived from the finished payload rather than using the real Wyndham `pre` capture,
+    so a render suite can serve it to a page built on THIS field. That isolates the one
+    thing under test: every golfer resolves, every id matches, and the page still must
+    not rank -- because nobody has played, and for no other reason.
+    """
+    payload = json.loads(json.dumps(espn_final_payload))
+    event = payload["events"][0]
+    event["status"] = {"type": {"state": "pre", "completed": False,
+                                "description": "Scheduled"}}
+    comp = event["competitions"][0]
+    comp["status"] = {"period": 0, "type": {"state": "pre", "detail": "June 26 - 29"}}
+    for c in comp["competitors"]:
+        c["status"] = {"period": 1, "thru": 0, "teeTime": "2026-06-26T12:00Z",
+                       "position": {"displayName": "-", "isTie": False},
+                       "type": {"state": "pre", "name": "STATUS_SCHEDULED"}}
+        c["score"] = {"value": 0.0, "displayValue": "-"}
+        c["linescores"] = [{"period": 1, "teeTime": "2026-06-26T12:00Z"}]
+    return payload
 
 
 def pytest_configure(config):

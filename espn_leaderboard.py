@@ -35,9 +35,21 @@ and the same event's final payload:
 
   * Current round is `competitions[0].status.period`, not `event.status`.
 
-  * A `pre` event returns ZERO competitors. The field does not exist until play
-    starts, so there is no golfer->athlete join to be made before then and no
-    scoring to show. A build run that early says so and produces a groups sheet.
+  * A `pre` event PUBLISHES ITS FIELD, and publishes it early. Measured 2026-08-04
+    against the Wyndham Championship (event 401811961, first round 2026-08-06):
+    `state` is "pre", `period` is 0, and `competitors[]` already holds all 147
+    players with athlete ids, headshots, countries and tee times. Two days out.
+    This used to be the opposite -- a `pre` event returned zero competitors -- and
+    that one fact used to split this program into a groups build and a live one.
+    It does not any more: the join can be made the night before, so it is.
+
+  * What a `pre` event does NOT publish is a POSITION. All 147 came back with
+    `position.displayName == "-"`, no linescores worth summing, and `thru` 0 --
+    while `sortOrder` was still a dense 1..147. So the field is joinable long
+    before it is rankable, and ranking on what a `pre` payload offers would order
+    the league by ESPN's pre-tournament sort and present it as a leaderboard.
+    `meta["started"]` below is the guard, and it is the only thing that decides
+    whether a position is ever shown.
 
 THE NAME JOIN
 -------------
@@ -71,14 +83,22 @@ Only the first is knowable without looking.
 
 WHEN THERE IS NO FIELD TO JOIN AGAINST
 --------------------------------------
-A `pre` event returns ZERO competitors: the field does not exist until play starts.
-There is then nothing to join against and nothing this module will pretend to know.
-The build handles that by not scoring at all -- see build_competition.py, which puts
-out a groups-and-odds file with no ESPN block in it, and is re-run once the field
-posts. Matching a Kalshi field against LAST month's leaderboard to recover athlete
-ids is not attempted: it answers a question nobody asked (the page needs scores, and
-those come from this week) at the cost of a join whose correctness cannot be checked
-against anything.
+A field that comes back empty used to be the ordinary state of a Wednesday, and the
+build put out a groups-and-odds file with no ESPN block in it. It is now an error.
+ESPN posts a field about two days before the first round, so an empty one means the
+event id is wrong, the run is very early, or the read failed -- and a build that went
+ahead anyway would produce a page with no athlete ids, which can never score however
+long anybody waits. build_competition.read_espn_field stops instead.
+
+The window has a far edge, and it is real: measured 2026-08-04, the tournament two
+days out had its 147 competitors and the one nine days out had none. So a pool cannot
+be drawn a week early. It can be drawn the night before, which is when pools are
+drawn.
+
+Matching a Kalshi field against LAST month's leaderboard to recover athlete ids is
+still not attempted, and now never needs to be: it answers a question nobody asked
+(the page needs scores, and those come from this week) at the cost of a join whose
+correctness cannot be checked against anything.
 """
 
 import argparse
@@ -312,13 +332,34 @@ def position_number(display_name):
     return int(m.group(1)) if m else None
 
 
+def has_started(state, players):
+    """
+    Has anybody teed off? -> bool.
+
+    ESPN posts the field about two days before the first round, so "there are players
+    in this payload" stopped meaning "this tournament is under way" and a page that
+    conflated the two would rank the league off a pre-tournament sort order. This is
+    the one question that separates them, and `frontend/lib.js` asks it the same way.
+
+    Two signals, either of which is enough, because they fail in opposite directions.
+    `state` is ESPN's own answer and the one to trust -- but it is read off the event
+    envelope, and an envelope that is missing or stale would silently rank a field
+    nobody has played. A golfer holding an actual position is proof from the field
+    itself. Requiring BOTH would blank the board on a good payload with an odd
+    envelope; requiring neither is what this exists to prevent.
+    """
+    return state in ("in", "post") or any(p.get("position_number") is not None
+                                          for p in players)
+
+
 def parse_leaderboard(payload):
     """
     -> (meta, players). `players` is sorted by sortOrder, i.e. by live rank.
 
     Every field the standings need is computed here rather than read off the payload,
-    because the fields ESPN publishes for them are stale mid-round. See the module
-    docstring for the measurements.
+    because the fields ESPN publishes for them are stale mid-round -- and, since ESPN
+    began posting fields early, because a payload full of players is not by itself a
+    tournament in progress. See the module docstring for the measurements.
     """
     events = payload.get("events") or []
     if not events:
@@ -382,6 +423,10 @@ def parse_leaderboard(payload):
         })
 
     players.sort(key=lambda p: p["sort_order"])
+    # Derived rather than read, and derived HERE so there is one answer to it. A field
+    # exists from about two days out; a leaderboard does not exist until somebody hits
+    # a ball. Everything that ranks is gated on this. See has_started.
+    meta["started"] = has_started(meta["state"], players)
     return meta, players
 
 

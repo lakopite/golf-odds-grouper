@@ -16,13 +16,28 @@ golfers partway down -- when it does, the team that still has one wins.
 That is a lexicographic comparison of each team's golfer positions in ascending
 order, with the shorter list padded by something worse than everything.
 
+WHAT THIS RULE REQUIRES OF ITS INPUT
+------------------------------------
+A LEADERBOARD. Not merely a field -- ESPN posts a tournament's field about two days
+before the first round and gives every player in it position "-", so a payload can
+be complete, correct and entirely unrankable. Run this over one and all 147 golfers
+land in tier 1 and come out ordered by ESPN's pre-tournament sortOrder: a full
+league table, with a leader and tie-breaks, invented from nothing.
+
+That is not a defect here and is not fixed here. This rule's contract is a
+leaderboard, and the guard belongs in front of it -- `espn_leaderboard.has_started`,
+mirrored by `hasStarted` in frontend/lib.js, which is what the pages ask before they
+rank anything. tests/test_standings.py demonstrates the failure rather than
+describing it.
+
 RANKING A SINGLE GOLFER
 -----------------------
-ESPN gives a golfer a position only while they are still in the tournament, so the
+ESPN gives a golfer a position only while they are playing and still in it, so the
 rank key is a pair (tier, value) rather than a number:
 
     tier 0   still playing        value = position number   (T12 -> 12)
-    tier 1   cut / WD / DQ        value = sortOrder
+    tier 1   in the field, no position: cut / WD / DQ / not yet teed off
+                                  value = sortOrder
     tier 2   not in the field     value = 0
     tier 3   the team has no golfer this deep  (padding)
 
@@ -56,6 +71,8 @@ def golfer_rank(player):
         return (2, 0)
     if player.get("position_number") is not None:
         return (0, player["position_number"])
+    # Tier 1 also catches a golfer who simply has not teed off yet, which is why
+    # nothing may call this before play starts. See the module docstring.
     return (1, player.get("sort_order") or 9999)
 
 

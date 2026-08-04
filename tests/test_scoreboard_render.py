@@ -473,23 +473,26 @@ def test_it_survives_espn_being_down(browser, competition):
     ctx.close()
 
 
-def test_a_live_page_whose_field_is_empty_still_refuses_to_rank(browser, competition):
+def test_a_page_whose_field_comes_back_empty_still_refuses_to_rank(browser, competition):
     """
-    A live page polls, and ESPN can answer with a payload carrying no competitors --
-    between rounds, or on a bad response. Running the standings rule over an empty
-    leaderboard puts every golfer in tier 2, which orders the teams by roster size and
-    prints it as a leaderboard. The guard is independent of the build mode.
+    ESPN can answer mid-tournament with a payload carrying no competitors at all, on a
+    bad response or between rounds. Running the standings rule over that puts every
+    golfer in tier 2, which orders the teams by roster size and prints it as a
+    leaderboard.
+
+    Distinct from the pre-tournament state, and labelled differently: an empty field
+    during a tournament that ESPN says is under way is a bad answer, not an early one.
     """
     empty = {"events": [{"id": ESPN_EVENT_ID, "name": "Rocket Classic",
-                         "status": {"type": {"state": "pre"}},
-                         "competitions": [{"status": {"period": 0}, "competitors": []}]}]}
+                         "status": {"type": {"state": "in"}},
+                         "competitions": [{"status": {"period": 2}, "competitors": []}]}]}
     ctx, out = open_page(browser, competition["html"], lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(empty)))
     p = out["page"]
-    assert "with no field yet" in p.locator("#status-note").text_content()
+    assert "empty field" in p.locator("#status-note").text_content()
     # ESPN answered, so the page is working -- but a green "Live" dot over a board with
     # no positions on it reads as broken rather than early.
-    assert p.locator("#status-label").text_content() == "Not started"
+    assert p.locator("#status-label").text_content() == "No field"
     assert "is-live" not in (p.locator("#status-pill").get_attribute("class") or "")
     assert p.locator("#board tbody.team.is-leader").count() == 0
     assert set(p.locator("#board tbody.team td.c-rk").all_text_contents()) == {"—"}
@@ -499,43 +502,68 @@ def test_a_live_page_whose_field_is_empty_still_refuses_to_rank(browser, competi
 
 
 # ---------------------------------------------------------------------------
-# The groups sheet -- half of all the pages this repo produces
+# Before the first tee time -- how every page in this repo starts its life
+#
+# Not a different build any more. The SAME page, polling the same endpoint, answered
+# with the same field it was built against -- and nobody has teed off yet. What it does
+# for those two days is the whole of what the second build used to be for.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def groups_page(browser, groups_result, tmp_path):
-    paths, _ = bundler.bundle(groups_result, TEMPLATE, str(tmp_path / "groups"))
+def groups_page(browser, competition, espn_not_started_payload, serve_espn):
+    ctx, out = open_page(browser, competition["html"],
+                         serve_espn(espn_not_started_payload))
+    yield {**out, "result": competition["result"]}
+    ctx.close()
+
+
+def test_the_page_polls_from_the_moment_it_opens_even_days_early(groups_page):
+    """
+    The mechanism the whole simplification runs on, and only a browser can check it.
+
+    The page has nothing to show but the draw, and it polls anyway -- because that poll
+    is how it finds out the tournament has started. A page that waited for a reason to
+    poll would sit on the draw all weekend and somebody would have to be sent a second
+    link, which is exactly the step this removed.
+    """
+    external = [u for u in groups_page["requests"] if not u.startswith(("file://", "data:"))]
+    assert any("site.web.api.espn.com" in u for u in external), "it has to be watching"
+    assert groups_page["errors"] == []
+
+
+def test_it_still_opens_from_disk_with_no_network_at_all(browser, competition, tmp_path):
+    """
+    The property that used to be guaranteed by a groups page having no `live` block, now
+    that every page has one: a failed poll must cost nothing but the ranking.
+
+    The draw is baked in, so the page opened on a plane is the page opened anywhere --
+    every roster, every price, and a pill that says why there are no positions.
+    """
     ctx = browser.new_context(viewport={"width": 1280, "height": 900})
-    seen = []
-    ctx.on("request", lambda r: seen.append(r.url))
     # Anything over the wire fails hard. file:// must still load, so this is scoped by
     # scheme rather than by a glob that would swallow the navigation.
     ctx.route(re.compile(r"^https?://"), lambda route: route.abort())
     p = ctx.new_page()
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
-    p.goto("file://" + paths[0])
+    p.goto("file://" + competition["html"])
     p.wait_for_selector("#board tbody.team", timeout=15000)
-    yield {"page": p, "errors": errors, "requests": seen, "result": groups_result}
+
+    assert p.locator("#board tbody.team").count() == len(competition["result"]["teams"])
+    assert p.locator("#board tr.golfer").count() == sum(
+        t["golfer_count"] for t in competition["result"]["teams"])
+    assert set(p.locator("#board tbody.team td.c-rk").all_text_contents()) == {"—"}
+    assert errors == []
     ctx.close()
 
 
-def test_a_groups_page_makes_no_request_at_all(groups_page):
-    """
-    The claim the whole split rests on, and only a browser can check it. Not "it
-    degrades gracefully when the fetch fails" -- there is no fetch. `live` is null,
-    which is the build saying there was no field to score against, and a page that
-    polled anyway would be asking a question whose answer it could not use.
-    """
-    external = [u for u in groups_page["requests"] if not u.startswith(("file://", "data:"))]
-    assert external == []
-    assert groups_page["errors"] == []
-
-
-def test_a_groups_page_calls_itself_the_groups(groups_page):
+def test_a_page_before_the_first_tee_time_calls_itself_the_groups(groups_page):
     """
     A heading that says Standings over a board that ranks nobody reads as a scoreboard
     that is broken, rather than as the thing that exists before a tournament starts.
+
+    Both labels are set on every render rather than once at load, because this page
+    relabels itself when play starts without anybody reloading it.
     """
     p = groups_page["page"]
     assert p.locator("#standings-heading").text_content() == "Groups"
@@ -544,16 +572,20 @@ def test_a_groups_page_calls_itself_the_groups(groups_page):
     # Two words in the pill and a short caption, where there used to be a paragraph
     # explaining which of four reasons there was nothing to rank. The paragraph was
     # read as an apology for a page that was working exactly as built.
-    assert "Built before the field posted" in p.locator("#status-note").text_content()
+    note = p.locator("#status-note").text_content()
+    assert "ranking begins on its own" in note
     assert p.locator("#standings-sub").text_content() == "The draw. Nothing is ranked yet."
 
-    # A groups page fetches nothing at all, so the odds view has to stand on its own.
+    # ESPN is answering and the field is posted, so this is emphatically not an error.
+    assert "is-down" not in (p.locator("#status-pill").get_attribute("class") or "")
+    assert "is-live" not in (p.locator("#status-pill").get_attribute("class") or "")
+
     p.locator("#tab-odds").click()
     assert p.locator("#odds-tiles .tile").count() == 4
     assert p.locator("#odds-cards .card").count() == 2
 
 
-def test_a_groups_page_still_shows_every_roster(groups_page):
+def test_a_page_before_the_first_tee_time_still_shows_every_roster(groups_page):
     """
     Everything the pool cares about before the first tee time -- who holds whom, what
     each golfer was worth, that the draw came out even -- was decided on Wednesday and
@@ -570,11 +602,15 @@ def test_a_groups_page_still_shows_every_roster(groups_page):
     assert "%" in text, "the odds at creation are the point of the groups board"
 
 
-def test_a_groups_page_ranks_nobody(groups_page):
+def test_a_page_before_the_first_tee_time_ranks_nobody(groups_page):
     """
-    Nothing to rank on, so nothing is ranked. Running the rule over an empty leaderboard
-    would order the teams by roster size -- every golfer tier 2, the longer vector
-    winning on padding -- and print it as a leaderboard.
+    The single most important assertion in this suite, and the one the change created.
+
+    ESPN has answered with a COMPLETE field: 147 competitors, every athlete id matching
+    a golfer on somebody's team, every one of them resolvable. The only thing missing is
+    positions. Rank on that and the standings rule falls through to tier 1 and orders
+    every team by ESPN's pre-tournament sortOrder -- a full league table with a leader
+    and tie-breaks, entirely invented, and far more convincing than an empty board.
     """
     p = groups_page["page"]
     assert set(p.locator("#board tbody.team td.c-rk").all_text_contents()) == {"—"}
@@ -585,11 +621,10 @@ def test_a_groups_page_ranks_nobody(groups_page):
     assert not p.locator("#board .group th.g-pos").first.is_visible()
 
 
-def test_a_groups_page_still_shows_the_full_draw(groups_page):
+def test_a_page_before_the_first_tee_time_still_shows_the_full_draw(groups_page):
     """
-    The odds view is the same on both halves of the split. A groups page has no join to
-    report on and never had a leaderboard, but the draw is exactly as decided as it will
-    ever be, and it is the whole of what there is to look at on a Wednesday.
+    The odds view does not depend on the clock at all. The draw is exactly as decided as
+    it will ever be, and on a Wednesday it is the whole of what there is to look at.
     """
     p, result = groups_page["page"], groups_page["result"]
     p.locator("#tab-odds").click()
@@ -598,7 +633,7 @@ def test_a_groups_page_still_shows_the_full_draw(groups_page):
         t["golfer_count"] for t in result["teams"])
 
 
-def test_a_groups_page_orders_the_teams_by_what_they_were_drawn_at(groups_page):
+def test_a_page_before_the_first_tee_time_orders_teams_by_what_they_were_drawn_at(groups_page):
     """
     Not a ranking -- the positions all read "—" -- but not arbitrary either. Roster
     order would present itself as a leaderboard just as loudly.
@@ -608,6 +643,87 @@ def test_a_groups_page_orders_the_teams_by_what_they_were_drawn_at(groups_page):
     expected = [t["team_name"] for t in sorted(result["teams"],
                                                key=lambda t: -t["total_odds"])]
     assert names == expected
+
+
+def test_an_empty_envelope_mid_tournament_does_not_claim_the_tournament_is_early(
+        browser, competition):
+    """
+    The nastiest way this page can lie, and it only became possible once every page
+    started polling.
+
+    ESPN can answer with `{"events": []}`. That parses to a NULL meta, so `meta.started`
+    is missing rather than false — and a status pill that reads `!meta.started` first
+    would tell somebody watching a Sunday back nine that their tournament has not
+    started and the ranking will begin on its own. It has to say the board went away.
+    """
+    ctx, out = open_page(browser, competition["html"], lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"events": []})))
+    p = out["page"]
+    assert p.locator("#status-label").text_content() == "No field"
+    note = p.locator("#status-note").text_content()
+    assert "empty field" in note
+    assert "ranking begins on its own" not in note
+    assert "First round" not in note
+    # The draw is still on screen, because it is baked in and was never ESPN's to give.
+    assert p.locator("#board tbody.team").count() == len(competition["result"]["teams"])
+    assert out["errors"] == []
+    ctx.close()
+
+
+def test_a_final_leaderboard_stops_the_poll_loop(browser, competition, serve_espn):
+    """
+    Every page polls from the moment it opens now, so an archived one reopened months
+    later would hit ESPN once a minute for as long as the tab was up — to be told the
+    same final scores every time. A finished tournament does not change again.
+    """
+    ctx, out = open_page(browser, competition["html"], serve_espn())
+    p = out["page"]
+    assert p.locator("#status-label").text_content() == "Final"
+    assert p.evaluate("TIMER") is None, "the interval has to be cleared, not just ignored"
+    ctx.close()
+
+
+def test_the_page_crosses_from_the_draw_to_the_scoreboard_on_its_own(
+        browser, competition, espn_not_started_payload, espn_final_payload):
+    """
+    The change, in one test. Nothing else in either suite covers it, and it is the
+    entire justification for there being one build instead of two.
+
+    One page, opened once, never reloaded. It answers "Groups" while ESPN says nobody
+    has teed off, and answers "Standings" with a ranked board once ESPN says otherwise
+    -- because the poll it was already making came back different. No rebuild, no second
+    file, no new link, and nobody watching for the moment.
+    """
+    payload = {"body": json.dumps(espn_not_started_payload)}
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    ctx.route(LEADERBOARD_GLOB, lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"access-control-allow-origin": "*"}, body=payload["body"]))
+    p = ctx.new_page()
+    errors = []
+    p.on("pageerror", lambda e: errors.append(str(e)))
+    p.goto("file://" + competition["html"])
+    p.wait_for_selector("#board tbody.team", timeout=15000)
+
+    assert p.locator("#standings-heading").text_content() == "Groups"
+    assert p.locator("#status-label").text_content() == "Not started"
+    assert set(p.locator("#board tbody.team td.c-rk").all_text_contents()) == {"—"}
+
+    # Play starts. The only thing that changes anywhere is what ESPN answers with; the
+    # page is not touched, reloaded or rebuilt.
+    payload["body"] = json.dumps(espn_final_payload)
+    p.evaluate("poll()")
+
+    p.wait_for_function(
+        "document.getElementById('standings-heading').textContent === 'Standings'",
+        timeout=15000)
+    assert p.locator("#tab-standings").text_content().strip() == "Standings"
+    assert p.locator("#status-label").text_content() in ("Live", "Final")
+    positions = p.locator("#board tbody.team td.c-rk").all_text_contents()
+    assert positions != ["—"] * len(positions), "it has to actually rank"
+    assert p.locator("#board tbody.team.is-leader").count() == 1
+    assert errors == []
+    ctx.close()
 
 
 # ---------------------------------------------------------------------------

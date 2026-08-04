@@ -6,7 +6,7 @@ The design pass, and what shipped from it.
 scoreboard looks. It is a hi-fi wireframe: a React component driven by `support.js`,
 with every rule written as an inline `style` attribute, sample data for twelve teams and
 a hundred golfers hard-coded in the class body, and editor props for switching between
-build modes and ESPN states. It is not a page you can hand anybody — it has no data
+the pre-tournament view and the ranked one, and between ESPN states. It is not a page you can hand anybody — it has no data
 contract, it fetches a font CDN, and it needs a runtime that is not in this repository.
 
 **`frontend/scoreboard/` is that design built for real data**, and it is what
@@ -22,13 +22,13 @@ template for what runs.
 | Sidebar crest, name, "10th Anniversary" | `DATA.league.crest` / `.league_name` / `.tagline` |
 | `assets/wcw-banner.png` | `DATA.league.banner`, from the league file |
 | `statusView()` — an editor prop with three settings | the real poll: last good response, staleness, HTTP and event-id errors |
-| `notStarted` — a boolean prop | `DATA.live === null`. The wireframe's paragraph callout did not ship: which of the several reasons there is nothing to rank is the status pill's job, in two words |
+| `notStarted` — a boolean prop | `meta.started` off each poll, read by `ranked()`. Not a fact in the file at all: the page crosses over by itself at the first tee time, so the two states are two moments of one page rather than two builds. The wireframe's paragraph callout did not ship — which of the several reasons there is nothing to rank is the status pill's job, in two words |
 | Inline `style` on every node | `frontend/scoreboard/style.css`, as classes |
 | The `narrow` flag and its resize listener | media queries at 760px |
 | Google Fonts `<link>` | the same families named first, over a system stack |
 | Sample "Excluded" and "Grouping certificate" cards | `odds_snapshot`, `grouping` |
 | The full draw, group by group | `DATA.teams` and `DATA.golfers[].odds.grouping_weight` |
-| Editor props (`buildMode`, `espnState`, `showAnnotations`) | facts in the file, or state from the network. Nothing is a setting |
+| Editor props (`buildMode`, `espnState`, `showAnnotations`) | state from the network, or facts in the file. Nothing is a setting — and `buildMode` is not a fact either any more: there is one build, and what the page draws comes from what the leaderboard last said |
 
 Two things in the wireframe deliberately did **not** ship: the developer annotation
 chips (`GolfPool.computeStandings()`, `build_mode: "groups"`) became factual badges

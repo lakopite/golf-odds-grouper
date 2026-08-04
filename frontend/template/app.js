@@ -9,17 +9,19 @@
  * the page, and ESPN is the ONLY host it ever fetches -- the only one that will answer
  * a browser at all.
  *
- * TWO PAGES, ONE FILE
- * -------------------
- * `DATA.live` is null when the competition was built before ESPN published a field.
- * That page is a groups sheet: teams, rosters, the odds the groups were drawn on, and
- * no network of any kind. It is not a degraded scoreboard waiting for a fetch to
- * succeed -- there is nothing to fetch, because the field does not exist yet, and a
- * page that polled would be asking a question whose answer it could not use.
+ * TWO PAGES, ONE FILE, AND THE CLOCK DECIDES WHICH
+ * ------------------------------------------------
+ * A competition is built the night before, when ESPN has posted the field and nobody
+ * has teed off. So this page opens as the draw -- teams, rosters, the odds the groups
+ * were drawn on, nothing ranked -- and turns into a scoreboard by itself at the first
+ * tee time, while it is sitting open. There is no second build and no new link.
  *
- * `DATA.live` non-null means the field existed at build time and every golfer that
- * could be resolved carries an ESPN athlete id. That page polls, joins on the id, and
- * ranks. See build_competition.py's `build_mode`.
+ * A field is joinable long before it is rankable: ESPN posts the competitors about two
+ * days out and gives them no positions until play starts, so every golfer's athlete id
+ * is baked in already and only the scores are missing. `meta.started` off each poll is
+ * what says whether they have arrived. A template that ignores it and ranks anything
+ * ESPN answers with will order the league by a pre-tournament sort and call it a
+ * leaderboard. See GolfPool.hasStarted and docs/FRONTEND-SPEC.md §2.
  */
 'use strict';
 
@@ -34,8 +36,12 @@ var ART = (function () {
   catch (e) { return {}; }
 })();
 
-/* The whole of the difference between the two pages above. */
-var LIVE = DATA.live || null;
+/* Where the page polls and what it will accept back. Always present since schema 4.0:
+ * a competition cannot be built without a published ESPN field. */
+var LIVE = DATA.live;
+
+/* The poll loop's handle, so it can be stopped once the tournament is final. */
+var TIMER = null;
 
 var GOLFERS_BY_TEAM = new Map();
 DATA.golfers.forEach(function (g) {
@@ -81,24 +87,32 @@ function pct(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
  * a roster does not shrink because the leaderboard has not opened.
  *
  * Those two nulls are different, which is why the "out" marker is conditioned on the
- * field existing: once it does, a golfer with no player is a golfer who is not playing
- * and belongs greyed out. Before it does, nobody is out of anything. */
+ * board being open: once it is, a golfer with no player is a golfer who is not playing
+ * and belongs greyed out. Before it is, nobody is out of anything.
+ *
+ * It asks ranked() rather than `STATE.players.length`, and the difference is two days
+ * long. ESPN posts the field early, so a page opened on Wednesday has 147 players and
+ * an unopened board; keying on the count greys out every golfer in the pool and labels
+ * them "n/a" on the one view that is supposed to be showing the draw. */
 function golferRow(golfer, player) {
-  var started = STATE.players.length > 0;
+  var open = ranked();
   var tr = document.createElement('tr');
   var madeCut = !!(player && player.positionNumber !== null && player.positionNumber !== undefined);
-  if (started && !madeCut) tr.className = 'out';
+  if (open && !madeCut) tr.className = 'out';
   tr.append(el('td', 'gpos', player ? (player.position || player.statusShort || 'CUT')
-                                    : (started ? 'n/a' : '—')));
+                                    : (open ? 'n/a' : '—')));
   tr.append(el('td', 'gname', golfer.name));
   tr.append(el('td', 'gscore', player ? GolfPool.fmtPar(player.toPar) : '—'));
-  tr.append(el('td', 'gthru', player ? String(player.thru || player.statusShort || '') : ''));
+  // `thru` only, never statusShort: before a golfer tees off ESPN puts a raw ISO
+  // timestamp in there, and a cell that reads "2026-08-06T18:00:00Z" under a column
+  // headed "Thru" is worse than an empty one.
+  tr.append(el('td', 'gthru', player && player.thru ? String(player.thru) : ''));
   tr.append(el('td', 'godds', pct(golfer.odds.grouping_weight)));
   return tr;
 }
 
 /* The card. Built from a view rather than from a standings row, because the page has
- * to draw the same card in two situations: ranked, once ESPN has a leaderboard, and
+ * to draw the same card in two situations: ranked, once play is under way, and
  * unranked, before the first tee time. Only the header and the note differ. */
 function teamCard(view) {
   var card = el('article', 'team' + (view.leader ? ' leader' : ''));
@@ -132,11 +146,12 @@ function teamCard(view) {
   return card;
 }
 
-/* Before the first tee time ESPN publishes no competitors at all, so there is nothing
- * to rank on -- but everything else about the pool is already decided and is worth
- * showing: who holds whom, what each golfer was worth when the groups were drawn, and
- * that the draw came out even. Ranking anyway would order teams by roster size and
- * present it as a leaderboard, which is worse than saying "not started". */
+/* Before the first tee time ESPN publishes the field but no positions, so there is
+ * nothing to rank on -- but everything else about the pool is already decided and is
+ * worth showing: who holds whom, what each golfer was worth when the groups were
+ * drawn, and that the draw came out even. Ranking anyway would order the teams by
+ * ESPN's pre-tournament sort and present that as a leaderboard, which is worse than
+ * saying "not started". */
 function renderRosters(host) {
   DATA.teams.forEach(function (team) {
     var golfers = (GOLFERS_BY_TEAM.get(team.team_id) || []).slice()
@@ -170,25 +185,33 @@ function renderHeader() {
   var course = DATA.tournament.course || {};
   $('#round').textContent = m
     ? (m.detail || m.state) + ' — ' + (m.course || '') + (m.par ? ' (par ' + m.par + ')' : '')
-    : (LIVE ? 'waiting for ESPN…'
-            : 'Groups' + (course.name ? ' — ' + course.name : ''));
-  $('#standings-heading').textContent = LIVE ? 'Standings' : 'Groups';
+    : 'waiting for ESPN…';
+  // Relabelled on every render rather than once at load, because the page crosses from
+  // one to the other on its own the moment somebody tees off.
+  $('#standings-heading').textContent = ranked() ? 'Standings' : 'Groups';
   $('#built').textContent = 'built ' + DATA.generated_at + ' · ' + DATA.grouping.summary;
+}
+
+/* The one question this file asks about whether to rank, and both halves matter.
+ * `players.length` is "has a poll come back at all"; `meta.started` is "has anybody
+ * teed off". ESPN answers with a full field about two days early and gives every
+ * player position "-", so the second does not follow from the first. */
+function ranked() {
+  return STATE.players.length > 0 && !!(STATE.meta && STATE.meta.started);
 }
 
 /* Why there is no ranking. Three different reasons, and saying the wrong one is how a
  * page gets accused of being broken when it is working exactly as built. */
 function notStarted() {
   var start = DATA.tournament.start ? new Date(DATA.tournament.start).toLocaleString() : null;
-  if (!LIVE) {
-    return 'The tournament had not started when this page was made, so ESPN had published '
-      + 'no field and there is nothing to rank yet' + (start ? ' — first round ' + start : '')
-      + '. This page shows the draw: it is final, and it was drawn on the odds below. It '
-      + 'fetches nothing and will not change. Ask for a rebuilt page once play begins and '
-      + 'that one will carry live scoring.';
-  }
   if (STATE.error) return 'ESPN unavailable: ' + STATE.error + '. Groups and odds below are '
     + 'baked into this page and are unaffected.';
+  if (STATE.meta && !STATE.meta.started) {
+    return 'The tournament has not started' + (start ? ' — first round ' + start : '')
+      + '. ESPN has posted the field and this page has already matched every golfer to it, '
+      + 'so ranking begins on its own at the first tee time. Nothing needs rebuilding and '
+      + 'nobody needs to reload. The groups below are final and were drawn on the odds shown.';
+  }
   return 'Waiting for ESPN to publish positions' + (start ? ' — first round ' + start : '')
     + '. The groups below are final and were drawn on the odds shown.';
 }
@@ -197,7 +220,7 @@ function renderStandings() {
   var host = $('#standings');
   host.textContent = '';
 
-  if (!STATE.players.length) {
+  if (!ranked()) {
     host.append(el('p', 'muted', notStarted()));
     renderRosters(host);
     return;
@@ -242,17 +265,14 @@ function renderOdds() {
   $('#odds-note').textContent = parts.join(' ');
 }
 
-/* Provenance, not a list of what gets fetched. On a live page exactly one of these two
- * is ever requested; on a groups page neither is, and the wording has to say so rather
- * than name an endpoint nothing calls. */
+/* Provenance, not a list of what gets fetched. Exactly one of these two is ever
+ * requested: ESPN. The Kalshi endpoint is named because it is where the odds came
+ * from, not because anything asks it -- it would 403 a browser if anything did. */
 function renderFooter() {
   var espn = DATA.sources.espn || {};
-  $('#sources').textContent = (LIVE
-      ? 'scores polled from ' + LIVE.espn_leaderboard_url + ' · odds captured from '
-      : 'nothing is fetched by this page · odds captured from ')
-    + DATA.sources.kalshi.markets_endpoint
-    // Named even in groups mode, where nothing is polled and the URL above is the only
-    // thing that would otherwise identify either event. FRONTEND-SPEC §5.4.
+  $('#sources').textContent = 'scores polled from ' + LIVE.espn_leaderboard_url
+    + ' · odds captured from ' + DATA.sources.kalshi.markets_endpoint
+    // Both events named, because the two URLs above identify one apiece. §5.4.
     + ' · ESPN ' + (espn.league || 'pga') + '/' + (espn.event_id || '—');
   $('#poll').textContent = STATE.lastPoll ? 'last poll ' + STATE.lastPoll.toLocaleTimeString() : '';
 }
@@ -286,6 +306,14 @@ function poll() {
       STATE.meta = parsed.meta;
       STATE.players = parsed.players;
       STATE.index = GolfPool.indexByAthleteId(parsed.players);
+      // A finished tournament does not change again, so the loop stops. Every page
+      // polls from the moment it opens now, which means an archived one reopened
+      // months later would otherwise hit ESPN once a minute for as long as the tab is
+      // up, to be told the same final scores every time.
+      if (parsed.meta && parsed.meta.completed && TIMER) {
+        clearInterval(TIMER);
+        TIMER = null;
+      }
       STATE.error = null;
     })
     .catch(function (err) { STATE.error = String(err.message || err); })
@@ -295,14 +323,14 @@ function poll() {
     });
 }
 
-/* One loop, one endpoint -- or no loop at all. A groups page has `live: null`, which
- * is not a missing setting to work around but the build saying there was no field to
- * score against. It renders once, from data it already has, and stops. */
+/* One loop, one endpoint, always running. The page polls even when the tournament is
+ * days away, because the poll is how it finds out that it is not any more -- that is
+ * the whole mechanism by which the draw becomes a scoreboard with nobody rebuilding
+ * anything. */
 function start() {
   render();
-  if (!LIVE) return;
   poll();
-  setInterval(poll, (LIVE.poll_interval_seconds || 60) * 1000);
+  TIMER = setInterval(poll, (LIVE.poll_interval_seconds || 60) * 1000);
 }
 
 start();

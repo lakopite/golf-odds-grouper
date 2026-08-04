@@ -1,0 +1,13 @@
+{
+  "note": "Kalshi golfer name -> ESPN displayName. This file IS one of the three tiers the build-time join uses, and the only one a person maintains. Learned by --update-aliases from decisions settled in a match review; safe to edit by hand.",
+  "aliases": {
+    "Benjamin James": "Ben James",
+    "Cameron Davis": "Cam Davis",
+    "Hao-Tong Li": "Haotong Li",
+    "Jordan L. Smith": "Jordan Smith",
+    "Kris Ventura": "Kristoffer Ventura",
+    "Matthew McCarty": "Matt McCarty",
+    "Nicolas Echavarria": "Nico Echavarria",
+    "Zachary Bauchou": "Zach Bauchou"
+  }
+}
