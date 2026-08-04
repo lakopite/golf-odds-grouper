@@ -316,7 +316,8 @@ file (§4.2) lives beside `--output`.
 |---|---|
 | The golfers that came back NEEDS REVIEW settled | `--match-review build/match-review.json` (§4.2) |
 | Those name bindings kept for next week | `--update-aliases` (§4.2) |
-| A withdrawal, alternate or Monday qualifier picked up, or a wrong `--espn-event` fixed | *(nothing — the join is redone by default)* |
+| A wrong `--espn-event` fixed, or a name that could not be settled at build time | *(nothing — the join is redone by default)* |
+| A golfer who withdrew after the draw | **nothing at all** — the page scores them nothing on its own. The draw is frozen, so there is nobody to swap them for |
 | A genuinely new draw | `--regroup` |
 | The same groups, a new frontend | nothing — re-bundle (§4.3) |
 | The standings, now play has started | **nothing at all** — §6. Do not run a rebuild for this; it changes nothing they can see |

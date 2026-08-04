@@ -396,13 +396,21 @@ nothing. The fix is a rebuild, not a refresh, and it is the one thing on the pag
 waiting does not fix: everything else about a Wednesday build sorts itself out at the
 first tee time, and this does not.
 
-Which makes the review worth clearing **before the page goes out**, because Wednesday
-night is now the only join. Building a day early also means the field is still
-provisional: a golfer who withdraws is handled correctly and scores nothing, but an
-alternate or Monday qualifier who *replaces* them is not in Wednesday's ESPN list, so a
-Kalshi market on them resolves to nothing and stays there. The Thursday rebuild used to
-catch that for free. Now it is a reason to run one — `--from-result` redoes the join
-against the field as it stands, and changes nothing else. That is the price of deleting the runtime
+Which makes the review worth clearing **before the page goes out**, because that is the
+only join.
+
+It is a smaller exposure than it looks, because the draw is frozen at the same moment.
+A golfer can only be on a team if Kalshi priced them at draw time, so the field that
+matters is the Kalshi one, and every golfer in it either resolved or did not. A
+withdrawal after that needs nothing: the athlete id is baked, ESPN stops listing them,
+and the page scores them nothing on its own. For the reverse to bite, Kalshi would have
+to price somebody ESPN has not listed yet — and the one field change measured in that
+window went the other way. On 2026-08-04 Daniel Berger left ESPN's field within two
+hours and David Skinns took his place, while Kalshi still priced Berger and had no
+market on Skinns at all: the replacement was unownable, so nobody lost anything.
+
+The number to look at is what the build prints. Nothing unresolved means nothing is at
+risk, whatever the field does afterwards. That is the price of deleting the runtime
 name match, and it is worth paying: the join is now checkable, once, by a person, before
 it takes effect, instead of being re-guessed in every browser on every poll. See
 `espn_leaderboard.py`, `match_review.py` and `docs/FRONTEND-SPEC.md` §8.
