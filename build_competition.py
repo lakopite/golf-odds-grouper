@@ -133,7 +133,16 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # reader who noticed had to be talked back out of thinking the draw had moved. The
 # groups are worth what they were worth on Wednesday; there is now exactly one price
 # per golfer in this file and no way to ask for another.
-SCHEMA_VERSION = "2.1"
+# 3.0 REPLACED `league.crest` and `league.banner` -- two base64 data: URIs, routinely
+# half a megabyte of PNG between them -- with `league.logo`, the NAME of a directory of
+# art under `leagues/`. This file is the document that describes a competition, and it
+# had become mostly an envelope for two images that nothing in it read: every rebuild
+# copied them forward, every diff was unreadable, and every copy of the file paid for
+# them again. The images are now read once, at export, by bundle_frontend.py, which
+# inlines them into the one artifact that has to be portable. The exported page is
+# unchanged -- still a single file with nothing to fetch. A 2.x file rebuilds, and its
+# inlined art is dropped with a line saying so; name the slug and it comes back.
+SCHEMA_VERSION = "3.0"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -152,21 +161,14 @@ REBUILD_INPUTS = ("tournament", "kalshi_event", "odds", "price", "espn_event",
                   "espn_league", "season", "seed", "exclude", "auto_exclude",
                   "poll_interval")
 
-# Local logos are inlined so the exported bundle is one portable file. A logo bigger
-# than this is a mistake rather than a choice -- a 2 MB PNG lands in every copy of the
-# result JSON and every copy of the HTML built from it.
-MAX_INLINE_LOGO_BYTES = 512 * 1024
-
-# The art a competition gets when nobody supplies any.
+# Team logos are inlined so the exported bundle is one portable file. A logo bigger
+# than this is a mistake rather than a choice -- it lands in every copy of the result
+# JSON and every copy of the HTML built from it.
 #
-# The scoreboard's chrome -- the navy, the gold, the type -- is the template's and is
-# the same for every league. These two files are the only part of the masthead that is
-# a picture rather than a rule, which is why they are the only part a league overrides:
-# with `--crest` / `--banner` at creation, or with `crest` / `banner` in the league
-# file. Both are checked in at the sizes the page draws them at, 256 px and 720 px.
-_ART = os.path.join(_HERE, "leagues", "logos")
-DEFAULT_CREST = os.path.join(_ART, "wcw-crest.png")
-DEFAULT_BANNER = os.path.join(_ART, "wcw-banner.png")
+# The league's own art is NOT inlined here and this limit does not reach it: a slug is
+# a name, the pictures it names are read at export, and they land in the page alone.
+# That is the whole point of the slug -- see league.py.
+MAX_INLINE_LOGO_BYTES = 512 * 1024
 
 # Decimal places kept on every probability in the result file. Deep enough that the
 # rounding is far below the tick grid the odds live on, shallow enough that the JSON
@@ -606,12 +608,12 @@ def build(args, league=None, rebuilt_from=None, prior_mode=None, recorded_decisi
 
 def finish(result, args, espn, aliases, started):
     """
-    Inline the logos, write the files, learn what the run learned, and show the groups.
+    Inline the team logos, write the files, learn what the run learned, show the groups.
 
     Shared by build() and rebuild() because it is the same ending either way: the only
     thing that differs between the two is how the numbers above it were arrived at.
     """
-    # Logos are resolved against the league file's own directory: a logo path in a
+    # Team logos are resolved against the league file's own directory: a logo path in a
     # league file is relative to that file, not to wherever the build was run from. A
     # rebuild has no league file -- its logos are already data: URIs and pass straight
     # through -- so anything still relative there is resolved against the result file.
@@ -619,12 +621,9 @@ def finish(result, args, espn, aliases, started):
     league_dir = os.path.dirname(os.path.abspath(base))
     for team in result["teams"]:
         team["team_logo"] = inline_logo(team.get("team_logo"), league_dir)
-    # The masthead art settles first -- which of the command line, the league file and
-    # the shipped default wins -- and only then gets inlined, so there is one path
-    # through the base64 for all three.
-    resolve_league_art(result, args)
-    for field in ("crest", "banner"):
-        result["league"][field] = inline_logo(result["league"].get(field), league_dir, field)
+    # The league's own art is settled but not read. It goes into the file as the slug
+    # it arrived as, and bundle_frontend.py turns it into pictures at export.
+    resolve_league_logo(result, args)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
@@ -718,15 +717,24 @@ def league_from_result(result):
     """
     league = result["league"]
     derived = ("group_index", "golfer_ids", "golfer_names", "total_odds", "golfer_count")
+    # A pre-3.0 file carries its art as two inlined images and no slug. They are not
+    # carried forward -- 3.0 has nowhere to put them, and the whole reason for the
+    # change is that a result file should not hold pictures -- so it is said out loud.
+    # Un-branding a page somebody has already sent round is exactly the kind of quiet
+    # change this tool goes out of its way not to make.
+    if not league.get("logo") and (league.get("crest") or league.get("banner")):
+        print("note: this result file predates the art slug and carries its crest and banner "
+              "inline. They are dropped. Put `\"logo\": \"<slug>\"` in the league file (art in "
+              "leagues/<slug>/logo.png and banner.png) and rebuild with --league, or pass "
+              "--logo <slug>, to get the masthead back.")
     return {
         "league_id": league["league_id"],
         "league_name": league["league_name"],
         "league_slug": league.get("league_slug") or league_mod.slugify(league["league_name"]),
         "source_file": league.get("source_file"),
-        # Carried forward like the logos are: by the time a result file exists these
-        # are data: URIs, and a rebuild that dropped them would quietly un-brand a
-        # page somebody has already seen. `.get` because a file written before
-        # branding existed has no such keys and is still a perfectly good rebuild.
+        # Carried forward, because a rebuild that dropped them would quietly un-brand a
+        # page somebody has already seen. `.get` because a file written before branding
+        # existed has no such keys and is still a perfectly good rebuild.
         **{f: league.get(f) for f in league_mod.BRANDING_FIELDS},
         "teams": [{k: v for k, v in t.items() if k not in derived} for t in result["teams"]],
     }
@@ -994,12 +1002,12 @@ def assemble(**k):
             "league_slug": k["league"]["league_slug"],
             "source_file": k["league"]["source_file"],
             "team_count": len(k["teams"]),
-            # The masthead. Paths here, and for the two images possibly `false` or
-            # nothing at all; finish() settles which of the command line, this file and
-            # the shipped default wins, then turns whatever won into a data: URI in the
-            # same pass that does it for the team logos.
-            "crest": k["league"].get("crest"),
-            "banner": k["league"].get("banner"),
+            # The masthead. `logo` is the NAME of a directory of art under leagues/ --
+            # never a path and never an image. finish() settles whether the command
+            # line or the league file said it; bundle_frontend.py reads the pictures it
+            # names, at export, into the page. Null means this competition has no art,
+            # which is a shape the design draws rather than a gap to fill in.
+            "logo": k["league"].get("logo"),
             "tagline": k["league"].get("tagline"),
         },
         "teams": teams_out,
@@ -1181,25 +1189,23 @@ def save_aliases(path, aliases):
         f.write("\n")
 
 
-def inline_logo(value, base_dir, what="logo"):
+def inline_logo(value, base_dir):
     """
-    Turn a local image path into a data: URI so the export is one portable file.
-
-    Used for team logos and for the league's crest and banner; `what` names which, so
-    the warnings say what is missing rather than calling a banner a logo.
+    Turn a local team logo into a data: URI so the export is one portable file.
 
     http(s) URLs and existing data: URIs pass through. A missing file is a warning
-    rather than an error: a league is still perfectly playable without a crest.
+    rather than an error: a team is still perfectly playable without a badge, and the
+    page draws its initials instead.
     """
     if not value or value.startswith(("http://", "https://", "data:")):
         return value
     path = value if os.path.isabs(value) else os.path.join(base_dir, value)
     if not os.path.exists(path):
-        print(f"!! {what} not found: {value} (looked in {path}) -- the page will render without it")
+        print(f"!! logo not found: {value} (looked in {path}) -- the page will render without it")
         return None
     size = os.path.getsize(path)
     if size > MAX_INLINE_LOGO_BYTES:
-        print(f"!! {what} {value} is {size // 1024} KB, over the {MAX_INLINE_LOGO_BYTES // 1024} KB "
+        print(f"!! logo {value} is {size // 1024} KB, over the {MAX_INLINE_LOGO_BYTES // 1024} KB "
               "inline limit. Left as a path, which will not resolve in the exported page: "
               "shrink it, save it as a JPEG, or host it and use a URL instead.")
         return value
@@ -1208,53 +1214,46 @@ def inline_logo(value, base_dir, what="logo"):
         return f"data:{mime};base64,{base64.b64encode(f.read()).decode('ascii')}"
 
 
-def resolve_league_art(result, args):
+def resolve_league_logo(result, args, leagues_dir=None):
     """
-    Settle the crest and the banner before they are inlined.
+    Settle which art slug this competition carries, and say what it found.
 
-    The two images are the only per-league part of the masthead, and they can arrive
-    three ways. In precedence order, highest first:
+    The slug is the only per-league part of the masthead, and it arrives three ways.
+    In precedence order, highest first:
 
-      1. `--no-crest` / `--no-banner` -- this competition has none, say no more.
-      2. `--crest PATH` / `--banner PATH`, handed in beside the league file when the
-         competition is created. Resolved against the working directory, like every
-         other path typed on a command line, and made absolute here so the inliner
-         does not later resolve it against the league file's directory instead.
-      3. `crest` / `banner` in the league file, resolved against that file. `false`
-         there is the standing form of (1): a league that never wants art.
-      4. Nothing -- and then DEFAULT_CREST / DEFAULT_BANNER, so a page built by
-         somebody who supplied no art still looks like the design rather than like a
-         league whose art failed to load.
+      1. `--no-logo` -- this competition has none, say no more.
+      2. `--logo SLUG`, handed in when the competition is created.
+      3. `logo` in the league file, which is where it usually comes from. A rebuild has
+         no league file and takes it from the result file it was handed, which is the
+         same answer given once and kept.
 
-    Rule 4 fires only for a build that read a league file. A rebuild carries forward
-    what the result file already recorded, null included: the first build settled this
-    question, and a rebuild that re-answered it would put a crest on a page somebody
-    had already sent round without one.
+    There is no fourth rule. The tool used to ship a default pair and fill them in for
+    any league that supplied none, which meant a page could open wearing another
+    league's crest; a league with no art now gets a masthead with its name in it, and
+    that is a shape the design draws.
+
+    Nothing is read. The slug goes into the result file as a name and stays one until
+    export. What this does do is LOOK -- one stat per image -- because a slug that names
+    nothing is worth a line here rather than a blank masthead noticed by somebody who
+    has already been sent the page.
     """
-    from_league_file, defaulted = bool(args.league), []
-    for field, typed, cleared, fallback in (
-            ("crest", args.crest, args.no_crest, DEFAULT_CREST),
-            ("banner", args.banner, args.no_banner, DEFAULT_BANNER)):
-        if cleared:
-            value = None
-        elif typed:
-            value = os.path.abspath(typed)
-        else:
-            value = result["league"].get(field)
-            if value is False:
-                value = None
-            elif value is None and from_league_file:
-                value = fallback
-                defaulted.append(field)
-        result["league"][field] = value
+    if args.no_logo:
+        result["league"]["logo"] = None
+    elif args.logo:
+        result["league"]["logo"] = args.logo
 
-    # Worth a line. The default is half a megabyte of PNG that lands in the result
-    # file and in every page built from it, so somebody who did not know they were
-    # getting it should find out here rather than from the size of the export.
-    if defaulted:
-        print(f"note: no {' or '.join(defaulted)} supplied, using the default. "
-              f"{' '.join(f'--{f} PATH' for f in defaulted)} to supply your own, "
-              f"{' '.join(f'--no-{f}' for f in defaulted)} for none.")
+    slug = result["league"]["logo"]
+    if not slug:
+        return result
+    found = league_mod.art_files(slug, leagues_dir)
+    missing = [name for name in league_mod.ART_NAMES if not found[name]]
+    if len(missing) == len(league_mod.ART_NAMES):
+        print(f"!! logo {slug!r} names no art: "
+              f"{os.path.join(leagues_dir or league_mod.LEAGUES_DIR, slug)} holds no "
+              f"{' or '.join(n + '.png' for n in league_mod.ART_NAMES)}. The page will render "
+              "with the league's name and nothing else.")
+    elif missing:
+        print(f"note: {slug} has no {missing[0]} image; the page draws the half that is there.")
     return result
 
 
@@ -1294,17 +1293,13 @@ def build_parser():
                          "gets a different group. Not what you want mid-tournament.")
     ap.add_argument("--overwrite", action="store_true",
                     help="allow --regroup to write over the result file it read")
-    ap.add_argument("--crest", metavar="PATH",
-                    help="the league's badge for the masthead, handed in beside the league "
-                         "file. Beats a `crest` in that file. A local path is inlined into "
-                         "the export; an https:// URL is left alone. Around 256 px square. "
-                         "Unset, a build from a league file uses the shipped default.")
-    ap.add_argument("--banner", metavar="PATH",
-                    help="the wide image across the top of the page, same rules as --crest. "
-                         "Around 720 px wide.")
-    ap.add_argument("--no-crest", action="store_true",
-                    help="build this competition with no crest, whatever the league file says")
-    ap.add_argument("--no-banner", action="store_true", help="likewise, with no banner")
+    ap.add_argument("--logo", metavar="SLUG",
+                    help="the league's art, as the name of a directory under leagues/ holding "
+                         "logo.png and banner.png -- `--logo wcw` for leagues/wcw/. Beats a "
+                         "`logo` in the league file. The images are read at export and inlined "
+                         "into the page, never into this file.")
+    ap.add_argument("--no-logo", action="store_true",
+                    help="build this competition with no art, whatever the league file says")
     ap.add_argument("--tournament", help="tournament name or Kalshi event code, e.g. 'Wyndham' or WYC26")
     ap.add_argument("--odds", default=DEFAULT_ODDS_TYPE,
                     help=f"{'/'.join(ODDS_TYPES)} or a raw Kalshi series ticker (default {DEFAULT_ODDS_TYPE})")
@@ -1421,21 +1416,25 @@ def apply_result_defaults(args, result, typed=()):
 
 def check_art_options(parser, args):
     """
-    Catch a bad `--crest` / `--banner` now rather than forty seconds into a build.
+    Catch a bad `--logo` now rather than forty seconds into a build.
 
-    A path typed on the command line is a thing somebody meant, so a typo in one is an
-    error and not the shrug `inline_logo` gives a league file's missing art. Getting it
-    at the top matters because everything between here and the inliner is network: the
-    Kalshi fetch and the ESPN join both run first, and finding out afterwards that the
-    banner was `bannner.png` means running them again.
+    A slug typed on the command line is a thing somebody meant, so a typo in one is an
+    error and not the shrug a league file's `logo` gets. Getting it at the top matters
+    because everything between here and the end of the build is network: the Kalshi
+    fetch and the ESPN join both run first, and finding out afterwards that the slug was
+    `wwc` means running them again.
     """
-    for field in ("crest", "banner"):
-        value, cleared = getattr(args, field), getattr(args, f"no_{field}")
-        if value and cleared:
-            parser.error(f"--{field} and --no-{field} ask for opposite things")
-        if value and not value.startswith(("http://", "https://", "data:")) \
-                and not os.path.isfile(value):
-            parser.error(f"--{field} {value} is not a file")
+    if args.logo and args.no_logo:
+        parser.error("--logo and --no-logo ask for opposite things")
+    if not args.logo:
+        return
+    if args.logo != league_mod.slugify(args.logo):
+        parser.error(f"--logo {args.logo} is a slug -- the name of a directory under leagues/ "
+                     "holding logo.png and banner.png, like `wcw` -- not a path")
+    if not any(league_mod.art_files(args.logo).values()):
+        parser.error(f"--logo {args.logo} names no art: "
+                     f"{os.path.join(league_mod.LEAGUES_DIR, args.logo)} holds no logo.png or "
+                     "banner.png")
 
 
 def main(argv=None):

@@ -8,6 +8,7 @@ failing somewhere unrecognisable. Both should fail here, loudly, by name.
 """
 
 import json
+import os
 
 import pytest
 
@@ -77,83 +78,74 @@ def test_missing_logo_becomes_none_rather_than_absent(league_file):
 # The scoreboard has a masthead, and what goes in it is a fact about the league rather
 # than about the template -- a template that hard-coded one league's crest would be
 # that league's template.
+#
+# `logo` is a SLUG, not a path: the name of a directory under leagues/ holding logo.png
+# and banner.png. The league file names the art, the result file passes the name along,
+# and the images are read once at export. Nothing in this half of the pipeline opens an
+# image at all.
 # ---------------------------------------------------------------------------
 
 def test_branding_is_read_off_the_object_form(tmp_path):
     path = tmp_path / "l.json"
     path.write_text(json.dumps({
-        "league_name": "WCW", "crest": "logos/crest.png", "banner": "logos/banner.png",
-        "tagline": "10th Anniversary",
+        "league_name": "WCW", "logo": "wcw", "tagline": "10th Anniversary",
         "teams": [{"team_name": "A", "player_name": "Ann"}]}))
     loaded = league.load_league(str(path))
-    assert loaded["crest"] == "logos/crest.png"
-    assert loaded["banner"] == "logos/banner.png"
+    assert loaded["logo"] == "wcw"
     assert loaded["tagline"] == "10th Anniversary"
 
 
 @pytest.mark.parametrize("payload", [
     [{"team_name": "A", "player_name": "Ann"}],
     {"league_name": "X", "teams": [{"team_name": "A", "player_name": "Ann"}]},
-    {"league_name": "X", "crest": "  ", "tagline": None,
+    {"league_name": "X", "logo": "  ", "tagline": None,
      "teams": [{"team_name": "A", "player_name": "Ann"}]},
 ], ids=["bare-list", "no-branding", "blank-branding"])
 def test_branding_keys_are_always_present_and_null_when_unset(tmp_path, payload):
     """
-    Null rather than absent. A page that has to tell "this league has no crest" from
-    "this build predates crests" will get it wrong, and the difference is worth nothing
+    Null rather than absent. A page that has to tell "this league has no logo" from
+    "this build predates logos" will get it wrong, and the difference is worth nothing
     to anybody. A blank string counts as unset -- it is what a hand-edited file grows
     when somebody clears a value, and an <img> with no src is worse than no <img>.
     """
     path = tmp_path / "l.json"
     path.write_text(json.dumps(payload))
     loaded = league.load_league(str(path))
-    assert [loaded[f] for f in league.BRANDING_FIELDS] == [None, None, None]
+    assert [loaded[f] for f in league.BRANDING_FIELDS] == [None, None]
 
 
-def test_branding_that_is_not_a_string_is_refused(tmp_path):
+@pytest.mark.parametrize("field", ["logo", "tagline"])
+def test_branding_that_is_not_a_string_is_refused(tmp_path, field):
     path = tmp_path / "l.json"
-    path.write_text(json.dumps({"league_name": "X", "crest": {"src": "a.png"},
+    path.write_text(json.dumps({"league_name": "X", field: {"src": "a.png"},
                                 "teams": [{"team_name": "A", "player_name": "Ann"}]}))
-    with pytest.raises(ValueError, match="'crest' must be a string, false or null"):
+    with pytest.raises(ValueError, match=f"'{field}' must be a string or null"):
         league.load_league(str(path))
 
 
-def test_the_tagline_is_not_offered_false(tmp_path):
-    """`false` means "do not fill this from the default", and only the two images have
-    a default. Accepting it on the tagline would promise a fallback that is not there."""
+def test_a_path_where_a_slug_belongs_is_refused(tmp_path):
+    """
+    "logos/wcw-crest.png" is what every league file said before the art moved into
+    leagues/<slug>/, and it is what anybody who has seen one will type. Taken as a slug
+    it names a directory nobody will ever create, and the only symptom would be an
+    empty masthead at the far end of a build somebody has already waited for.
+    """
     path = tmp_path / "l.json"
-    path.write_text(json.dumps({"league_name": "X", "tagline": False,
+    path.write_text(json.dumps({"league_name": "X", "logo": "logos/wcw-crest.png",
                                 "teams": [{"team_name": "A", "player_name": "Ann"}]}))
-    with pytest.raises(ValueError, match="'tagline' must be a string or null"):
+    with pytest.raises(ValueError, match="slug like"):
         league.load_league(str(path))
 
 
-@pytest.mark.parametrize("field", ["crest", "banner"])
-def test_false_art_is_kept_apart_from_unset(tmp_path, field):
-    """
-    The one distinction load_league exists to carry. Unset means "I supplied no art"
-    and the build fills it with the default; false means "this league has none" and the
-    build leaves it alone. Collapsing them puts a crest nobody asked for on the page.
-    """
+def test_false_no_longer_means_anything_and_says_so(tmp_path):
+    """It used to mean "this league has none, do not fill in the default". There is no
+    default any more, so unset means that -- and a file that still says `false` should
+    hear why rather than be told a bool is not a string."""
     path = tmp_path / "l.json"
-    path.write_text(json.dumps({"league_name": "X", field: False,
+    path.write_text(json.dumps({"league_name": "X", "logo": False,
                                 "teams": [{"team_name": "A", "player_name": "Ann"}]}))
-    loaded = league.load_league(str(path))
-    assert loaded[field] is False
-    assert loaded["crest" if field == "banner" else "banner"] is None
-
-
-def test_write_ids_keeps_a_false_it_was_given(tmp_path):
-    """`false` is falsy, and a writer that tested truthiness would drop it -- handing
-    the league back the default crest it had just said no to."""
-    path = tmp_path / "l.json"
-    path.write_text(json.dumps({"league_name": "X", "crest": False,
-                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
-    league.write_ids(str(path), league.load_league(str(path)))
-    written = json.loads(path.read_text())
-    assert written["crest"] is False
-    assert "banner" not in written and "tagline" not in written
-    assert league.load_league(str(path))["crest"] is False
+    with pytest.raises(ValueError, match="unset means that now"):
+        league.load_league(str(path))
 
 
 def test_write_ids_keeps_the_branding_and_invents_none(tmp_path):
@@ -163,10 +155,56 @@ def test_write_ids_keeps_the_branding_and_invents_none(tmp_path):
     league.write_ids(str(path), league.load_league(str(path)))
     written = json.loads(path.read_text())
     assert written["tagline"] == "Season 4"
-    # It rewrites the user's file. Adding two null keys they never typed is how a tool
+    # It rewrites the user's file. Adding a null key they never typed is how a tool
     # teaches people not to run it.
-    assert "crest" not in written and "banner" not in written
+    assert "logo" not in written
     assert league.load_league(str(path))["tagline"] == "Season 4"
+
+
+# ---------------------------------------------------------------------------
+# From a slug to two files
+# ---------------------------------------------------------------------------
+
+def art_dir(tmp_path, *names):
+    """A leagues directory with one slug in it, holding the files named."""
+    d = tmp_path / "wcw"
+    d.mkdir()
+    for name in names:
+        (d / name).write_bytes(b"\x89PNG")
+    return str(tmp_path)
+
+
+def test_a_slug_resolves_to_the_two_images_it_names(tmp_path):
+    found = league.art_files("wcw", art_dir(tmp_path, "logo.png", "banner.png"))
+    assert found["logo"].endswith(os.path.join("wcw", "logo.png"))
+    assert found["banner"].endswith(os.path.join("wcw", "banner.png"))
+
+
+def test_either_image_may_be_missing(tmp_path):
+    """A league with a badge and no banner is an ordinary league and the page draws it,
+    so half an answer is an answer rather than an error."""
+    found = league.art_files("wcw", art_dir(tmp_path, "logo.png"))
+    assert found["logo"] and found["banner"] is None
+
+
+def test_a_slug_that_names_nothing_is_two_nones(tmp_path):
+    assert league.art_files("nope", str(tmp_path)) == {"logo": None, "banner": None}
+    assert league.art_files(None, str(tmp_path)) == {"logo": None, "banner": None}
+
+
+def test_the_extension_is_whatever_the_file_was_saved_as(tmp_path):
+    """SVG costs a page almost nothing and is the right answer for a drawn crest; PNG
+    is what a generated one arrives as. The name is fixed, the extension is not."""
+    found = league.art_files("wcw", art_dir(tmp_path, "logo.svg", "banner.jpg"))
+    assert found["logo"].endswith(".svg") and found["banner"].endswith(".jpg")
+
+
+def test_the_checked_in_example_league_resolves(tmp_path):
+    """The worked example is the one league anybody can run without writing a file, so
+    its art has to be findable from a clean checkout."""
+    example = league.load_league(os.path.join(league.LEAGUES_DIR, "example-league.json"))
+    found = league.art_files(example["logo"])
+    assert found["logo"] and found["banner"]
 
 
 def test_unknown_fields_ride_along(tmp_path, capsys):

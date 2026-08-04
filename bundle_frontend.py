@@ -14,7 +14,8 @@ Both inline `frontend/lib.js`, which is where the standings rule lives.
 
 THE TEMPLATE CONTRACT
 ---------------------
-A template is a directory with an `index.html` in it. Three things happen to it:
+A template is a directory with an `index.html` in it. Four things happen to it, and
+the last is optional:
 
   1. The result JSON replaces the marker inside the data script tag:
 
@@ -35,9 +36,32 @@ A template is a directory with an `index.html` in it. Three things happen to it:
   3. `{{title}}` style tokens are substituted from a small set of fields, so a
      template can name the league in its <title> without running any JavaScript.
 
+  4. The league's art is read and inlined into a second data element, if the template
+     asks for one:
+
+         <script id="league-art" type="application/json">
+           /*__LEAGUE_ART_JSON__*/
+         </script>
+
+     What lands there is `{"logo": "data:image/png;base64,…", "banner": "…"}` -- only
+     the keys that resolved, and `{}` for a league with no art.
+
 That is the whole contract. Any HTML that honours it can be dropped in as
 `--template`, which is how a designed scoreboard replaces the reference one without
 touching this file.
+
+WHY THE ART IS READ HERE AND NOWHERE ELSE
+-----------------------------------------
+The result file names the league's art with a slug -- `"logo": "wcw"` -- and that name
+resolves to `leagues/wcw/logo.png` and `leagues/wcw/banner.png`. The pictures never
+enter the result JSON. They enter here, in the last step, into the one artifact whose
+whole purpose is to survive being emailed: a page that opens from a USB stick with the
+wifi off.
+
+So the two outputs of this program deliberately differ. The `.html` has the images in
+it; the `result.json` beside it in the zip carries the slug and stays a document about
+a competition. Rebuild from that JSON and the art comes back at the next export, out of
+the repository, at whatever the files say today.
 """
 
 import argparse
@@ -51,7 +75,7 @@ import shutil
 import zipfile
 from datetime import datetime, timezone
 
-from league import slugify
+import league as league_mod
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -64,6 +88,16 @@ DEFAULT_TEMPLATE = os.path.join(_HERE, "frontend", "scoreboard")
 REFERENCE_TEMPLATE = os.path.join(_HERE, "frontend", "template")
 
 JSON_MARKER = "/*__COMPETITION_JSON__*/"
+
+# The league's art, inlined into the page and into nothing else. Optional, unlike the
+# data marker: a template that does not draw a masthead never has to mention it.
+ART_MARKER = "/*__LEAGUE_ART_JSON__*/"
+
+# An image over this lands in the page as base64, which is a third bigger again. Not a
+# refusal -- somebody who wants a 3 MB banner in their scoreboard is entitled to one,
+# and a page too heavy to email is a nuisance rather than a wrong answer -- but it is
+# the kind of thing to learn from a build rather than from an inbox.
+HEAVY_ART_BYTES = 1024 * 1024
 
 _LINK_RE = re.compile(r'<link\b[^>]*?href=["\']([^"\']+)["\'][^>]*?>', re.I)
 _SCRIPT_RE = re.compile(r'<script\b[^>]*?src=["\']([^"\']+)["\'][^>]*?>\s*</script>', re.I)
@@ -166,6 +200,43 @@ def inline_assets(markup, base_dir, report):
     return markup
 
 
+def league_art(result, leagues_dir=None, report=None):
+    """
+    The league's two images as data: URIs, read out of the slug the result file names.
+
+    Returns {"logo": "data:…", "banner": "data:…"} with only the keys that resolved --
+    so `{}` for a league with no art, and `{"logo": …}` for one with a badge and no
+    banner. Both of those are ordinary and the page draws them.
+
+    A slug that resolves to nothing at all is the one case worth a word: it means the
+    build recorded art that this export cannot find, which is a masthead somebody is
+    expecting and will not get.
+    """
+    slug = (result.get("league") or {}).get("logo")
+    found = league_mod.art_files(slug, leagues_dir)
+    art = {}
+    for name, path in found.items():
+        if not path:
+            continue
+        size = os.path.getsize(path)
+        if size > HEAVY_ART_BYTES:
+            ideal = "256 px square" if name == "logo" else "720 px wide"
+            print(f"note: {path} is {size // 1024} KB and lands in the page as about "
+                  f"{size * 4 // 3 // 1024} KB of base64. A {ideal} {name} is the right order "
+                  "of magnitude; a JPEG beats a PNG on a photograph.")
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as f:
+            art[name] = f"data:{mime};base64,{base64.b64encode(f.read()).decode('ascii')}"
+        if report is not None:
+            report["art"].append((name, path, size))
+
+    if slug and not art:
+        print(f"!! the league's art slug is {slug!r} and "
+              f"{os.path.join(leagues_dir or league_mod.LEAGUES_DIR, slug)} holds no logo or "
+              "banner image. The page will show the league's name and no art.")
+    return art
+
+
 def substitute_tokens(markup, result):
     """
     Fill `{{league_name}}` and friends. HTML-escaped, because these come from a
@@ -182,7 +253,7 @@ def substitute_tokens(markup, result):
     return _TOKEN_RE.sub(lambda m: html.escape(values.get(m.group(1), m.group(0))), markup)
 
 
-def bundle(result, template_dir, out_dir, basename=None, keep_result=True):
+def bundle(result, template_dir, out_dir, basename=None, keep_result=True, leagues_dir=None):
     """
     Build the page and the zip. Returns the paths written.
 
@@ -190,6 +261,9 @@ def bundle(result, template_dir, out_dir, basename=None, keep_result=True):
     contains it, because the page is for reading and the JSON is for re-running: it is
     the input to a rebuild, and digging it back out of an HTML file is nobody's idea of
     a good afternoon.
+
+    The art is the one thing the page has and that JSON does not, and the copy written
+    to the zip is the one that was handed in -- untouched, slug and all.
     """
     index = os.path.join(template_dir, "index.html")
     if not os.path.exists(index):
@@ -205,9 +279,15 @@ def bundle(result, template_dir, out_dir, basename=None, keep_result=True):
             "so the result can be baked in. See the module docstring for the full contract."
         )
 
-    report = {"inlined": [], "missing": []}
+    report = {"inlined": [], "missing": [], "art": []}
     markup = inline_assets(markup, template_dir, report)
     markup = substitute_tokens(markup, result)
+    # The art marker is replaced whenever it is there, including with `{}`. Leaving it
+    # in place would hand the page a JavaScript comment where its JSON should be, and
+    # the masthead would take the whole script down with it.
+    if ART_MARKER in markup:
+        markup = markup.replace(ART_MARKER,
+                                json_for_script(league_art(result, leagues_dir, report)))
     markup = markup.replace(JSON_MARKER, json_for_script(result))
 
     basename = basename or default_basename(result)
@@ -232,7 +312,8 @@ def bundle(result, template_dir, out_dir, basename=None, keep_result=True):
 
 
 def default_basename(result):
-    return f"{slugify(result['league']['league_name'])}-{slugify(result['tournament']['name'])}"
+    slug = league_mod.slugify
+    return f"{slug(result['league']['league_name'])}-{slug(result['tournament']['name'])}"
 
 
 def manifest(result, report):
@@ -249,6 +330,10 @@ def manifest(result, report):
     live = result.get("live")
     scoring = ([f"live scoring    {live['espn_leaderboard_url']}"] if live else
                ["live scoring    none -- built before ESPN published a field"])
+    # The one thing the page holds that the result.json beside it does not, and most of
+    # the page's weight. Named file by file, so a heavy export says where the bytes went.
+    art = [f"league art      {name}  {path}  ({size // 1024} KB)"
+           for name, path, size in report.get("art") or []]
     behaviour = ([
         "ESPN is the only thing it fetches, and it fetches it for the scores.",
     ] if live else [
@@ -283,6 +368,7 @@ def manifest(result, report):
         "read once, when the groups are drawn, and that is the competition.",
         "",
         f"assets inlined  {len(report['inlined'])}",
+        *art,
         f"bundled         {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         "",
     ])
@@ -296,6 +382,9 @@ def main(argv=None):
     ap.add_argument("--name", help="basename for the .html and .zip")
     ap.add_argument("--no-result-in-zip", action="store_true")
     ap.add_argument("--clean", action="store_true", help="empty the output directory first")
+    ap.add_argument("--leagues-dir", default=league_mod.LEAGUES_DIR,
+                    help="where the art slug in the result file resolves: <leagues-dir>/<slug>/"
+                         f"logo.png and banner.png (default {league_mod.LEAGUES_DIR})")
     args = ap.parse_args(argv)
 
     with open(args.result, encoding="utf-8") as f:
@@ -305,7 +394,8 @@ def main(argv=None):
         shutil.rmtree(args.out)
 
     written, report = bundle(result, args.template, args.out, args.name,
-                             keep_result=not args.no_result_in_zip)
+                             keep_result=not args.no_result_in_zip,
+                             leagues_dir=args.leagues_dir)
     for path in written:
         print(f"{path}  ({os.path.getsize(path) // 1024} KB)")
     return 0

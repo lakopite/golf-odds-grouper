@@ -41,6 +41,19 @@
 
 var DATA = JSON.parse(document.getElementById('competition-data').textContent);
 
+/* The league's art: {logo: 'data:…', banner: 'data:…'}, either key or both absent.
+ * It arrives in its own element rather than on DATA because DATA is the result file
+ * verbatim, and the result file names the art with a slug instead of carrying half a
+ * megabyte of PNG. The bundler resolves that slug and fills this in.
+ *
+ * Empty if this page was opened straight out of the template directory, where the
+ * element still holds the bundler's marker. That is a page with no data in it either,
+ * but a masthead is not the thing to die on. */
+var ART = (function () {
+  try { return JSON.parse(document.getElementById('league-art').textContent) || {}; }
+  catch (e) { return {}; }
+})();
+
 /* The whole of the difference between the two pages above. */
 var LIVE = DATA.live || null;
 
@@ -167,16 +180,17 @@ function renderBrand() {
     $('league-tagline').textContent = league.tagline;
     $('league-tagline').hidden = false;
   }
-  // A crest or banner is a data: URI by the time it gets here, or an absolute URL, or
-  // null. Null is the common case and gets no element at all rather than a broken one.
-  if (league.crest) {
-    var crest = $('league-crest');
-    crest.src = league.crest;
-    crest.alt = league.league_name + ' crest';
-    crest.hidden = false;
+  // Both are data: URIs by the time they get here, and either may be absent -- a
+  // league with a badge and no banner is ordinary, and a league with neither is a
+  // masthead with a name in it. Absent gets no element at all rather than a broken one.
+  if (ART.logo) {
+    var logo = $('league-logo');
+    logo.src = ART.logo;
+    logo.alt = league.league_name + ' logo';
+    logo.hidden = false;
   }
-  if (league.banner) {
-    $('league-banner').src = league.banner;
+  if (ART.banner) {
+    $('league-banner').src = ART.banner;
     $('league-banner').alt = league.league_name + (league.tagline ? ' — ' + league.tagline : '');
     $('bannerwrap').hidden = false;
   }

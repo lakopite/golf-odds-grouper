@@ -60,6 +60,13 @@ A template is a directory with an `index.html` in it. The whole contract is in
    empty `src=""` resolves to the template directory, and a directory is not an image.
 4. **Use `{{tokens}}`** for anything that should be right before JavaScript runs:
    `league_name`, `tournament`, `market`, `generated_at`, `team_count`, `competition_id`.
+5. **Carry the art element if you draw a masthead** — optional, unlike the data marker:
+   ```html
+   <script id="league-art" type="application/json">/*__LEAGUE_ART_JSON__*/</script>
+   ```
+   The bundler fills it with `{"logo": "data:…", "banner": "data:…"}`, read out of
+   `leagues/<slug>/`. `DATA.league.logo` is that slug and not an image — a page that
+   sets an `<img src>` from it renders a broken image with the word `wcw` under it.
 
 Then point the bundler at it:
 

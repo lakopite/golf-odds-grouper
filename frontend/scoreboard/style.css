@@ -160,7 +160,7 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
-.crest {
+.logo {
   width: 38px; height: 38px; flex: none;
   border-radius: 50%; object-fit: cover;
   border: 1px solid var(--gold-edge);

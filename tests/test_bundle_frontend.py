@@ -7,6 +7,7 @@ contained, that the data survives being embedded, and that a template which does
 honour the contract fails loudly instead of shipping a page with no data in it.
 """
 
+import base64
 import json
 import os
 import re
@@ -47,6 +48,21 @@ def template(tmp_path):
         '<img src="logo.svg" alt=""><p>{{market}} / {{team_count}} / {{competition_id}}</p>'
         f'<script id="competition-data" type="application/json">{bundler.JSON_MARKER}</script>'
         '<script src="app.js"></script></body></html>')
+    return str(d)
+
+
+@pytest.fixture
+def art_template(tmp_path):
+    """The same, plus the optional half of the contract: an element for the league's
+    art. Kept apart from `template` so the tests above go on proving that a template
+    which draws no masthead still bundles."""
+    d = tmp_path / "art-tpl"
+    d.mkdir()
+    (d / "index.html").write_text(
+        '<!doctype html><html><body><img id="league-logo" hidden>'
+        f'<script id="competition-data" type="application/json">{bundler.JSON_MARKER}</script>'
+        f'<script id="league-art" type="application/json">{bundler.ART_MARKER}</script>'
+        "</body></html>")
     return str(d)
 
 
@@ -178,6 +194,119 @@ def test_a_template_without_an_index_is_refused(result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# The league's art
+#
+# The one thing the page carries that the result JSON does not. The result names the
+# art with a slug; this is the step that turns that name into two data: URIs, and it
+# is the only step in the pipeline that opens the files at all.
+# ---------------------------------------------------------------------------
+
+PIXEL = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
+                         "DUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+@pytest.fixture
+def leagues(tmp_path):
+    """A leagues directory with one slug in it, carrying both images."""
+    art = tmp_path / "leagues" / "wcw"
+    art.mkdir(parents=True)
+    (art / "logo.png").write_bytes(PIXEL)
+    (art / "banner.png").write_bytes(PIXEL)
+    return str(tmp_path / "leagues")
+
+
+def embedded_art(markup):
+    m = re.search(r'<script id="league-art" type="application/json">(.*?)</script>',
+                  markup, re.S)
+    assert m, "the art script tag is gone"
+    return json.loads(m.group(1))
+
+
+def test_the_slug_becomes_two_data_uris_in_the_page(result, art_template, leagues, tmp_path):
+    result["league"]["logo"] = "wcw"
+    markup = read_html(bundler.bundle(result, art_template, str(tmp_path / "out"),
+                                      leagues_dir=leagues)[0])
+    art = embedded_art(markup)
+    assert art["logo"].startswith("data:image/png;base64,")
+    assert art["banner"].startswith("data:image/png;base64,")
+
+
+def test_the_images_go_into_the_page_and_not_into_the_data(result, art_template, leagues,
+                                                           tmp_path):
+    """
+    The whole point. The page has to be portable, so it gets the bytes; the result JSON
+    beside it in the zip is the input to a rebuild and stays a document about a
+    competition, carrying the name of the art and none of it.
+    """
+    result["league"]["logo"] = "wcw"
+    paths, _ = bundler.bundle(result, art_template, str(tmp_path / "out"), leagues_dir=leagues)
+    assert embedded_json(read_html(paths))["league"]["logo"] == "wcw"
+    with zipfile.ZipFile(paths[1]) as z:
+        written = json.loads(z.read("result.json"))
+    assert written == result
+    assert "data:image" not in json.dumps(written["league"])
+
+
+def test_a_league_with_no_art_gets_an_empty_object(result, art_template, tmp_path):
+    """`{}` and not the marker. A JavaScript comment where a page's JSON should be
+    takes the masthead and the whole script with it."""
+    markup = read_html(bundler.bundle(result, art_template, str(tmp_path / "out"))[0])
+    assert embedded_art(markup) == {}
+    assert bundler.ART_MARKER not in markup
+
+
+def test_half_the_art_is_half_the_keys(result, art_template, leagues, tmp_path):
+    os.remove(os.path.join(leagues, "wcw", "banner.png"))
+    result["league"]["logo"] = "wcw"
+    markup = read_html(bundler.bundle(result, art_template, str(tmp_path / "out"),
+                                      leagues_dir=leagues)[0])
+    assert set(embedded_art(markup)) == {"logo"}
+
+
+def test_a_slug_that_resolves_to_nothing_is_reported(result, art_template, leagues,
+                                                     tmp_path, capsys):
+    """The build recorded art this export cannot find, which means a masthead somebody
+    is expecting and will not get."""
+    result["league"]["logo"] = "ghost"
+    bundler.bundle(result, art_template, str(tmp_path / "out"), leagues_dir=leagues)
+    assert "holds no logo or banner" in capsys.readouterr().out
+
+
+def test_a_template_that_draws_no_art_bundles_untouched(result, template, leagues, tmp_path):
+    """The art element is the one optional half of the contract: a template that has no
+    masthead never has to mention it, and asking for art it cannot draw is not an error."""
+    result["league"]["logo"] = "wcw"
+    markup = read_html(bundler.bundle(result, template, str(tmp_path / "out"),
+                                      leagues_dir=leagues)[0])
+    assert "league-art" not in markup
+    assert embedded_json(markup)["league"]["logo"] == "wcw"
+
+
+def test_the_manifest_names_the_art_it_inlined(result, art_template, leagues, tmp_path):
+    """It is the one difference between the page and the result.json beside it, and
+    most of a branded page's weight."""
+    result["league"]["logo"] = "wcw"
+    paths, _ = bundler.bundle(result, art_template, str(tmp_path / "out"), leagues_dir=leagues)
+    with zipfile.ZipFile(paths[1]) as z:
+        manifest = z.read("MANIFEST.txt").decode()
+    assert "league art      logo" in manifest and "banner" in manifest
+
+
+def test_heavy_art_is_inlined_anyway_and_said_out_loud(result, art_template, leagues,
+                                                       tmp_path, capsys):
+    """Somebody who wants a 3 MB banner in their scoreboard is entitled to one -- a page
+    too heavy to email is a nuisance, not a wrong answer. They should hear about it from
+    the build rather than from an inbox."""
+    with open(os.path.join(leagues, "wcw", "banner.png"), "wb") as f:
+        f.write(b"\x89PNG" + b"\x00" * (bundler.HEAVY_ART_BYTES + 1))
+    result["league"]["logo"] = "wcw"
+    markup = read_html(bundler.bundle(result, art_template, str(tmp_path / "out"),
+                                      leagues_dir=leagues)[0])
+    assert embedded_art(markup)["banner"].startswith("data:image/png;base64,")
+    assert "lands in the page" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # The zip
 # ---------------------------------------------------------------------------
 
@@ -282,6 +411,12 @@ def test_a_shipped_template_honours_its_own_contract(result, shipped, tmp_path):
          "competition_id"]), markup)
     assert f"<title>{result['league']['league_name']}" in markup
     assert result["competition_id"] in markup
+
+    # Both shipped pages draw a masthead, so both carry the art element -- and it comes
+    # out as JSON rather than as the marker. A page left holding a JavaScript comment
+    # where its art should be dies on the first line of its own script.
+    assert embedded_art(markup) == {}          # the fixture league has no art
+    assert bundler.ART_MARKER not in markup
 
 
 @pytest.mark.parametrize("shipped", SHIPPED, ids=SHIPPED_IDS)

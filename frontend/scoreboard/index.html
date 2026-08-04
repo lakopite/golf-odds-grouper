@@ -11,9 +11,10 @@
 
   Everything visible below is a shell. Every string in it comes from the data at
   runtime, EXCEPT the {{tokens}}, which the bundler fills in so the tab is named before
-  a line of JavaScript runs. Nothing here is specific to a league: the crest, the
-  banner and the tagline arrive on `DATA.league` from the league file, and a league
-  that has none of them gets a page that looks finished anyway.
+  a line of JavaScript runs. Nothing here is specific to a league: the tagline arrives
+  on `DATA.league`, the two images arrive as data: URIs in the `league-art` element the
+  bundler fills, and a league that has none of them gets a page that looks finished
+  anyway.
 
   The plain reference implementation is `frontend/template/`; `docs/FRONTEND-SPEC.md`
   is the contract both of them honour.
@@ -30,10 +31,11 @@
 
   <aside class="rail">
     <div class="brand">
-      <!-- No src, on purpose. app.js sets it from DATA.league.crest, which is already a
-           data: URI by the time it gets here; a src="" would resolve to the template
-           directory at bundle time and there is nothing there to inline. -->
-      <img class="crest" id="league-crest" alt="" hidden>
+      <!-- No src, on purpose. app.js sets it from the league-art element at the bottom
+           of this file, which the bundler fills with data: URIs read out of
+           leagues/<slug>/; a src="" would resolve to the template directory at bundle
+           time and there is nothing there to inline. -->
+      <img class="logo" id="league-logo" alt="" hidden>
       <div class="brand-text">
         <div class="brand-name" id="league-name">{{league_name}}</div>
         <div class="brand-tag" id="league-tagline" hidden></div>
@@ -132,6 +134,11 @@
 </div>
 
 <script id="competition-data" type="application/json">/*__COMPETITION_JSON__*/</script>
+<!-- The league's two images, and the only thing in this page that the result JSON
+     beside it does not carry. The result file names the art with a slug; the bundler
+     reads leagues/<slug>/logo.png and banner.png and inlines them here, so the page
+     stays one portable file and the JSON stays readable. `{}` for a league with no art. -->
+<script id="league-art" type="application/json">/*__LEAGUE_ART_JSON__*/</script>
 <script src="../lib.js"></script>
 <script src="app.js"></script>
 </body>

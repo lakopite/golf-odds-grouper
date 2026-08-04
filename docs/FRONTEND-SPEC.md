@@ -303,6 +303,35 @@ partition summary (`grouping.summary` — e.g. *"Delta 0.000858 (1 tick, 0.09% o
 field) — PROVEN OPTIMAL: no partition of this field does better"*), and the
 `competition_id`. This is what makes "why did I get this group?" answerable.
 
+### 5.5 The league's own art — and where it comes from
+
+A badge beside the league name, a banner across the top, a tagline under the name.
+These are the only per-league part of the design; everything else is the template's and
+is the same for every competition.
+
+The tagline is on `DATA.league.tagline`. **The two images are not on `DATA` at all.**
+`DATA.league.logo` is a *slug* — the name of a directory of art — and a page that set
+an `<img src>` from it would render a broken image with the word `wcw` under it.
+
+The pictures arrive in their own element, which the bundler fills:
+
+```html
+<script id="league-art" type="application/json">/*__LEAGUE_ART_JSON__*/</script>
+```
+```js
+var ART = JSON.parse(document.getElementById('league-art').textContent);
+// { logo: "data:image/png;base64,…", banner: "data:image/png;base64,…" }
+```
+
+Either key may be absent and `{}` is ordinary — a league with a badge and no banner is
+an ordinary league, and one with neither gets a masthead with its name in it, which the
+page must draw as finished rather than as broken.
+
+Why the split: the result JSON is the input to a rebuild and gets read by people, and
+half a megabyte of base64 in it made it neither. The exported page still carries the
+bytes, because the page is the thing that has to survive being emailed. So the two
+artifacts in the zip deliberately differ, and only in this.
+
 ---
 
 ## 6. The standings rule — implement exactly
@@ -398,7 +427,11 @@ much worse fact than no join having been possible. See §2.
 
 ```jsonc
 {
-  "schema_version": "2.1",   // 2.1 dropped odds_snapshot.refreshed, golfers[].odds
+  "schema_version": "3.0",   // 3.0 replaced league.crest and league.banner -- two
+                             // inlined data: URIs -- with league.logo, the NAME of a
+                             // directory of art. The images are read at export and
+                             // land in the page; this file carries none. See §5.5.
+                             // 2.1 dropped odds_snapshot.refreshed, golfers[].odds
                              // .current and the "refresh-odds" rebuild mode: there is
                              // one price per golfer and no way to ask for a second.
                              // 2.0 split the file in two along `build_mode`, and the
@@ -434,18 +467,18 @@ much worse fact than no join having been possible. See §2.
 
   "league":   { "league_id": "uuid", "league_name": "Sunday Fivesome",
                 "league_slug": "sunday-fivesome", "team_count": 5,
-                // The masthead. All three are optional and all three are NULL rather
-                // than absent when unset -- a page that has to tell "this league has
-                // no crest" from "this build predates crests" will get it wrong, and
-                // the difference is worth nothing to anybody.
-                // crest and banner are already data: URIs (or a URL) by the time they
-                // are here; the build inlines them exactly as it does a team logo.
-                // They are the ONLY per-league part of the design, and by the time the
-                // page reads them the question of where they came from -- the command
-                // line, the league file, or the default the build fills in -- has been
-                // settled and spent. A null here means this competition has no such
-                // image, full stop; it is not an invitation to substitute one.
-                "crest": "data:image/png;base64,…", "banner": null,
+                // The masthead. Both are optional and both are NULL rather than
+                // absent when unset -- a page that has to tell "this league has no
+                // logo" from "this build predates logos" will get it wrong, and the
+                // difference is worth nothing to anybody.
+                // `logo` is a SLUG and NOT AN IMAGE: the name of a directory of art
+                // under leagues/, holding logo.png and banner.png. THE PAGE DOES NOT
+                // READ IT. The bundler resolves it and hands the page the pictures in
+                // a separate element -- see §5.5 -- so this file stays a document
+                // about a competition rather than an envelope for two PNGs.
+                // A null here means this competition has no art, full stop; it is not
+                // an invitation to substitute some.
+                "logo": "sunday-fivesome",
                 "tagline": "10th Anniversary" },
 
   "teams": [{
@@ -682,7 +715,7 @@ is the one defect in a scoreboard that the scoreboard cannot recover from on its
 ## 9. The template contract
 
 `bundle_frontend.py` turns a template directory into the deliverable. A template is an
-`index.html` plus local assets. Three things happen to it:
+`index.html` plus local assets. Four things happen to it, and the fourth is optional:
 
 1. **The data is injected.** The file must contain, verbatim:
    ```html
@@ -704,6 +737,15 @@ is the one defect in a scoreboard that the scoreboard cannot recover from on its
 3. **`{{tokens}}` are substituted**, HTML-escaped: `league_name`, `tournament`,
    `market`, `generated_at`, `team_count`, `competition_id`. This is how a `<title>`
    names the league without running JavaScript.
+
+4. **The league's art is inlined**, if the template asks for it:
+   ```html
+   <script id="league-art" type="application/json">/*__LEAGUE_ART_JSON__*/</script>
+   ```
+   The marker is replaced with `{"logo": "data:…", "banner": "data:…"}` — only the keys
+   that resolved, and `{}` for a league with no art. Read out of `leagues/<slug>/` at
+   bundle time; see §5.5. Unlike the data marker this one is optional: a template that
+   draws no masthead simply omits it and bundles unchanged.
 
 Output: `<league>-<tournament>.html` (self-contained) and a matching `.zip` holding
 that page, `result.json`, and a manifest.
@@ -775,8 +817,9 @@ reference honours `prefers-color-scheme`.
 - [ ] Which Kalshi event and which ESPN event are named somewhere on the page (§5.4)
 - [ ] Handles `pre` (zero competitors), ESPN down, null logos
 - [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
-- [ ] The league's own crest, banner and tagline are shown when `DATA.league` carries
-      them, and the page looks finished when it does not
+- [ ] The league's own art is read from `#league-art` and **not** from
+      `DATA.league.logo`, which is a slug; the tagline is shown when `DATA.league`
+      carries one, and the page looks finished with neither (§5.5)
 - [ ] Readable on a phone; works in light and dark
 - [ ] `python -m pytest tests/test_frontend_parity.py tests/test_scoreboard_render.py
       tests/test_frontend_render.py` passes

@@ -16,6 +16,7 @@ Skipped without Playwright and a browser. Chromium is pre-installed in this
 environment; elsewhere, `pip install playwright && playwright install chromium`.
 """
 
+import base64
 import json
 import re
 
@@ -29,10 +30,11 @@ pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 
 TEMPLATE = bundler.DEFAULT_TEMPLATE
 
-# A 1x1 PNG. Enough to prove the masthead wires an image through; a real crest would
-# only make the fixture bigger.
+# A 1x1 PNG, as the page will see it and as it sits on disk. Enough to prove the
+# masthead wires an image through; a real logo would only make the fixture bigger.
 PIXEL = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA"
          "DUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+PIXEL_BYTES = base64.b64decode(PIXEL.split(",", 1)[1])
 
 
 def open_page(browser, html, route=None, viewport=None):
@@ -391,26 +393,37 @@ def test_a_result_carrying_a_second_reading_still_renders_one_price_per_golfer(
 # ---------------------------------------------------------------------------
 
 def test_a_league_with_no_art_still_looks_finished(page):
-    assert not page["page"].locator("#league-crest").is_visible()
+    assert not page["page"].locator("#league-logo").is_visible()
     assert not page["page"].locator("#bannerwrap").is_visible()
     assert not page["page"].locator("#league-tagline").is_visible()
     # The badge is always there; only its contents change.
     assert page["page"].locator("#board tbody.team .mono.is-empty").count() > 0
 
 
-def test_a_crest_a_banner_and_a_tagline_are_wired_through(browser, rocket_classic,
-                                                          serve_espn, tmp_path):
+def test_a_logo_a_banner_and_a_tagline_are_wired_through(browser, rocket_classic,
+                                                         serve_espn, tmp_path):
+    """
+    Through the slug, which is the whole of the new path: the result file names
+    `leagues/<slug>/`, the bundler reads the two files it finds there, and the page
+    draws them out of an element the result JSON knows nothing about.
+    """
+    art = tmp_path / "leagues" / "wcw"
+    art.mkdir(parents=True)
+    (art / "logo.png").write_bytes(PIXEL_BYTES)
+    (art / "banner.png").write_bytes(PIXEL_BYTES)
+
     result = json.loads(json.dumps(rocket_classic["result"]))
-    result["league"]["crest"] = PIXEL
-    result["league"]["banner"] = PIXEL
+    result["league"]["logo"] = "wcw"
     result["league"]["tagline"] = "10th Anniversary"
-    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "branded"))
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "branded"),
+                              leagues_dir=str(tmp_path / "leagues"))
 
     ctx, out = open_page(browser, paths[0], serve_espn())
     p = out["page"]
-    assert p.locator("#league-crest").is_visible()
-    assert p.locator("#league-crest").get_attribute("src") == PIXEL
+    assert p.locator("#league-logo").is_visible()
+    assert p.locator("#league-logo").get_attribute("src") == PIXEL
     assert p.locator("#bannerwrap").is_visible()
+    assert p.locator("#league-banner").get_attribute("src") == PIXEL
     assert p.locator("#league-tagline").text_content() == "10th Anniversary"
     assert out["errors"] == []
     ctx.close()

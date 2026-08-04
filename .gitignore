@@ -14,7 +14,9 @@ build/
 dist/
 
 # Leagues are the user's own rosters. The worked example is checked in; anything
-# else they drop in here stays theirs.
+# else they drop in here stays theirs. Art directories -- leagues/<slug>/logo.png
+# and banner.png -- are NOT ignored: the exporter reads them out of the repository
+# at bundle time, so they have to be here rather than only on one laptop.
 leagues/*.json
 !leagues/example-league.json
 
