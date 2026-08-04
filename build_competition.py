@@ -105,6 +105,8 @@ import kalshi_odds
 import league as league_mod
 import match_review
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 # 1.1 added, all additive: `rebuilt_from`, `odds_snapshot.refreshed`,
 # `odds_snapshot.auto_exclude`, `golfers[].odds.current`, and `golfers[].espn` gaining
 # source / from_event / in_field.
@@ -147,6 +149,17 @@ REBUILD_INPUTS = ("tournament", "kalshi_event", "odds", "price", "espn_event",
 # than this is a mistake rather than a choice -- a 2 MB PNG lands in every copy of the
 # result JSON and every copy of the HTML built from it.
 MAX_INLINE_LOGO_BYTES = 512 * 1024
+
+# The art a competition gets when nobody supplies any.
+#
+# The scoreboard's chrome -- the navy, the gold, the type -- is the template's and is
+# the same for every league. These two files are the only part of the masthead that is
+# a picture rather than a rule, which is why they are the only part a league overrides:
+# with `--crest` / `--banner` at creation, or with `crest` / `banner` in the league
+# file. Both are checked in at the sizes the page draws them at, 256 px and 720 px.
+_ART = os.path.join(_HERE, "leagues", "logos")
+DEFAULT_CREST = os.path.join(_ART, "wcw-crest.png")
+DEFAULT_BANNER = os.path.join(_ART, "wcw-banner.png")
 
 # Decimal places kept on every probability in the result file. Deep enough that the
 # rounding is far below the tick grid the odds live on, shallow enough that the JSON
@@ -659,6 +672,10 @@ def finish(result, args, espn, aliases, started):
     league_dir = os.path.dirname(os.path.abspath(base))
     for team in result["teams"]:
         team["team_logo"] = inline_logo(team.get("team_logo"), league_dir)
+    # The masthead art settles first -- which of the command line, the league file and
+    # the shipped default wins -- and only then gets inlined, so there is one path
+    # through the base64 for all three.
+    resolve_league_art(result, args)
     for field in ("crest", "banner"):
         result["league"][field] = inline_logo(result["league"].get(field), league_dir, field)
 
@@ -1047,10 +1064,10 @@ def assemble(**k):
             "league_slug": k["league"]["league_slug"],
             "source_file": k["league"]["source_file"],
             "team_count": len(k["teams"]),
-            # The masthead. Paths here; finish() turns the local ones into data: URIs,
-            # the same pass that does it for the team logos. Null when the league file
-            # says nothing, which is the common case and needs no fallback beyond the
-            # league's name -- which every league has.
+            # The masthead. Paths here, and for the two images possibly `false` or
+            # nothing at all; finish() settles which of the command line, this file and
+            # the shipped default wins, then turns whatever won into a data: URI in the
+            # same pass that does it for the team logos.
             "crest": k["league"].get("crest"),
             "banner": k["league"].get("banner"),
             "tagline": k["league"].get("tagline"),
@@ -1264,6 +1281,56 @@ def inline_logo(value, base_dir, what="logo"):
         return f"data:{mime};base64,{base64.b64encode(f.read()).decode('ascii')}"
 
 
+def resolve_league_art(result, args):
+    """
+    Settle the crest and the banner before they are inlined.
+
+    The two images are the only per-league part of the masthead, and they can arrive
+    three ways. In precedence order, highest first:
+
+      1. `--no-crest` / `--no-banner` -- this competition has none, say no more.
+      2. `--crest PATH` / `--banner PATH`, handed in beside the league file when the
+         competition is created. Resolved against the working directory, like every
+         other path typed on a command line, and made absolute here so the inliner
+         does not later resolve it against the league file's directory instead.
+      3. `crest` / `banner` in the league file, resolved against that file. `false`
+         there is the standing form of (1): a league that never wants art.
+      4. Nothing -- and then DEFAULT_CREST / DEFAULT_BANNER, so a page built by
+         somebody who supplied no art still looks like the design rather than like a
+         league whose art failed to load.
+
+    Rule 4 fires only for a build that read a league file. A rebuild carries forward
+    what the result file already recorded, null included: the first build settled this
+    question, and a rebuild that re-answered it would put a crest on a page somebody
+    had already sent round without one.
+    """
+    from_league_file, defaulted = bool(args.league), []
+    for field, typed, cleared, fallback in (
+            ("crest", args.crest, args.no_crest, DEFAULT_CREST),
+            ("banner", args.banner, args.no_banner, DEFAULT_BANNER)):
+        if cleared:
+            value = None
+        elif typed:
+            value = os.path.abspath(typed)
+        else:
+            value = result["league"].get(field)
+            if value is False:
+                value = None
+            elif value is None and from_league_file:
+                value = fallback
+                defaulted.append(field)
+        result["league"][field] = value
+
+    # Worth a line. The default is half a megabyte of PNG that lands in the result
+    # file and in every page built from it, so somebody who did not know they were
+    # getting it should find out here rather than from the size of the export.
+    if defaulted:
+        print(f"note: no {' or '.join(defaulted)} supplied, using the default. "
+              f"{' '.join(f'--{f} PATH' for f in defaulted)} to supply your own, "
+              f"{' '.join(f'--no-{f}' for f in defaulted)} for none.")
+    return result
+
+
 def _git_commit():
     try:
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
@@ -1303,6 +1370,17 @@ def build_parser():
                          "gets a different group. Not what you want mid-tournament.")
     ap.add_argument("--overwrite", action="store_true",
                     help="allow --regroup to write over the result file it read")
+    ap.add_argument("--crest", metavar="PATH",
+                    help="the league's badge for the masthead, handed in beside the league "
+                         "file. Beats a `crest` in that file. A local path is inlined into "
+                         "the export; an https:// URL is left alone. Around 256 px square. "
+                         "Unset, a build from a league file uses the shipped default.")
+    ap.add_argument("--banner", metavar="PATH",
+                    help="the wide image across the top of the page, same rules as --crest. "
+                         "Around 720 px wide.")
+    ap.add_argument("--no-crest", action="store_true",
+                    help="build this competition with no crest, whatever the league file says")
+    ap.add_argument("--no-banner", action="store_true", help="likewise, with no banner")
     ap.add_argument("--tournament", help="tournament name or Kalshi event code, e.g. 'Wyndham' or WYC26")
     ap.add_argument("--odds", default=DEFAULT_ODDS_TYPE,
                     help=f"{'/'.join(ODDS_TYPES)} or a raw Kalshi series ticker (default {DEFAULT_ODDS_TYPE})")
@@ -1417,9 +1495,29 @@ def apply_result_defaults(args, result, typed=()):
     return filled
 
 
+def check_art_options(parser, args):
+    """
+    Catch a bad `--crest` / `--banner` now rather than forty seconds into a build.
+
+    A path typed on the command line is a thing somebody meant, so a typo in one is an
+    error and not the shrug `inline_logo` gives a league file's missing art. Getting it
+    at the top matters because everything between here and the inliner is network: the
+    Kalshi fetch and the ESPN join both run first, and finding out afterwards that the
+    banner was `bannner.png` means running them again.
+    """
+    for field in ("crest", "banner"):
+        value, cleared = getattr(args, field), getattr(args, f"no_{field}")
+        if value and cleared:
+            parser.error(f"--{field} and --no-{field} ask for opposite things")
+        if value and not value.startswith(("http://", "https://", "data:")) \
+                and not os.path.isfile(value):
+            parser.error(f"--{field} {value} is not a file")
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    check_art_options(parser, args)
 
     if args.from_result:
         result = load_result(args.from_result)

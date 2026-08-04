@@ -416,12 +416,17 @@ much worse fact than no join having been possible. See §2.
 
   "league":   { "league_id": "uuid", "league_name": "Sunday Fivesome",
                 "league_slug": "sunday-fivesome", "team_count": 5,
-                // The masthead, from the league file. All three are optional and all
-                // three are NULL rather than absent when unset -- a page that has to
-                // tell "this league has no crest" from "this build predates crests"
-                // will get it wrong, and the difference is worth nothing to anybody.
+                // The masthead. All three are optional and all three are NULL rather
+                // than absent when unset -- a page that has to tell "this league has
+                // no crest" from "this build predates crests" will get it wrong, and
+                // the difference is worth nothing to anybody.
                 // crest and banner are already data: URIs (or a URL) by the time they
                 // are here; the build inlines them exactly as it does a team logo.
+                // They are the ONLY per-league part of the design, and by the time the
+                // page reads them the question of where they came from -- the command
+                // line, the league file, or the default the build fills in -- has been
+                // settled and spent. A null here means this competition has no such
+                // image, full stop; it is not an invitation to substitute one.
                 "crest": "data:image/png;base64,…", "banner": null,
                 "tagline": "10th Anniversary" },
 

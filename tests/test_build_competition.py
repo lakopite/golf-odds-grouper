@@ -11,6 +11,7 @@ The live pull is covered by tests/test_live.py, which is skipped by default.
 """
 
 import json
+import os
 import types
 
 import pytest
@@ -514,6 +515,7 @@ def test_finish_inlines_the_crest_and_the_banner_against_the_league_file(tmp_pat
     result["league"]["banner"] = "logos/banner.svg"
 
     args = types.SimpleNamespace(league=str(league_path), from_result=None,
+                                 crest=None, banner=None, no_crest=False, no_banner=False,
                                  output=str(tmp_path / "out" / "result.json"),
                                  update_aliases=False, alias_file=str(tmp_path / "a.json"))
     bc.finish(result, args, {"review": None, "decisions": {}, "matches": {}, "report": None},
@@ -543,6 +545,138 @@ def test_a_result_file_written_before_branding_existed_still_rebuilds():
     for field in ("crest", "banner", "tagline"):
         result["league"].pop(field)
     assert bc.league_from_result(result)["crest"] is None
+
+
+# ---------------------------------------------------------------------------
+# Where the masthead art comes from
+#
+# Three sources -- the command line, the league file, and the art the tool ships --
+# and the whole of the rule is which one wins. The chrome around the art is the
+# template's and is the same for every league; these two images are not.
+# ---------------------------------------------------------------------------
+
+def art_args(**kw):
+    """A parsed command line with only the fields resolve_league_art reads."""
+    base = dict(league="leagues/wcw.json", from_result=None,
+                crest=None, banner=None, no_crest=False, no_banner=False)
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def art(said=None, **cli):
+    """
+    Resolve one competition's masthead art.
+
+    `said` is what the league file (or, on a rebuild, the result file) carries, as
+    {"crest": ..., "banner": ...}; the keyword arguments are the command line. Kept
+    apart because `--crest` and a file's `crest` are exactly the two things these
+    tests are about telling apart.
+    """
+    result = {"league": dict({"crest": None, "banner": None}, **(said or {}))}
+    return bc.resolve_league_art(result, art_args(**cli))["league"]
+
+
+def test_a_league_that_supplies_no_art_gets_the_default():
+    """The point of shipping a default: a competition created with nothing but a roster
+    still opens looking like the design, not like a page whose images 404'd."""
+    league = art()
+    assert league["crest"] == bc.DEFAULT_CREST
+    assert league["banner"] == bc.DEFAULT_BANNER
+    assert os.path.isfile(league["crest"]) and os.path.isfile(league["banner"])
+
+
+def test_the_league_file_beats_the_default():
+    assert art({"crest": "logos/ours.png"})["crest"] == "logos/ours.png"
+
+
+def test_the_command_line_beats_the_league_file(tmp_path):
+    """`--crest` is how the image arrives beside the league JSON when a competition is
+    created, so it has to win over art the file happens to carry."""
+    mine = tmp_path / "mine.png"
+    mine.write_bytes(b"\x89PNG")
+    assert art({"crest": "logos/ours.png"}, crest=str(mine))["crest"] == str(mine)
+
+
+def test_a_typed_path_is_resolved_against_the_working_directory(tmp_path, monkeypatch):
+    """
+    Not against the league file, which is where a path *inside* that file resolves.
+    Making it absolute here is what keeps the inliner from later joining a relative
+    `--crest` onto the league directory and looking in a place nobody meant.
+    """
+    (tmp_path / "art.png").write_bytes(b"\x89PNG")
+    monkeypatch.chdir(tmp_path)
+    resolved = art(crest="art.png")["crest"]
+    assert os.path.isabs(resolved) and os.path.isfile(resolved)
+
+
+@pytest.mark.parametrize("field", ["crest", "banner"])
+def test_no_crest_and_no_banner_win_over_everything(field):
+    assert art({field: "logos/ours.png"}, **{f"no_{field}": True})[field] is None
+
+
+@pytest.mark.parametrize("field", ["crest", "banner"])
+def test_false_in_the_league_file_means_none_rather_than_the_default(field):
+    """A league that wants a bare masthead has to be able to say so once, in the file,
+    rather than remembering a flag on every build."""
+    assert art({field: False})[field] is None
+
+
+def test_a_rebuild_does_not_fill_in_art_the_first_build_left_empty():
+    """
+    The first build settled this. A rebuild that re-answered it would put a crest on a
+    page that has already gone round without one -- and the competition would change
+    its appearance on a run that was supposed to be about the leaderboard.
+    """
+    league = art(league=None, from_result="build/result.json")
+    assert league["crest"] is None and league["banner"] is None
+
+
+def test_a_rebuild_still_takes_art_it_is_handed(tmp_path):
+    """Not filling in a default is not the same as refusing to be told."""
+    mine = tmp_path / "new.png"
+    mine.write_bytes(b"\x89PNG")
+    league = art({"crest": "data:image/png;base64,AA"},
+                 league=None, from_result="build/result.json", crest=str(mine))
+    assert league["crest"] == str(mine)
+
+
+def test_a_rebuild_carries_an_already_inlined_crest_through_untouched():
+    league = art({"crest": "data:image/png;base64,AA"},
+                 league=None, from_result="b.json")
+    assert league["crest"] == "data:image/png;base64,AA"
+
+
+def test_the_default_art_survives_the_inliner(tmp_path):
+    """
+    The default is only a default if it actually lands in the page. It is a real file
+    of a real size, and the inliner refuses anything over the limit -- so this is the
+    test that fails if somebody drops a 3 MB banner in as the default.
+    """
+    for what, path in (("crest", bc.DEFAULT_CREST), ("banner", bc.DEFAULT_BANNER)):
+        assert os.path.getsize(path) <= bc.MAX_INLINE_LOGO_BYTES, what
+        assert bc.inline_logo(path, str(tmp_path), what).startswith("data:image/png;base64,")
+
+
+@pytest.mark.parametrize("field", ["crest", "banner"])
+def test_a_typo_in_a_typed_path_is_an_error_not_a_warning(field, capsys):
+    """
+    A path somebody typed is a thing they meant, unlike art a league file merely
+    mentions. And the check has to come before the build: everything between the
+    command line and the inliner is network, so a shrug here costs the Kalshi fetch
+    and the ESPN join twice.
+    """
+    with pytest.raises(SystemExit):
+        bc.main(["--league", "leagues/example-league.json", "--tournament", "Wyndham",
+                 f"--{field}", "nope.png"])
+    assert f"--{field} nope.png is not a file" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("field", ["crest", "banner"])
+def test_asking_for_art_and_no_art_at_once_is_refused(field, capsys):
+    with pytest.raises(SystemExit):
+        bc.main(["--league", "leagues/example-league.json", "--tournament", "Wyndham",
+                 f"--{field}", "leagues/logos/wcw-crest.png", f"--no-{field}"])
+    assert f"--{field} and --no-{field}" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

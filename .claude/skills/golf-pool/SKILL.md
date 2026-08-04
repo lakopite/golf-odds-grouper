@@ -112,6 +112,9 @@ Useful flags:
 | `--kalshi-event KXPGATOUR-WYC26` | pin the event; skips name resolution |
 | `--espn-event 401811961` | pin the ESPN event; skips name resolution |
 | `--seed 42` | reproducible deal of groups to teams |
+| `--crest art/crest.png` | the league's badge, supplied at creation; beats the league file (§2) |
+| `--banner art/banner.png` | the wide image across the top, same (§2) |
+| `--no-crest` / `--no-banner` | build with none, whatever the league file says |
 | `--exclude "Scottie Scheffler"` | drop a named golfer; repeatable |
 | `--no-auto-exclude` | keep golfers over the fair-share threshold |
 | `--match-review build/match-review.json` | the file reviewed name decisions are read from and written to; defaults to `match-review.json` beside `--output` (§4.2) |
@@ -214,15 +217,40 @@ A bare list of team objects also works and takes its league name from the filena
   them into the file if they ever need to survive a rename.
 - One team = one group. Five teams, five groups.
 
-`crest`, `banner` and `tagline` are the league's own identity and fill the scoreboard's
-masthead — a crest beside the name, a wide banner across the top, a line of small caps
-under the name. All three are optional, all three default to null, and a league with
-none of them gets a page that looks finished anyway; do not invent a tagline nobody
-asked for. Paths resolve against the league file and are inlined as data URIs like the
+### The masthead
+
+`crest`, `banner` and `tagline` fill the scoreboard's masthead — a crest beside the
+name, a wide banner across the top, a line of small caps under the name. They are the
+only part of the page that differs between leagues: the navy-and-gold chrome, the type
+and the layout are the template's and are identical for every competition. Do not
+restyle the page for a league; swap its two images.
+
+The two images can also be handed in when the competition is created, which is the
+usual route when somebody supplies art alongside the roster:
+
+```bash
+python build_competition.py --league leagues/wcw.json --tournament Wyndham \
+    --crest art/crest.png --banner art/banner.png
+```
+
+`--crest` / `--banner` beat what the league file says; those paths resolve against the
+working directory. If neither is given and the file says nothing, the build uses the
+art the tool ships and prints a note saying so — so **a league with no art still gets a
+finished-looking page, and you do not need to go and find some.** `--no-crest` /
+`--no-banner` build with none, and `"crest": false` in the file is the standing form of
+that. `tagline` has no default: do not invent one nobody asked for.
+
+Paths in the file resolve against the league file and are inlined as data URIs like the
 team logos, so **keep them small**: anything over 512 KB is refused and left as a path
 that will not resolve in the export, and every inlined byte lands in every copy of the
 page. A crest around 256 px and a banner around 720 px wide is the right order of
-magnitude; a JPEG beats a PNG for a photographic banner by roughly five to one.
+magnitude; a JPEG beats a PNG for a photographic banner by roughly five to one. The
+banner is centre-cropped into a wide, short slot, so art with detail at the top and
+bottom edges loses it.
+
+Once built it is settled: the result file holds the data URIs, and a rebuild carries
+them forward — including a deliberate absence. A rebuild never grows a crest the first
+build did not have.
 
 Validate before building:
 

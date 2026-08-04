@@ -81,6 +81,20 @@ rather than written: ESPN does not unpublish a field, so that is a failed read, 
 writing it would turn a working scoreboard back into a groups sheet with no sign that
 anything went wrong.
 
+A league's own art rides along. The crest and the banner can be handed in when the
+competition is created, beside the roster:
+
+```bash
+python build_competition.py --league leagues/my-league.json --tournament "Wyndham" \
+    --crest art/crest.png --banner art/banner.png
+```
+
+Both are inlined into the exported page, so it stays one portable file. They can also
+be named in the league file, and a build offered neither uses the art the tool ships —
+so a page always looks finished. Those two images are the only thing that changes
+between leagues: everything else about how the page looks belongs to the template.
+`leagues/README.md` has the precedence rules and how to ask for no art at all.
+
 Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
 sentence: *"build this week's pool for my-league at the Wyndham"*.
 

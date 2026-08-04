@@ -21,13 +21,22 @@ in its masthead:
 
     {"crest": "logos/crest.png", "banner": "logos/banner.png", "tagline": "10th Anniversary"}
 
-All three are optional and all three are null by default -- a league with no art
-is a normal league and the page is designed for it. Paths are relative to the
-league file and are inlined as data: URIs at build time, exactly as team logos
-are, so an exported page still shows them on a plane. They are the one part of a
-league file that is about how the pool looks rather than who is in it, and they
-live here rather than in the template because a template that hard-coded one
-league's crest would be that league's template.
+All three are optional. Paths are relative to the league file and are inlined as
+data: URIs at build time, exactly as team logos are, so an exported page still
+shows them on a plane. They are the one part of a league file that is about how
+the pool looks rather than who is in it, and they live here rather than in the
+template because a template that hard-coded one league's crest would be that
+league's template.
+
+The crest and the banner may also be handed to `build_competition.py` as
+`--crest` / `--banner` when the competition is created, which beats what the file
+says; a build that is offered neither uses the art the tool ships. Everything
+about how the page looks apart from those two images -- the navy, the gold, the
+type, the layout -- belongs to the template and is the same for every league.
+
+Unset is therefore not the same as none, and `crest` and `banner` take `false`
+for the second: no art, do not fill it in. `tagline` has no default and needs no
+such distinction.
 
 WHY THE TEAM ID IS DERIVED RATHER THAN DRAWN
 --------------------------------------------
@@ -59,6 +68,11 @@ OPTIONAL_FIELDS = ("team_logo", "team_id", "color", "abbreviation")
 # The league's own identity, for the scoreboard masthead. Every one of them is
 # optional and every one of them is null when absent -- see the module docstring.
 BRANDING_FIELDS = ("crest", "banner", "tagline")
+
+# The two that are pictures. They are the fields a build can fill from a default or
+# from the command line, and so the only two where `false` needs to mean something
+# other than absent -- see _branding.
+ART_FIELDS = ("crest", "banner")
 
 
 def slugify(text):
@@ -180,15 +194,26 @@ def _branding(path, raw):
     and the difference is worth nothing to anybody. An empty string is treated as
     unset for the same reason -- it is what a hand-edited file grows when somebody
     clears a value, and rendering an <img> with no src is worse than rendering none.
+
+    `crest` and `banner` also take `false`, which is not the same as unset and is the
+    one distinction this function exists to keep. Unset means "I did not supply art",
+    and a build fills it with the default; false means "this league has none", and a
+    build leaves it empty. Both end up falsy, so nothing downstream has to care -- but
+    the build has to be able to tell them apart, and once it has, the difference is
+    spent.
     """
     out = {}
     for field in BRANDING_FIELDS:
         value = raw.get(field)
+        if value is False and field in ART_FIELDS:
+            out[field] = False
+            continue
         if value is None or (isinstance(value, str) and not value.strip()):
             out[field] = None
             continue
         if not isinstance(value, str):
-            _fail(path, f"{field!r} must be a string or null, got {type(value).__name__}")
+            allowed = "a string, false or null" if field in ART_FIELDS else "a string or null"
+            _fail(path, f"{field!r} must be {allowed}, got {type(value).__name__}")
         out[field] = value.strip()
     return out
 
@@ -203,9 +228,11 @@ def write_ids(path, league):
     payload = {
         "league_id": league["league_id"],
         "league_name": league["league_name"],
-        # Written back only when set. This rewrites the user's file, and adding three
-        # null keys they never typed is how a tool teaches people not to run it.
-        **{f: league[f] for f in BRANDING_FIELDS if league.get(f)},
+        # Written back only when set -- and `false` counts as set. This rewrites the
+        # user's file, and adding three null keys they never typed is how a tool
+        # teaches people not to run it; silently dropping the `"crest": false` they
+        # did type, and handing them the default crest next build, is worse.
+        **{f: league[f] for f in BRANDING_FIELDS if league[f] is not None},
         "teams": league["teams"],
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -231,9 +258,9 @@ def main(argv=None):
     print(f"{league['league_name']}  ({league['league_id']})")
     if league.get("tagline"):
         print(f"  {league['tagline']}")
-    for field in ("crest", "banner"):
-        if league.get(field):
-            print(f"  {field}: {league[field]}")
+    for field in ART_FIELDS:
+        if league[field] is not None:
+            print(f"  {field}: {'none, by request' if league[field] is False else league[field]}")
     print(f"{len(league['teams'])} teams -> {len(league['teams'])} groups\n")
     width = max(len(t["team_name"]) for t in league["teams"])
     for t in league["teams"]:
