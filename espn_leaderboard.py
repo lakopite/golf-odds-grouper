@@ -83,14 +83,22 @@ Only the first is knowable without looking.
 
 WHEN THERE IS NO FIELD TO JOIN AGAINST
 --------------------------------------
-A `pre` event returns ZERO competitors: the field does not exist until play starts.
-There is then nothing to join against and nothing this module will pretend to know.
-The build handles that by not scoring at all -- see build_competition.py, which puts
-out a groups-and-odds file with no ESPN block in it, and is re-run once the field
-posts. Matching a Kalshi field against LAST month's leaderboard to recover athlete
-ids is not attempted: it answers a question nobody asked (the page needs scores, and
-those come from this week) at the cost of a join whose correctness cannot be checked
-against anything.
+A field that comes back empty used to be the ordinary state of a Wednesday, and the
+build put out a groups-and-odds file with no ESPN block in it. It is now an error.
+ESPN posts a field about two days before the first round, so an empty one means the
+event id is wrong, the run is very early, or the read failed -- and a build that went
+ahead anyway would produce a page with no athlete ids, which can never score however
+long anybody waits. build_competition.read_espn_field stops instead.
+
+The window has a far edge, and it is real: measured 2026-08-04, the tournament two
+days out had its 147 competitors and the one nine days out had none. So a pool cannot
+be drawn a week early. It can be drawn the night before, which is when pools are
+drawn.
+
+Matching a Kalshi field against LAST month's leaderboard to recover athlete ids is
+still not attempted, and now never needs to be: it answers a question nobody asked
+(the page needs scores, and those come from this week) at the cost of a join whose
+correctness cannot be checked against anything.
 """
 
 import argparse

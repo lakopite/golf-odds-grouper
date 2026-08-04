@@ -163,7 +163,11 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # the mode used to carry did not disappear, it moved to where it belongs: the page asks
 # the leaderboard whether anybody has teed off and shows the draw until somebody has.
 # A 3.x file rebuilds into a 4.0 one, and a groups-mode 3.x file gains the ESPN half it
-# never had. Nothing was added; this version is strictly smaller than the last.
+# never had. One key is ADDED, `sources.espn.started_at_build`: it records whether play
+# had begun when the build ran, which is the only thing `build_mode` said that was worth
+# keeping, and it is a record rather than an instruction -- it is false for the life of
+# a normally-built file while the tournament it describes comes and goes. Nothing reads
+# it to decide anything; the page asks the leaderboard.
 SCHEMA_VERSION = "4.0"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
@@ -345,6 +349,42 @@ def check_pinned_event(espn_event, meta, tournament_name, pinned):
           "the page over.", file=sys.stderr)
 
 
+def refuse_a_collapsed_join(espn, prior_espn, source_file):
+    """
+    Refuse a rebuild whose join fell off a cliff against the last one.
+
+    This is what is left of the old refuse_downgrade, and it covers the case that one
+    did not. Reading NO field is now fatal everywhere, for every build -- but reading a
+    complete and WRONG one is not, and on a rebuild that is the more dangerous of the
+    two. A mistyped `--espn-event`, or an event lookup that drifted to a different
+    tournament, returns 150 real competitors who are the wrong 150 people. Every number
+    that comes out is internally consistent and every athlete id is a valid id in
+    somebody else's field.
+
+    The file remembers what the join used to manage, so there is something to compare
+    against: a rebuild that resolves a small fraction of what it resolved last time has
+    almost certainly been pointed at the wrong tournament. Withdrawals move this number
+    by ones and twos. Nothing legitimate halves it.
+
+    Skipped when there is nothing to compare against -- a pre-4.0 file built before the
+    field existed recorded no join at all, and upgrading one is exactly the case where
+    the count is supposed to go up from nothing.
+    """
+    was = ((prior_espn or {}).get("match_report") or {}).get("matched")
+    now = (espn["report"] or {}).get("matched", 0)
+    if not was or now >= was / 2:
+        return
+    raise SystemExit(
+        f"this rebuild joined {now} of the Kalshi field to ESPN, where {source_file} "
+        f"joined {was}.\nA field moves by a golfer or two between builds; it does not "
+        "halve. The likeliest cause is that this run read a different tournament's "
+        f"leaderboard -- check the ESPN event id, and `python espn_leaderboard.py "
+        "--season <year> --find <name>` if you need to look it up. Writing on it would "
+        "put a valid athlete id from the wrong field onto most of the pool.\n"
+        f"Nothing has been written: {source_file} is untouched and still correct. Pass "
+        "--espn-event <id> to override the recorded one deliberately.")
+
+
 def join_field(names, players, aliases, decisions):
     """
     Join the Kalshi field onto this week's ESPN field, and say what is left over.
@@ -378,8 +418,8 @@ def join_field(names, players, aliases, decisions):
     return matches, report
 
 
-def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament_name,
-               aliases, recorded_decisions=None):
+def espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
+               tournament_name, aliases, recorded_decisions=None):
     """
     The whole ESPN half of a build: read the field, join it, and assemble the review of
     whatever is left over.
@@ -388,6 +428,11 @@ def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament
     depends on the tournament and on nothing the pool decided. That is why a rebuild
     can settle a name without touching the draw.
 
+    The field arrives already read, from read_espn_field, because reading it is the
+    precondition of the whole run and a precondition belongs before the work it gates
+    -- see build(). Everything from here down needs the draw, so this is where the two
+    halves meet rather than where either begins.
+
     Reviewed decisions come from two places and both are wanted. The result file
     carries the ones already applied, so a rebuild does not re-ask a question somebody
     answered last time; the review file carries whatever was filled in since, and wins
@@ -395,8 +440,7 @@ def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament
     in this Kalshi field are dropped -- they are left over from a different draw and
     binding them would be binding somebody else's competition.
     """
-    meta, players = read_espn_field(args, espn_event)
-    check_pinned_event(espn_event, meta, tournament_name, args.espn_event)
+    meta, players = espn_field
     event_id = (espn_event or {}).get("event_id")
 
     path = match_review.review_path(args.output, args.match_review)
@@ -550,11 +594,21 @@ def build(args, league=None, rebuilt_from=None, recorded_decisions=None):
             print(f"note: ESPN matched {espn_event['event_id']} ({espn_event['name']}) on a "
                   f"partial name match. Pass --espn-event to override.")
     if espn_event:
-        # A pinned event was never looked up, so it has no state to report. The join
+        # A pinned event was never looked up, so it has no state to report. The read
         # below prints the state it actually finds either way.
         state = espn_event.get("state")
         print(f"ESPN:    {espn_event['event_id']}  {espn_event.get('name')}"
               + (f"  [{state}]" if state else ""))
+
+    # -- the ESPN field, which is a precondition ------------------------------
+    # Read here, before anything expensive, because that is what a precondition is for.
+    # It used to be read at the end, next to the join that consumes it, which was fine
+    # while a missing field only downgraded the build. Now it stops the run -- and a
+    # run that is going to stop should not first spend a Kalshi pull, a partition and a
+    # deal to get there, nor make somebody wait for all three to be told the event id
+    # was wrong.
+    espn_field = read_espn_field(args, espn_event)
+    check_pinned_event(espn_event, espn_field[0], tournament_name, args.espn_event)
 
     # -- odds ----------------------------------------------------------------
     markets, field, tick_structures = pull_odds(event_ticker, args.price)
@@ -614,7 +668,7 @@ def build(args, league=None, rebuilt_from=None, recorded_decisions=None):
     # decisions are still about the same people and come with it. Dropping them would
     # make a regroup unresolve golfers somebody had already settled, for no reason
     # except that the partitioner ran again.
-    espn = espn_stage(args, espn_event, field, weight_by_name, team_name_of,
+    espn = espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
                       tournament_name, aliases, recorded_decisions=recorded_decisions)
 
     # -- assemble ------------------------------------------------------------
@@ -865,9 +919,12 @@ def rebuild(args, result):
     weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
     team_name_of = {g["golfer_name"]: team["team_name"]
                     for team in teams for g in team_groups[team["team_id"]]}
-    espn = espn_stage(args, espn_event, field, weight_by_name, team_name_of,
+    espn_field = read_espn_field(args, espn_event)
+    check_pinned_event(espn_event, espn_field[0], tournament["name"], args.espn_event)
+    espn = espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
                       tournament["name"], aliases,
                       recorded_decisions=espn_source.get("match_decisions"))
+    refuse_a_collapsed_join(espn, espn_source, args.from_result)
 
     # -- assemble ------------------------------------------------------------
     rebuilt_from = {

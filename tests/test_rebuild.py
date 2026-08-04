@@ -558,6 +558,61 @@ def test_a_pinned_espn_event_for_the_right_tournament_says_nothing(result_file, 
     assert "do not look like the same tournament" not in capsys.readouterr().err
 
 
+def test_a_rebuild_against_the_wrong_tournaments_field_is_refused(result_file, monkeypatch,
+                                                                  tmp_path):
+    """
+    The case a bare emptiness test does not catch, and the more dangerous of the two.
+
+    Reading NO field is fatal for every build now. Reading a COMPLETE AND WRONG one is
+    not: a mistyped --espn-event, or an event lookup that drifted, returns 150 real
+    competitors who are the wrong 150 people. Every number that comes out is internally
+    consistent and every athlete id is a valid id -- in somebody else's field.
+
+    The file remembers what the join managed last time, which is the thing to compare
+    against. A field moves by a golfer or two between builds; it does not halve.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names))
+    good = str(tmp_path / "good.json")
+    run(["--from-result", path, "--output", good])
+    assert rebuilt(good)["sources"]["espn"]["match_report"]["matched"] == len(names)
+
+    # Same shape, entirely different people -- another tournament's leaderboard.
+    strangers = leaderboard([f"Someone Else{i}" for i in range(len(names))])
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: strangers)
+    out = tmp_path / "wrong.json"
+    with pytest.raises(SystemExit) as exc:
+        bc.main(["--from-result", good, "--output", str(out)])
+    message = str(exc.value)
+    assert "does not halve" in message
+    assert "untouched and still correct" in message
+    assert not out.exists()
+    # And the file it read is genuinely intact, not merely un-rewritten by luck.
+    assert all(g["espn"]["athlete_id"] for g in rebuilt(good)["golfers"])
+
+
+def test_upgrading_a_file_that_recorded_no_join_is_not_mistaken_for_a_collapse(
+        result_file, espn_field, tmp_path):
+    """
+    The guard compares against what the file managed last time, so it has to stay out of
+    the way when the file managed nothing on purpose: a pre-4.0 groups build recorded no
+    join at all, and upgrading one is exactly the case where the count rises from zero.
+    """
+    path, result = result_file
+    legacy = json.loads(json.dumps(result))
+    legacy["sources"]["espn"]["match_report"] = None
+    legacy["sources"]["espn"]["field_size_at_build"] = 0
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(json.dumps(legacy))
+
+    out = str(tmp_path / "upgraded.json")
+    run(["--from-result", str(legacy_path), "--output", out])
+    assert all(g["espn"]["athlete_id"] for g in rebuilt(out)["golfers"])
+
+
 def test_a_rebuild_mid_tournament_will_not_strip_a_working_scoreboard(result_file,
                                                                       monkeypatch, tmp_path):
     """

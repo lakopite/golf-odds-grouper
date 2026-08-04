@@ -40,6 +40,9 @@ var ART = (function () {
  * a competition cannot be built without a published ESPN field. */
 var LIVE = DATA.live;
 
+/* The poll loop's handle, so it can be stopped once the tournament is final. */
+var TIMER = null;
+
 var GOLFERS_BY_TEAM = new Map();
 DATA.golfers.forEach(function (g) {
   if (!g.team_id) return;
@@ -303,6 +306,14 @@ function poll() {
       STATE.meta = parsed.meta;
       STATE.players = parsed.players;
       STATE.index = GolfPool.indexByAthleteId(parsed.players);
+      // A finished tournament does not change again, so the loop stops. Every page
+      // polls from the moment it opens now, which means an archived one reopened
+      // months later would otherwise hit ESPN once a minute for as long as the tab is
+      // up, to be told the same final scores every time.
+      if (parsed.meta && parsed.meta.completed && TIMER) {
+        clearInterval(TIMER);
+        TIMER = null;
+      }
       STATE.error = null;
     })
     .catch(function (err) { STATE.error = String(err.message || err); })
@@ -319,7 +330,7 @@ function poll() {
 function start() {
   render();
   poll();
-  setInterval(poll, (LIVE.poll_interval_seconds || 60) * 1000);
+  TIMER = setInterval(poll, (LIVE.poll_interval_seconds || 60) * 1000);
 }
 
 start();

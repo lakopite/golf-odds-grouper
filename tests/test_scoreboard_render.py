@@ -645,6 +645,44 @@ def test_a_page_before_the_first_tee_time_orders_teams_by_what_they_were_drawn_a
     assert names == expected
 
 
+def test_an_empty_envelope_mid_tournament_does_not_claim_the_tournament_is_early(
+        browser, competition):
+    """
+    The nastiest way this page can lie, and it only became possible once every page
+    started polling.
+
+    ESPN can answer with `{"events": []}`. That parses to a NULL meta, so `meta.started`
+    is missing rather than false — and a status pill that reads `!meta.started` first
+    would tell somebody watching a Sunday back nine that their tournament has not
+    started and the ranking will begin on its own. It has to say the board went away.
+    """
+    ctx, out = open_page(browser, competition["html"], lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"events": []})))
+    p = out["page"]
+    assert p.locator("#status-label").text_content() == "No field"
+    note = p.locator("#status-note").text_content()
+    assert "empty field" in note
+    assert "ranking begins on its own" not in note
+    assert "First round" not in note
+    # The draw is still on screen, because it is baked in and was never ESPN's to give.
+    assert p.locator("#board tbody.team").count() == len(competition["result"]["teams"])
+    assert out["errors"] == []
+    ctx.close()
+
+
+def test_a_final_leaderboard_stops_the_poll_loop(browser, competition, serve_espn):
+    """
+    Every page polls from the moment it opens now, so an archived one reopened months
+    later would hit ESPN once a minute for as long as the tab was up — to be told the
+    same final scores every time. A finished tournament does not change again.
+    """
+    ctx, out = open_page(browser, competition["html"], serve_espn())
+    p = out["page"]
+    assert p.locator("#status-label").text_content() == "Final"
+    assert p.evaluate("TIMER") is None, "the interval has to be cleared, not just ignored"
+    ctx.close()
+
+
 def test_the_page_crosses_from_the_draw_to_the_scoreboard_on_its_own(
         browser, competition, espn_not_started_payload, espn_final_payload):
     """

@@ -78,6 +78,9 @@ var STATE = {
 
 var POLL_SECONDS = LIVE.poll_interval_seconds || 60;
 
+/* The poll loop's handle, so it can be stopped once the tournament is final. */
+var TIMER = null;
+
 /* Older than three polls with nothing new is stale rather than live, and saying so is
  * cheaper than being quietly wrong on a Sunday. */
 var STALE_AFTER_MS = POLL_SECONDS * 3000;
@@ -259,6 +262,17 @@ function statusView() {
     return { cls: 'is-stale', label: 'Stale',
              note: 'ESPN last answered ' + since(good) + ' · retrying every ' + POLL_SECONDS + 's' };
   }
+  // Nothing came back to rank, and this is checked BEFORE "not started" on purpose. A
+  // payload with no competitors in it says nothing about whether play has begun, and an
+  // envelope with no events at all parses to a null meta -- whose `started` is missing
+  // rather than false. Reading "not started" off that would tell somebody watching a
+  // Sunday back nine that their tournament has not begun yet, which is both wrong and
+  // the most alarming thing this pill can say.
+  if (!STATE.players.length) {
+    return { cls: 'is-stale', label: 'No field',
+             note: 'ESPN answered ' + since(good) + ' with an empty field · retrying every '
+                   + POLL_SECONDS + 's' };
+  }
   // The ordinary state of a page for the first day or two of its life: ESPN is
   // answering, the field is posted, and nobody has hit a ball. That is a working page
   // and an early one, not a live board -- a green dot over no positions reads as
@@ -269,13 +283,6 @@ function statusView() {
     return { cls: '', label: 'Not started',
              note: (tee ? 'First round ' + tee : 'The tournament has not started')
                    + ' · ranking begins on its own, no refresh needed' };
-  }
-  // Answering, under way, and still nothing to show: a payload with no competitors in
-  // it at all. Rare, and not the same thing as being early.
-  if (!STATE.players.length) {
-    return { cls: 'is-stale', label: 'No field',
-             note: 'ESPN answered ' + since(good) + ' with an empty field · retrying every '
-                   + POLL_SECONDS + 's' };
   }
   return { cls: 'is-live', label: 'Live',
            note: 'Leaderboard updated ' + since(good) + ' · polling ESPN every ' + POLL_SECONDS + 's' };
@@ -835,6 +842,14 @@ function poll() {
       STATE.meta = parsed.meta;
       STATE.players = parsed.players;
       STATE.index = GolfPool.indexByAthleteId(parsed.players);
+      // A finished tournament does not change again, so the loop stops. Every page
+      // polls from the moment it opens now, which means an archived one reopened
+      // months later would otherwise hit ESPN once a minute for as long as the tab is
+      // up, to be told the same final scores every time.
+      if (parsed.meta && parsed.meta.completed && TIMER) {
+        clearInterval(TIMER);
+        TIMER = null;
+      }
       STATE.error = null;
       STATE.lastGood = new Date();
     })
@@ -861,7 +876,7 @@ function start() {
   });
 
   poll();
-  setInterval(poll, POLL_SECONDS * 1000);
+  TIMER = setInterval(poll, POLL_SECONDS * 1000);
   // The pill's wording is relative to now, so it has to be redrawn by the clock rather
   // than by the network. Two text nodes; it costs nothing.
   setInterval(renderStatus, 1000);

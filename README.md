@@ -78,12 +78,15 @@ from disk with no network at all, and on Thursday morning it becomes a scoreboar
 itself.
 
 That gate is `meta.started`, and it is deliberately not "is the state `pre`". It answers
-yes on a state of `in` or `post` **or** on any golfer holding a real position — two
-signals, either sufficient, because they fail in opposite directions. Ranking on "are
-there players in this payload" instead would order the league by ESPN's pre-tournament
-sort and present it as a leaderboard: complete, ordered, with a leader and tie-breaks,
-and entirely invented. `espn_leaderboard.has_started` and `frontend/lib.js`'s
-`hasStarted` are the two implementations of it, and the parity test holds them together.
+yes on a state of `in` or `post` **or** on any golfer holding a real position. Either
+signal alone would blank a board that is plainly live — the state on a payload whose
+event envelope is missing or stale, the positions on a round ESPN has not posted any
+for — so the OR covers each one's blind spot. Both are conservative about saying yes,
+which is the direction that matters: ranking on "are there players in this payload"
+instead would order the league by ESPN's pre-tournament sort and present it as a
+leaderboard, complete with a leader and tie-breaks, and entirely invented.
+`espn_leaderboard.has_started` and `frontend/lib.js`'s `hasStarted` are the two
+implementations of it, and the parity test holds them together.
 
 ### Rebuilding one
 
@@ -385,7 +388,15 @@ They carry no athlete id, so the page has nothing to look up, and no amount of p
 will change that — every refresh re-reads the same leaderboard and finds the same
 nothing. The fix is a rebuild, not a refresh, and it is the one thing on the page that
 waiting does not fix: everything else about a Wednesday build sorts itself out at the
-first tee time, and this does not. That is the price of deleting the runtime
+first tee time, and this does not.
+
+Which makes the review worth clearing **before the page goes out**, because Wednesday
+night is now the only join. Building a day early also means the field is still
+provisional: a golfer who withdraws is handled correctly and scores nothing, but an
+alternate or Monday qualifier who *replaces* them is not in Wednesday's ESPN list, so a
+Kalshi market on them resolves to nothing and stays there. The Thursday rebuild used to
+catch that for free. Now it is a reason to run one — `--from-result` redoes the join
+against the field as it stands, and changes nothing else. That is the price of deleting the runtime
 name match, and it is worth paying: the join is now checkable, once, by a person, before
 it takes effect, instead of being re-guessed in every browser on every poll. See
 `espn_leaderboard.py`, `match_review.py` and `docs/FRONTEND-SPEC.md` §8.

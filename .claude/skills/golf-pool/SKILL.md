@@ -316,7 +316,7 @@ file (§4.2) lives beside `--output`.
 |---|---|
 | The golfers that came back NEEDS REVIEW settled | `--match-review build/match-review.json` (§4.2) |
 | Those name bindings kept for next week | `--update-aliases` (§4.2) |
-| A withdrawal picked up, or a wrong `--espn-event` fixed | *(nothing — the join is redone by default)* |
+| A withdrawal, alternate or Monday qualifier picked up, or a wrong `--espn-event` fixed | *(nothing — the join is redone by default)* |
 | A genuinely new draw | `--regroup` |
 | The same groups, a new frontend | nothing — re-bundle (§4.3) |
 | The standings, now play has started | **nothing at all** — §6. Do not run a rebuild for this; it changes nothing they can see |
@@ -358,8 +358,9 @@ Review -> build/match-review.json  (12 golfer(s) need a decision)
 Expect a handful. On the measured Rocket Classic field, 139 of 151 Kalshi names resolved
 outright, 12 came back for review, and 4 of those 12 turned out to be withdrawals.
 
-**This is not a blocker.** The build already wrote a complete result file and it is
-deployable exactly as it stands; the golfers left open simply score nothing, and their
+**This is not a blocker, but Wednesday night is now the only join**, so clearing it
+before the page goes out is worth more than it used to be. The build already wrote a
+complete result file and it is deployable exactly as it stands; the golfers left open simply score nothing, and their
 teams score nothing from them. If the user asked for the groups, hand the build over and
 mention the number. The review is what you do when the standings matter — an unresolved
 golfer worth 4% sitting in somebody's roster is the whole scoreboard.

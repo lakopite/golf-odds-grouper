@@ -4,9 +4,14 @@ bundle_frontend.py -- fold a result file into the scoreboard and export one page
 
     python bundle_frontend.py --result build/result.json --out dist/
 
-Produces a single self-contained `.html` -- no build step, no server, no network on
-load -- and a `.zip` holding that page, the result JSON it was built from, and a
+Produces a single self-contained `.html` -- no build step, no server, nothing fetched
+to draw it -- and a `.zip` holding that page, the result JSON it was built from, and a
 manifest. Both are artifacts of one run; neither is written back into the repo.
+
+The page does poll ESPN once it is open, and polls from the moment it opens even when
+the tournament is days away: that poll is how it learns play has started and turns
+itself from a groups sheet into a scoreboard. Everything it DRAWS is baked in, so it
+still opens from disk with no network at all.
 
 Two templates ship. `frontend/scoreboard/` is the designed page and the default;
 `frontend/template/` is the plain reference that exists to prove the contract below.
