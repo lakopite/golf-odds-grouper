@@ -1,14 +1,32 @@
 /*
  * lib.js -- the parts of the scoreboard that are rules rather than presentation.
  *
- * Name matching, ESPN leaderboard parsing, and the standings rule. Kept separate
- * from app.js and free of the DOM so it can be run under Node against the same
- * fixtures as the Python side: `tests/test_frontend_parity.py` feeds both this file
- * and standings.py the checked-in ESPN payload and fails if they disagree about who
- * is winning.
+ * ESPN leaderboard parsing and the standings rule. Kept separate from app.js and
+ * free of the DOM so it can be run under Node against the same fixtures as the
+ * Python side: `tests/test_frontend_parity.py` feeds both this file and standings.py
+ * the checked-in ESPN payload and fails if they disagree about who is winning.
  *
  * That parity test is the reason this file exists. Two implementations of a rule is
  * one implementation and one rumour unless something checks them against each other.
+ *
+ * THERE IS NO NAME MATCHING HERE, AND THAT IS THE POINT
+ * -----------------------------------------------------
+ * This file used to carry a transliteration table, a name normaliser and a
+ * first-initial-and-last-name fallback, mirrored character for character against
+ * espn_leaderboard.py. It needed them because a page could be built before ESPN
+ * published a field, and then the golfer->athlete join had to happen in the browser,
+ * against a leaderboard the build had never seen.
+ *
+ * A page is no longer built that way. A build made before the field exists produces
+ * a groups sheet with `live: null` and does not poll at all; a build made after it
+ * exists has already resolved every golfer it could to an ESPN athlete id, and that
+ * id is baked into the page. So the runtime join is a Map lookup on an integer, it
+ * cannot pick the wrong Smith, and the second copy of a subtle string algorithm that
+ * had to be kept in step with the first is simply gone.
+ *
+ * A golfer with no athlete id resolves to null, scores nothing and is not counted.
+ * Which is correct: they either withdrew or nobody has settled their name yet, and
+ * the result file says which. See match_review.py.
  *
  * A designed scoreboard should reuse this file verbatim and write only its own
  * app.js. See docs/FRONTEND-SPEC.md.
@@ -18,109 +36,26 @@
 var GolfPool = (function () {
 
   /* ---------------------------------------------------------------- *
-   * Name matching -- mirrors espn_leaderboard.py.
-   *
-   * Needed at runtime as well as at build time because a pre-tournament ESPN
-   * event returns ZERO competitors: the field does not exist until play starts,
-   * so a Wednesday-night build has nothing to join against.
+   * Finding a golfer's ESPN row.
    * ---------------------------------------------------------------- */
 
-  var SUFFIXES = /\b(jr|sr|ii|iii|iv|v)\b\.?/g;
-
-  /* Letters NFKD does not decompose, because they are letters in their own right
-   * rather than a base plus an accent. A golf field is full of them -- Rasmus
-   * Højgaard and Thorbjørn Olesen are both in the measured Wyndham field -- and one
-   * source writing "Hojgaard" while the other writes "Højgaard" is exactly the miss
-   * this table prevents. Must stay in step with _TRANSLITERATE in
-   * espn_leaderboard.py; tests/test_frontend_parity.py fails if it drifts. */
-  var TRANSLITERATE = {
-    'ø': 'o', 'Ø': 'o', 'æ': 'ae', 'Æ': 'ae', 'å': 'a', 'Å': 'a',
-    'ð': 'd', 'Ð': 'd', 'þ': 'th', 'Þ': 'th', 'ł': 'l', 'Ł': 'l',
-    'đ': 'd', 'Đ': 'd', 'ß': 'ss', 'œ': 'oe', 'Œ': 'oe', 'ı': 'i'
-  };
-
-  function transliterate(text) {
-    var out = '';
-    for (var i = 0; i < text.length; i++) {
-      var ch = text[i];
-      out += Object.prototype.hasOwnProperty.call(TRANSLITERATE, ch) ? TRANSLITERATE[ch] : ch;
-    }
-    return out;
-  }
-
-  /* Join runs of CONSECUTIVE single letters, so "C.T. Pan" and "CT Pan" agree, as do
-   * "J.J. Spaun"/"JJ Spaun". Only consecutive ones: "Jordan L. Smith" keeps its
-   * middle initial as its own token, which is what lets initialLastKey drop it and
-   * reach "Jordan Smith". */
-  function joinInitials(parts) {
-    var out = [], prevSingle = false;
-    parts.forEach(function (part) {
-      var single = part.length === 1;
-      if (single && prevSingle) out[out.length - 1] += part;
-      else out.push(part);
-      prevSingle = single;
-    });
-    return out;
-  }
-
-  function normalizeName(name) {
-    var s = transliterate(String(name == null ? '' : name))
-      .normalize('NFKD')
-      .replace(/\p{M}/gu, '')          // combining marks NFKD split off
-      .toLowerCase()
-      .replace(/-/g, ' ')
-      .replace(/['’]/g, '')
-      .replace(SUFFIXES, ' ')
-      .replace(/[^a-z ]/g, ' ');
-    return joinInitials(s.split(/\s+/).filter(Boolean)).join(' ');
-  }
-
-  /* (first initial, last name). Resolves Zachary/Zach, Cameron/Cam, Matthew/Matt
-   * and stray middle initials. Measured collisions inside a real 147-player
-   * field: zero. */
-  function initialLastKey(name) {
-    var parts = normalizeName(name).split(' ').filter(Boolean);
-    if (parts.length < 2) return null;
-    return parts[0][0] + '|' + parts[parts.length - 1];
-  }
-
-  function buildIndex(players) {
-    var exact = new Map(), initial = new Map(), byId = new Map();
-    function bump(map, key, player) {
-      if (!key) return;
-      if (map.has(key)) map.set(key, null);   // ambiguous: refuse rather than guess
-      else map.set(key, player);
-    }
+  /* athlete id -> parsed player, keyed as a string because the result file writes
+   * ESPN's ids as strings and the leaderboard payload is not consistent about it. */
+  function indexByAthleteId(players) {
+    var byId = new Map();
     players.forEach(function (p) {
       if (p.athleteId != null) byId.set(String(p.athleteId), p);
-      if (!p.name) return;
-      bump(exact, normalizeName(p.name), p);
-      bump(initial, initialLastKey(p.name), p);
     });
-    return { exact: exact, initial: initial, byId: byId };
+    return byId;
   }
 
-  /* -> {player, how}. how is athlete_id / alias / exact / initial_last / unresolved. */
-  function matchGolfer(golfer, index, aliases) {
-    aliases = aliases || {};
-    var espnId = golfer.espn && golfer.espn.athlete_id;
-    if (espnId && index.byId.get(String(espnId))) {
-      return { player: index.byId.get(String(espnId)), how: 'athlete_id' };
-    }
-    var alias = aliases[golfer.name] || aliases[normalizeName(golfer.name)];
-    if (alias) {
-      var viaAlias = index.exact.get(normalizeName(alias));
-      if (viaAlias) return { player: viaAlias, how: 'alias' };
-    }
-    var exact = index.exact.get(normalizeName(golfer.name));
-    if (exact) return { player: exact, how: 'exact' };
-
-    var key = initialLastKey(golfer.name);
-    if (key) {
-      var viaInitial = index.initial.get(key);
-      if (viaInitial) return { player: viaInitial, how: 'initial_last' };
-    }
-    return { player: null, how: 'unresolved' };
+  /* -> the ESPN player, or null. Null is a real answer here and means "not scoring
+   * this week": either the build confirmed this golfer is not in the field, or it
+   * could not settle their name and said so. Both are in the result file. */
+  function resolveGolfer(golfer, byId) {
+    var id = golfer.espn && golfer.espn.athlete_id;
+    if (id == null) return null;
+    return byId.get(String(id)) || null;
   }
 
   /* ---------------------------------------------------------------- *
@@ -301,10 +236,8 @@ var GolfPool = (function () {
   }
 
   return {
-    normalizeName: normalizeName,
-    initialLastKey: initialLastKey,
-    buildIndex: buildIndex,
-    matchGolfer: matchGolfer,
+    indexByAthleteId: indexByAthleteId,
+    resolveGolfer: resolveGolfer,
     toPar: toPar,
     fmtPar: fmtPar,
     positionNumber: positionNumber,

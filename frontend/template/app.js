@@ -8,10 +8,25 @@
  * No framework, no build step, no network on load. The competition data is baked into
  * the page, and ESPN is the ONLY host it ever fetches -- the only one that will answer
  * a browser at all.
+ *
+ * TWO PAGES, ONE FILE
+ * -------------------
+ * `DATA.live` is null when the competition was built before ESPN published a field.
+ * That page is a groups sheet: teams, rosters, the odds the groups were drawn on, and
+ * no network of any kind. It is not a degraded scoreboard waiting for a fetch to
+ * succeed -- there is nothing to fetch, because the field does not exist yet, and a
+ * page that polled would be asking a question whose answer it could not use.
+ *
+ * `DATA.live` non-null means the field existed at build time and every golfer that
+ * could be resolved carries an ESPN athlete id. That page polls, joins on the id, and
+ * ranks. See build_competition.py's `build_mode`.
  */
 'use strict';
 
 var DATA = JSON.parse(document.getElementById('competition-data').textContent);
+
+/* The whole of the difference between the two pages above. */
+var LIVE = DATA.live || null;
 
 var GOLFERS_BY_TEAM = new Map();
 DATA.golfers.forEach(function (g) {
@@ -31,9 +46,11 @@ function el(tag, cls, text) {
   return n;
 }
 
+/* By ESPN athlete id and nothing else. A golfer without one is not in the field, or
+ * has not been settled, and either way has no row on the leaderboard to show. */
 function resolvePlayer(golfer) {
   if (!STATE.index) return null;
-  return GolfPool.matchGolfer(golfer, STATE.index, DATA.live.name_match.aliases || {}).player;
+  return GolfPool.resolveGolfer(golfer, STATE.index);
 }
 
 /* ------------------------------------------------------------------ *
@@ -171,19 +188,30 @@ function renderHeader() {
   var k = DATA.sources.kalshi;
   $('#market').textContent = k.market_label + ' · ' + k.price_mode + ' · ' + k.event_ticker;
   var m = STATE.meta;
+  var course = DATA.tournament.course || {};
   $('#round').textContent = m
     ? (m.detail || m.state) + ' — ' + (m.course || '') + (m.par ? ' (par ' + m.par + ')' : '')
-    : 'waiting for ESPN…';
+    : (LIVE ? 'waiting for ESPN…'
+            : 'Groups' + (course.name ? ' — ' + course.name : ''));
+  $('#standings-heading').textContent = LIVE ? 'Standings' : 'Groups';
   $('#built').textContent = 'built ' + DATA.generated_at + ' · ' + DATA.grouping.summary;
 }
 
+/* Why there is no ranking. Three different reasons, and saying the wrong one is how a
+ * page gets accused of being broken when it is working exactly as built. */
 function notStarted() {
+  var start = DATA.tournament.start ? new Date(DATA.tournament.start).toLocaleString() : null;
+  if (!LIVE) {
+    return 'The tournament had not started when this page was made, so ESPN had published '
+      + 'no field and there is nothing to rank yet' + (start ? ' — first round ' + start : '')
+      + '. This page shows the draw: it is final, and it was drawn on the odds below. It '
+      + 'fetches nothing and will not change. Ask for a rebuilt page once play begins and '
+      + 'that one will carry live scoring.';
+  }
   if (STATE.error) return 'ESPN unavailable: ' + STATE.error + '. Groups and odds below are '
     + 'baked into this page and are unaffected.';
-  var start = DATA.tournament.start ? new Date(DATA.tournament.start).toLocaleString() : null;
-  return 'Not started' + (start ? ' — first round ' + start : '') + '. ESPN publishes no '
-    + 'competitors until play begins, so there are no positions yet. The groups below are '
-    + 'final and were drawn on the odds shown.';
+  return 'Waiting for ESPN to publish positions' + (start ? ' — first round ' + start : '')
+    + '. The groups below are final and were drawn on the odds shown.';
 }
 
 function renderStandings() {
@@ -249,11 +277,14 @@ function renderOdds() {
   $('#odds-note').textContent = parts.join(' ');
 }
 
-/* Provenance, not a list of what gets fetched -- only the first of these two is ever
- * requested, and the wording has to keep saying so. */
+/* Provenance, not a list of what gets fetched. On a live page exactly one of these two
+ * is ever requested; on a groups page neither is, and the wording has to say so rather
+ * than name an endpoint nothing calls. */
 function renderFooter() {
-  $('#sources').textContent = 'scores polled from ' + DATA.sources.espn.leaderboard_endpoint
-    + ' · odds captured from ' + DATA.sources.kalshi.markets_endpoint;
+  $('#sources').textContent = (LIVE
+      ? 'scores polled from ' + LIVE.espn_leaderboard_url + ' · odds captured from '
+      : 'nothing is fetched by this page · odds captured from ')
+    + DATA.sources.kalshi.markets_endpoint;
   $('#poll').textContent = STATE.lastPoll ? 'last poll ' + STATE.lastPoll.toLocaleTimeString() : '';
 }
 
@@ -269,7 +300,7 @@ function render() {
  * ------------------------------------------------------------------ */
 
 function poll() {
-  return fetch(DATA.live.espn_leaderboard_url, { headers: { Accept: 'application/json' } })
+  return fetch(LIVE.espn_leaderboard_url, { headers: { Accept: 'application/json' } })
     .then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
@@ -279,13 +310,13 @@ function poll() {
       // ESPN's leaderboard answers about whatever it thinks is current. If the result
       // file pinned an event id, refuse a payload for a different one rather than
       // quietly scoring the league against the wrong tournament.
-      var want = DATA.sources.espn.event_id;
+      var want = LIVE.espn_event_id;
       if (want && parsed.meta && String(parsed.meta.eventId) !== String(want)) {
         throw new Error('ESPN returned event ' + parsed.meta.eventId + ', expected ' + want);
       }
       STATE.meta = parsed.meta;
       STATE.players = parsed.players;
-      STATE.index = GolfPool.buildIndex(parsed.players);
+      STATE.index = GolfPool.indexByAthleteId(parsed.players);
       STATE.error = null;
     })
     .catch(function (err) { STATE.error = String(err.message || err); })
@@ -295,11 +326,14 @@ function poll() {
     });
 }
 
-/* One loop, one endpoint. Everything else on the page is already in the page. */
+/* One loop, one endpoint -- or no loop at all. A groups page has `live: null`, which
+ * is not a missing setting to work around but the build saying there was no field to
+ * score against. It renders once, from data it already has, and stops. */
 function start() {
   render();
+  if (!LIVE) return;
   poll();
-  setInterval(poll, (DATA.live.poll_interval_seconds || 60) * 1000);
+  setInterval(poll, (LIVE.poll_interval_seconds || 60) * 1000);
 }
 
 start();

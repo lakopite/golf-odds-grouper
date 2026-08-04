@@ -74,50 +74,31 @@ def test_leaderboard_parsing_agrees(fixture):
 
 
 # ---------------------------------------------------------------------------
-# Name matching
+# The join -- one key, and both sides use it
 # ---------------------------------------------------------------------------
-
-NAMES = [
-    "Cameron Young", "Zachary Bauchou", "Cameron Davis", "Kris Ventura",
-    "Nicolas Echavarria", "Matthew McCarty", "Benjamin James", "Jordan L. Smith",
-    "Hao-Tong Li", "Rasmus Højgaard", "Thorbjørn Olesen", "Erik Van Rooyen",
-    "C.T. Pan", "Séamus Power", "Tiger Woods", "Davis Love III",
-]
-
-
-def test_normalization_agrees():
-    js = run_node("console.log(JSON.stringify(INPUT.map(n => GolfPool.normalizeName(n))));", NAMES)
-    assert js == [espn_leaderboard.normalize_name(n) for n in NAMES]
-
-
-def test_initial_last_key_agrees():
-    js = run_node("console.log(JSON.stringify(INPUT.map(n => GolfPool.initialLastKey(n))));", NAMES)
-    assert js == [espn_leaderboard.initial_last_key(n) for n in NAMES]
+#
+# There is no name-matching parity left to check, and that is the improvement rather
+# than a gap. lib.js used to carry a second copy of the transliteration table, the
+# normaliser and a first-initial fallback, and this file existed partly to stop the two
+# drifting. Now the build writes an ESPN athlete id onto every golfer it resolved and
+# both sides look that id up, so there is one implementation of the join and it is a
+# dictionary.
+#
+# What still needs checking is that both sides look it up the SAME WAY, including when
+# they are given a golfer they cannot resolve. See
+# test_a_golfer_the_build_could_not_settle_scores_on_neither_side.
 
 
-@pytest.mark.parametrize("fixture", [MID, FINAL], ids=["mid-round", "final-with-cut"])
-def test_the_join_agrees_over_the_whole_field(fixture):
-    """Every name in the field, plus the awkward ones, matched by both sides."""
-    with open(fixture) as f:
-        payload = json.load(f)
-    _, players = espn_leaderboard.parse_leaderboard(payload)
-    names = NAMES + [p["name"] for p in players]
+def golfer(name, player=None):
+    """
+    A golfer as a result file writes one: a Kalshi name, and the ESPN athlete the build
+    bound it to -- or an explicit null when the build bound it to nobody.
 
-    js = run_node("""
-      const {players} = GolfPool.parseLeaderboard(INPUT.payload);
-      const index = GolfPool.buildIndex(players);
-      console.log(JSON.stringify(INPUT.names.map(function (n) {
-        const hit = GolfPool.matchGolfer({name: n}, index, {});
-        return [hit.how, hit.player ? hit.player.athleteId : null];
-      })));
-    """, {"payload": payload, "names": names})
-
-    index = espn_leaderboard.build_index(players)
-    expected = []
-    for name in names:
-        player, how = espn_leaderboard.match_golfer(name, index)
-        expected.append([how, player["athlete_id"] if player else None])
-    assert js == expected
+    Both keys are set because the two implementations are handed the same object and
+    each reads its own: standings.py takes `espn`, lib.js takes `espn.athlete_id`. If
+    they ever disagree about which golfer is which, that is what these tests are for.
+    """
+    return {"name": name, "espn": {"athlete_id": player["athlete_id"] if player else None}}
 
 
 # ---------------------------------------------------------------------------
@@ -127,14 +108,14 @@ def test_the_join_agrees_over_the_whole_field(fixture):
 def _js_standings(payload, teams):
     return run_node("""
       const {players} = GolfPool.parseLeaderboard(INPUT.payload);
-      const index = GolfPool.buildIndex(players);
+      const index = GolfPool.indexByAthleteId(players);
       const byTeam = new Map();
       const teams = INPUT.teams.map(function (t) {
         byTeam.set(t.team_id, t.golfers);
         return {team_id: t.team_id};
       });
       const rows = GolfPool.computeStandings(teams, byTeam, function (g) {
-        return GolfPool.matchGolfer(g, index, INPUT.aliases || {}).player;
+        return GolfPool.resolveGolfer(g, index);
       });
       console.log(JSON.stringify(rows.map(r => ({
         team_id: r.team.team_id, position: r.position, rank: r.rank,
@@ -146,9 +127,7 @@ def _js_standings(payload, teams):
 
 def _py_standings(payload, teams):
     _, players = espn_leaderboard.parse_leaderboard(payload)
-    matches, _ = espn_leaderboard.match_field(
-        [g["name"] for t in teams for g in t["golfers"]], players)
-    rows = standings.compute(teams, standings.index_players(players, matches))
+    rows = standings.compute(teams, standings.index_players(players))
     return [{
         "team_id": r["team_id"], "position": r["position"], "rank": r["rank"],
         "decided_at": r["decided_at"], "counting": r["counting"],
@@ -156,10 +135,68 @@ def _py_standings(payload, teams):
     } for r in rows]
 
 
+def test_both_sides_resolve_a_golfer_whose_kalshi_name_is_not_the_espn_one(espn_final_payload):
+    """
+    The case the deleted matcher existed for, and the one that would expose either side
+    quietly keeping a name fallback the other does not have.
+
+    These golfers carry names ESPN has never heard of. Only the athlete id can find
+    them, so if either implementation is secretly matching on the name it either scores
+    nobody here or scores somebody the other side did not.
+    """
+    _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
+    teams = [
+        {"team_id": "a", "golfers": [golfer("A Golfer Nobody Calls That", players[0]),
+                                     golfer("Another Alias Entirely", players[9])]},
+        {"team_id": "b", "golfers": [golfer("Third Made-Up Name", players[1])]},
+    ]
+    js, py = _js_standings(espn_final_payload, teams), _py_standings(espn_final_payload, teams)
+    assert js == py
+    assert [r["team_id"] for r in py] == ["a", "b"], "the ids resolved, so 'a' holds the leader"
+    assert all(r["counting"] for r in py)
+
+
+def test_a_golfer_the_build_could_not_settle_scores_on_neither_side(espn_final_payload):
+    """
+    A null athlete id is a real answer: the build looked at this week's field and bound
+    this golfer to nobody. The page has no way to reconsider, and this reference
+    implementation must not either -- even though the name it carries IS in the field.
+
+    That is the asymmetry this test exists to hold shut. lib.js cannot fall back to a
+    name because it has no name matcher left; standings.py could, and must not, or the
+    two would disagree about exactly the golfers a review was meant to settle.
+    """
+    _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
+    unsettled = dict(golfer(players[0]["name"], None))       # right name, no id
+    teams = [
+        {"team_id": "a", "golfers": [unsettled]},
+        {"team_id": "b", "golfers": [golfer(players[5]["name"], players[5])]},
+    ]
+    js, py = _js_standings(espn_final_payload, teams), _py_standings(espn_final_payload, teams)
+    assert js == py
+    assert py[0]["team_id"] == "b", "the settled golfer wins; the unsettled one scores nothing"
+    assert py[1]["counting"] == 0
+
+
+def as_a_result_file_would(teams, players):
+    """
+    Bind a by-name league onto the field, the way a build does before either side reads
+    it.
+
+    test_standings.py and tools/make_golden.py describe their leagues by name, which is
+    the right shape for a fixture a person maintains. Neither implementation is given
+    names any more, so the parity harness does the binding the build would have done --
+    once, in one place, so both sides are handed the identical object.
+    """
+    by_name = {p["name"]: p for p in players}
+    return [{**t, "golfers": [golfer(g["name"], by_name.get(g["name"])) for g in t["golfers"]]}
+            for t in teams]
+
+
 def test_standings_agree_on_the_golden_case(espn_final_payload):
     from test_standings import golden_case
     _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
-    teams = golden_case(players)["teams"]
+    teams = as_a_result_file_would(golden_case(players)["teams"], players)
     assert _js_standings(espn_final_payload, teams) == _py_standings(espn_final_payload, teams)
 
 
@@ -171,7 +208,7 @@ def test_js_matches_the_checked_in_golden_file(espn_final_payload):
     """
     from test_standings import golden_case, GOLDEN
     _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
-    teams = golden_case(players)["teams"]
+    teams = as_a_result_file_would(golden_case(players)["teams"], players)
     with open(GOLDEN) as f:
         expected = json.load(f)["expected"]
     actual = [{k: v for k, v in row.items() if k != "to_par"}
@@ -193,18 +230,19 @@ def test_standings_agree_on_round_robin_leagues(fixture, n_teams):
 
     teams = [{"team_id": f"team-{i}", "golfers": []} for i in range(n_teams)]
     for i, p in enumerate(players):
-        teams[i % n_teams]["golfers"].append({"name": p["name"]})
+        teams[i % n_teams]["golfers"].append(golfer(p["name"], p))
 
     assert _js_standings(payload, teams) == _py_standings(payload, teams)
 
 
 def test_standings_agree_when_golfers_are_missing_from_the_field(espn_final_payload):
-    """A build made on Wednesday can hold golfers who withdrew before Thursday."""
+    """A draw made on Wednesday can hold golfers who never teed off on Thursday."""
     _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
     teams = [
-        {"team_id": "a", "golfers": [{"name": players[0]["name"]}, {"name": "Tiger Woods"}]},
-        {"team_id": "b", "golfers": [{"name": players[0]["name"]}]},
-        {"team_id": "c", "golfers": [{"name": "Nobody At All"}]},
+        {"team_id": "a", "golfers": [golfer(players[0]["name"], players[0]),
+                                     golfer("Tiger Woods", None)]},
+        {"team_id": "b", "golfers": [golfer(players[0]["name"], players[0])]},
+        {"team_id": "c", "golfers": [golfer("Nobody At All", None)]},
         {"team_id": "d", "golfers": []},
     ]
     assert _js_standings(espn_final_payload, teams) == _py_standings(espn_final_payload, teams)
@@ -215,6 +253,7 @@ def test_standings_agree_on_a_pre_tournament_payload():
     payload = {"events": [{"id": "1", "name": "Not Started",
                            "status": {"type": {"state": "pre"}},
                            "competitions": [{"status": {"period": 0}, "competitors": []}]}]}
-    teams = [{"team_id": "a", "golfers": [{"name": "Cameron Young"}]},
-             {"team_id": "b", "golfers": [{"name": "Rory McIlroy"}, {"name": "Jon Rahm"}]}]
+    teams = [{"team_id": "a", "golfers": [golfer("Cameron Young", {"athlete_id": "1"})]},
+             {"team_id": "b", "golfers": [golfer("Rory McIlroy", {"athlete_id": "2"}),
+                                          golfer("Jon Rahm", {"athlete_id": "3"})]}]
     assert _js_standings(payload, teams) == _py_standings(payload, teams)

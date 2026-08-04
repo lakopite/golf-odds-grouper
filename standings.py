@@ -156,6 +156,22 @@ def compute(teams, players_by_key):
 
 
 def _lookup(golfer, players_by_key):
+    """
+    The ESPN player for one golfer, or None.
+
+    A golfer that carries an `espn` block came out of a result file, where the build
+    already settled who they are. That block is then the ONLY answer: an athlete id
+    resolves, and a null athlete id means the build looked and found nobody -- either a
+    confirmed withdrawal or a name nobody has settled yet. Falling through to a name
+    match there would score a golfer the build deliberately did not, and would put this
+    reference implementation out of step with the page, which has no name match at all.
+
+    Golfers with no `espn` block are handed in by hand -- the golden fixtures and
+    tools/make_golden.py do this -- and keep the older, more forgiving lookup.
+    """
+    if "espn" in golfer:
+        athlete_id = (golfer["espn"] or {}).get("athlete_id")
+        return players_by_key.get(athlete_id) if athlete_id else None
     for key in ("espn_athlete_id", "golfer_id", "name"):
         value = golfer.get(key)
         if value and value in players_by_key:
@@ -175,8 +191,11 @@ def index_players(players, matches=None):
     Build the lookup `compute` wants: every key a golfer might carry -> ESPN player.
 
     `matches` is the build-time Kalshi-name -> ESPN-player join from
-    espn_leaderboard.match_field, folded in so a golfer resolved by first-initial
-    still resolves here.
+    espn_leaderboard.match_field, folded in so a golfer the join settled by alias or
+    by review -- whose Kalshi name is not the ESPN display name -- still resolves
+    here. The scoreboard does not need this: the build writes an athlete id onto every
+    golfer it resolved and the page joins on that. This is the reference
+    implementation, and it is handed golfers straight out of a Kalshi field.
     """
     by_key = {}
     for p in players:

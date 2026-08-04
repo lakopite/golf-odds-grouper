@@ -19,8 +19,17 @@ import bundle_frontend as bundler
 
 @pytest.fixture
 def result():
+    """A groups build, which is what a first build of any competition produces."""
     from test_build_competition import make_result
     return make_result(n_teams=3, n_golfers=20)
+
+
+@pytest.fixture
+def live_result():
+    """The same competition once ESPN has published a field, so the page has scoring."""
+    from test_build_competition import golfer_name, live_stage, make_result
+    return make_result(n_teams=3, n_golfers=20,
+                       espn=live_stage([golfer_name(i) for i in range(20)]))
 
 
 @pytest.fixture
@@ -172,15 +181,48 @@ def test_a_template_without_an_index_is_refused(result, tmp_path):
 # The zip
 # ---------------------------------------------------------------------------
 
-def test_the_zip_carries_the_page_the_data_and_a_manifest(result, template, tmp_path):
-    paths, _ = bundler.bundle(result, template, str(tmp_path / "out"))
+def test_the_zip_carries_the_page_the_data_and_a_manifest(live_result, template, tmp_path):
+    paths, _ = bundler.bundle(live_result, template, str(tmp_path / "out"))
     with zipfile.ZipFile(paths[1]) as z:
         assert sorted(z.namelist()) == ["MANIFEST.txt", "index.html", "result.json"]
-        assert json.loads(z.read("result.json")) == result
+        assert json.loads(z.read("result.json")) == live_result
         manifest = z.read("MANIFEST.txt").decode()
-    assert result["competition_id"] in manifest
-    assert result["sources"]["kalshi"]["markets_endpoint"] in manifest
-    assert result["sources"]["espn"]["leaderboard_endpoint"] in manifest
+    assert live_result["competition_id"] in manifest
+    assert live_result["sources"]["kalshi"]["markets_endpoint"] in manifest
+    assert live_result["live"]["espn_leaderboard_url"] in manifest
+
+
+def test_the_manifest_does_not_promise_scoring_a_groups_page_cannot_do(result, template,
+                                                                      tmp_path):
+    """
+    The manifest travels inside the zip and is the only thing in there that says what
+    the page does. A groups page fetches nothing at all, so a manifest naming a
+    leaderboard endpoint and announcing live scores is a lie that ships -- and one
+    nothing would catch, because prose does not raise.
+
+    The failure it causes is somebody waiting all afternoon for a number to appear.
+    """
+    paths, _ = bundler.bundle(result, template, str(tmp_path / "out"))
+    with zipfile.ZipFile(paths[1]) as z:
+        manifest = z.read("MANIFEST.txt").decode()
+    assert "build mode      groups" in manifest
+    assert "It fetches NOTHING" in manifest
+    assert "espn.com" not in manifest
+    assert "live scoring    none" in manifest
+
+
+def test_a_groups_result_bundles_without_a_half_written_directory(result, template, tmp_path):
+    """
+    The manifest is written after the HTML, so anything in it that assumed a live build
+    used to fail with the page already on disk -- a dist/ directory holding a scoreboard
+    and no zip, plus a traceback pointing at the bundler rather than at the result.
+    """
+    out = tmp_path / "out"
+    paths, report = bundler.bundle(result, template, str(out))
+    assert report["missing"] == []
+    assert sorted(os.path.basename(p) for p in paths) == [
+        "test-wyndham-championship.html", "test-wyndham-championship.zip"]
+    assert all(os.path.getsize(p) for p in paths)
 
 
 def test_the_result_can_be_left_out_of_the_zip(result, template, tmp_path):

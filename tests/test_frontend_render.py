@@ -10,8 +10,10 @@ Skipped without Playwright and a browser. Chromium is pre-installed in this
 environment; elsewhere, `pip install playwright && playwright install chromium`.
 """
 
+import glob
 import json
 import os
+import re
 
 import pytest
 
@@ -33,11 +35,27 @@ def _chromium_path():
     Environments that pre-install Chromium often pin a different build number than the
     Playwright package expects, and the default launch then fails on a path that does
     not exist. Point at whatever is actually on disk before giving up.
+
+    Two rules, both learned by getting them wrong. Candidates are filtered down to a
+    file that is actually EXECUTABLE, because `pw-browsers` holds a directory per build
+    (`chromium-1194`, `chromium_headless_shell-1194`) alongside the binary, and handing
+    Playwright a directory fails exactly like handing it nothing -- the suite then
+    reports "no chromium available" on a machine carrying three of them, which is the
+    worst way for a browser test to be wrong: it never runs and never says so. And the
+    per-build directories are searched directly, rather than trusting `chromium` to be
+    the binary; here it happens to be a symlink to one, but that is this image's
+    convention and not a guarantee.
     """
-    for candidate in (os.environ.get("CHROMIUM_PATH"),
-                      os.path.join(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", ""), "chromium"),
-                      "/opt/pw-browsers/chromium"):
-        if candidate and os.path.exists(candidate):
+    roots = [os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "/opt/pw-browsers"]
+    candidates = [os.environ.get("CHROMIUM_PATH")]
+    for root in roots:
+        if root:
+            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "chrome-linux", "chrome")))
+            candidates += sorted(glob.glob(os.path.join(root, "chromium*", "**", "headless_shell"),
+                                           recursive=True))
+    candidates += ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
 
@@ -70,18 +88,25 @@ def competition(espn_final_payload, tmp_path):
     the shape build_competition.py emits -- test_build_competition.py holds that to
     account separately.
     """
-    from test_build_competition import make_result
+    from test_build_competition import golfer_name, live_stage, make_result
 
     _, players = espn_leaderboard.parse_leaderboard(espn_final_payload)
-    result = make_result(n_teams=4, n_golfers=len(players))
+    names = [golfer_name(i) for i in range(len(players))]
+    result = make_result(n_teams=4, n_golfers=len(players), espn=live_stage(names))
 
     # Re-label the synthetic field with the real one, keeping the odds and the deal.
     # Round-robin by rank, so team 0 holds the winner and the leaderboard order of the
     # teams is known in advance.
+    #
+    # The athlete id is the point. This fixture used to null it deliberately, to force
+    # the page to redo the name join at runtime; there is no runtime name join any more,
+    # and the baked id is the only key the page has. So bake the REAL one.
     ordered = sorted(result["golfers"], key=lambda g: -g["odds"]["raw"])
     for golfer, player in zip(ordered, players):
         golfer["name"] = player["name"]
-        golfer["espn"]["athlete_id"] = None          # force the runtime name join
+        golfer["espn"] = {"athlete_id": player["athlete_id"], "display_name": player["name"],
+                          "headshot": player["headshot"], "country": player["country"],
+                          "match": "exact", "in_field": True}
     by_id = {g["golfer_id"]: g for g in result["golfers"]}
     for team in result["teams"]:
         team["golfer_names"] = [by_id[gid]["name"] for gid in team["golfer_ids"]]
@@ -90,6 +115,7 @@ def competition(espn_final_payload, tmp_path):
     url = espn_leaderboard.leaderboard_url(ESPN_EVENT_ID)
     result["sources"]["espn"]["leaderboard_endpoint"] = url
     result["live"]["espn_leaderboard_url"] = url
+    result["live"]["espn_event_id"] = ESPN_EVENT_ID
     result["tournament"]["name"] = "Rocket Classic"
 
     paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "dist"))
@@ -285,8 +311,101 @@ def test_it_survives_espn_being_down(browser, competition):
 
 
 @pytest.fixture
-def pre_tournament(browser, competition):
-    """The page as it exists for its first twelve hours: ESPN answering with no field."""
+def groups_page(browser, competition, tmp_path):
+    """
+    The page a build makes before the first tee time: `live` is null.
+
+    Bundled from the same competition with its scoring stripped, exactly as a groups
+    build emits it -- no ESPN block on any golfer, and no `live` block at all. The
+    context routes ESPN to a hard failure, so if the page asks for anything the request
+    is both counted and refused.
+    """
+    result = json.loads(json.dumps(competition["result"]))
+    result["build_mode"] = "groups"
+    result["live"] = None
+    result["sources"]["espn"]["field_size_at_build"] = 0
+    result["sources"]["espn"]["match_report"] = None
+    for golfer in result["golfers"]:
+        golfer["espn"] = None
+    paths, _ = bundler.bundle(result, bundler.DEFAULT_TEMPLATE, str(tmp_path / "groups"))
+
+    ctx = browser.new_context()
+    seen = []
+    ctx.on("request", lambda r: seen.append(r.url))
+    # Anything over the wire fails hard. file:// must still load, so this is
+    # scoped by scheme rather than by a glob that would swallow the navigation.
+    ctx.route(re.compile(r"^https?://"), lambda route: route.abort())
+    p = ctx.new_page()
+    errors = []
+    p.on("pageerror", lambda e: errors.append(str(e)))
+    p.goto("file://" + paths[0])
+    p.wait_for_selector("#standings article.team", timeout=15000)
+    yield {"page": p, "errors": errors, "requests": seen, "result": result}
+    ctx.close()
+
+
+def test_a_groups_page_makes_no_request_at_all(groups_page):
+    """
+    The claim the whole split rests on, and only a browser can check it. Not "it
+    degrades gracefully when the fetch fails" -- there is no fetch. `live` is null,
+    which is the build saying there was no field to score against, and a page that
+    polled anyway would be asking a question whose answer it could not use.
+    """
+    external = [u for u in groups_page["requests"] if not u.startswith(("file://", "data:"))]
+    assert external == []
+    assert groups_page["errors"] == []
+
+
+def test_a_groups_page_calls_itself_the_groups(groups_page):
+    """
+    A heading that says Standings over a board that ranks nobody reads as a scoreboard
+    that is broken, rather than as the thing that exists before a tournament starts.
+    """
+    page = groups_page["page"]
+    assert page.locator("#standings-heading").text_content() == "Groups"
+    text = page.locator("#standings").text_content()
+    assert "had not started when this page was made" in text
+    assert "rebuilt page" in text, "it has to say how to get one that scores"
+    assert "nothing is fetched by this page" in page.locator("#sources").text_content()
+
+
+def test_a_groups_page_still_shows_every_roster(groups_page):
+    """
+    ESPN publishes no competitors until play starts, and everything the pool actually
+    cares about at that point -- who holds whom, what each golfer was worth, that the
+    draw came out even -- was decided on Wednesday and is baked into the file. An empty
+    div throws all of it away.
+    """
+    page, result = groups_page["page"], groups_page["result"]
+    assert page.locator("#standings article.team").count() == len(result["teams"])
+    assert page.locator("#standings article.team table.golfers tbody tr").count() == sum(
+        t["golfer_count"] for t in result["teams"])
+
+    text = page.locator("#standings").text_content()
+    for team in result["teams"]:
+        assert team["team_name"] in text
+    assert "%" in text, "the odds at creation are the point of the groups board"
+
+
+def test_a_groups_page_ranks_nobody(groups_page):
+    """
+    Nothing to rank on, so nothing is ranked. Running the standings rule over an empty
+    leaderboard would order the teams by roster size -- every golfer tier 2, the longer
+    vector winning on padding -- and print it as a leaderboard, which is a worse answer
+    than saying the tournament has not started.
+    """
+    page = groups_page["page"]
+    assert set(page.locator("#standings article.team header .pos").all_text_contents()) == {"\u2014"}
+    assert page.locator("#standings article.team.leader").count() == 0
+    assert page.locator("#standings tr.out").count() == 0
+
+
+def test_a_live_page_whose_field_is_empty_still_refuses_to_rank(browser, competition):
+    """
+    The other empty board, and it still exists. A live page polls, and ESPN can answer
+    with a payload carrying no competitors -- between rounds, or on a bad response. The
+    never-rank-an-empty-board guard is independent of the build mode and has to survive.
+    """
     ctx = browser.new_context()
     empty = {"events": [{"id": ESPN_EVENT_ID, "name": "Rocket Classic",
                          "status": {"type": {"state": "pre"}},
@@ -298,41 +417,9 @@ def pre_tournament(browser, competition):
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto("file://" + competition["html"])
     p.wait_for_selector("#standings article.team", timeout=15000)
-    yield {"page": p, "errors": errors}
+
+    assert "Waiting for ESPN" in p.locator("#standings").text_content()
+    assert p.locator("#standings article.team.leader").count() == 0
+    assert set(p.locator("#standings article.team header .pos").all_text_contents()) == {"\u2014"}
+    assert errors == []
     ctx.close()
-
-
-def test_a_pre_tournament_field_says_so(pre_tournament):
-    assert "Not started" in pre_tournament["page"].locator("#standings").text_content()
-    assert pre_tournament["errors"] == []
-
-
-def test_a_pre_tournament_page_still_shows_the_groups(pre_tournament, competition):
-    """
-    The state the page spends its first night in. ESPN publishes no competitors until
-    play starts, and everything the pool actually cares about at that point -- who
-    holds whom, what each golfer was worth, that the draw came out even -- was decided
-    on Wednesday and is baked into the file. An empty div throws all of it away.
-    """
-    page, result = pre_tournament["page"], competition["result"]
-    assert page.locator("#standings article.team").count() == len(result["teams"])
-    assert page.locator("#standings article.team table.golfers tbody tr").count() == sum(
-        t["golfer_count"] for t in result["teams"])
-
-    text = page.locator("#standings").text_content()
-    for team in result["teams"]:
-        assert team["team_name"] in text
-    assert "%" in text, "the odds at creation are the point of the pre-tournament board"
-
-
-def test_a_pre_tournament_page_ranks_nobody(pre_tournament):
-    """
-    Nothing to rank on, so nothing is ranked. Running the standings rule over an empty
-    leaderboard would order the teams by roster size -- every golfer tier 2, the longer
-    vector winning on padding -- and print it as a leaderboard, which is a worse answer
-    than "not started".
-    """
-    page = pre_tournament["page"]
-    assert set(page.locator("#standings article.team header .pos").all_text_contents()) == {"—"}
-    assert page.locator("#standings article.team.leader").count() == 0
-    assert page.locator("#standings tr.out").count() == 0

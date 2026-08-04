@@ -141,7 +141,14 @@ def test_normalization_keeps_different_golfers_apart():
     ("Hao-Tong Li", "Haotong Li"),
 ])
 def test_initial_last_key_bridges_formal_and_familiar_names(a, b):
-    """Every one of these is a real Kalshi/ESPN disagreement from a measured field."""
+    """
+    Every one of these is a real Kalshi/ESPN disagreement from a measured field.
+
+    The key no longer MATCHES them -- it suggests them, and somebody confirms. What it
+    still has to do is bring the pair together at all, because that is what puts the
+    right athlete at the top of the review file rather than three streets away. See
+    test_every_formal_name_suggests_its_familiar_one_first.
+    """
     assert espn.initial_last_key(a) == espn.initial_last_key(b)
 
 
@@ -157,12 +164,23 @@ def test_initial_last_key_needs_two_parts():
 # The join
 # ---------------------------------------------------------------------------
 
-def test_field_has_no_ambiguous_initial_last_keys(espn_players):
+def test_a_real_field_holds_no_two_athletes_with_the_same_name(espn_players):
     """
-    The licence for tier 2. If a field ever does contain two J. Smiths the key is
-    dropped rather than guessed, and the golfer falls through to unresolved.
+    The licence for the exact tier. Normalisation is aggressive -- it folds accents,
+    punctuation, hyphens and generational suffixes -- so it is worth checking that it
+    does not fold two DIFFERENT people together in a real 147-player field. It does not.
     """
     assert espn.build_index(espn_players)["ambiguous"] == []
+
+
+def test_the_index_reaches_an_athlete_by_id_as_well_as_by_name(espn_players):
+    """
+    The id half is what a reviewed decision binds through, and what the exported page
+    joins on. A name is how a person finds an athlete; an id is how the software does.
+    """
+    index = espn.build_index(espn_players)
+    young = index["exact"][espn.normalize_name("Cameron Young")]
+    assert index["by_id"][str(young["athlete_id"])] is young
 
 
 def test_exact_match(espn_players):
@@ -170,15 +188,32 @@ def test_exact_match(espn_players):
     assert how == "exact" and hit["name"] == "Cameron Young"
 
 
-def test_initial_last_match(espn_players):
+def test_a_formal_first_name_is_not_matched_on_its_own(espn_players):
+    """
+    The demotion, stated. "Zachary Bauchou" IS Zach Bauchou and the old first-initial
+    tier bound them silently. It would have bound just as silently the week a field held
+    two J. Smiths, and nothing downstream could have told the two cases apart.
+
+    So the join refuses, and the name goes to review carrying the answer -- see
+    test_every_formal_name_suggests_its_familiar_one_first. Nothing is lost except the
+    part where nobody was asked.
+    """
     hit, how = espn.match_golfer("Zachary Bauchou", espn.build_index(espn_players))
-    assert how == "initial_last" and hit["name"] == "Zach Bauchou"
+    assert hit is None and how == "unresolved"
 
 
-def test_alias_beats_everything(espn_players):
+def test_an_alias_beats_an_exact_match_of_the_same_name(espn_players):
+    """
+    Precedence has to be tested against a name that WOULD otherwise resolve, or it
+    proves only that an alias beats nothing. "Cameron Young" is in this field under
+    exactly that spelling; the alias still wins.
+
+    This is the escape hatch for the day a field contains two people a source spells the
+    same way, and it only works if it outranks the tier below it.
+    """
     index = espn.build_index(espn_players)
-    hit, how = espn.match_golfer("Zachary Bauchou", index, {"Zachary Bauchou": "Cameron Young"})
-    assert how == "alias" and hit["name"] == "Cameron Young"
+    hit, how = espn.match_golfer("Cameron Young", index, {"Cameron Young": "Rickie Fowler"})
+    assert how == "alias" and hit["name"] == "Rickie Fowler"
 
 
 def test_a_golfer_who_is_not_playing_stays_unresolved(espn_players):
@@ -186,30 +221,219 @@ def test_a_golfer_who_is_not_playing_stays_unresolved(espn_players):
     assert hit is None and how == "unresolved"
 
 
-def test_ambiguous_key_is_refused_rather_than_guessed():
+def test_two_athletes_with_the_same_name_are_both_refused_rather_than_one_guessed():
+    """
+    A coin flip decides which of two real people is on somebody's team, so there is no
+    coin flip. Both names leave the index and both golfers go to review, where a person
+    settles it against the athlete ids.
+    """
     players = [
         {"name": "Jordan Smith", "athlete_id": "1", "sort_order": 1},
-        {"name": "Jamie Smith", "athlete_id": "2", "sort_order": 2},
+        {"name": "Jordan Smith", "athlete_id": "2", "sort_order": 2},
     ]
     index = espn.build_index(players)
-    assert index["ambiguous"] == ["j|smith"]
-    assert espn.match_golfer("Jonathan Smith", index) == (None, "unresolved")
+    assert index["ambiguous"] == ["jordan smith"]
+    assert espn.match_golfer("Jordan Smith", index) == (None, "unresolved")
 
 
 def test_match_field_reports_every_tier(espn_players):
-    names = ["Cameron Young", "Zachary Bauchou", "Tiger Woods", "Rickie Fowler"]
-    matches, report = espn.match_field(names, espn_players)
+    names = ["Cameron Young", "Rickie Fowler", "Zach Bauchou", "Tiger Woods"]
+    matches, report = espn.match_field(
+        names, espn_players, aliases={"Rickie Fowler": "Rickie Fowler"})
     assert report["matched"] == 3
-    assert report["matched_exact"] == 2
-    assert report["matched_initial_last"] == 1
+    assert report["matched_exact"] == 2 and report["matched_alias"] == 1
+    assert report["matched_decision"] == 0
     assert report["unresolved"] == ["Tiger Woods"]
-    assert matches["Zachary Bauchou"]["player"]["name"] == "Zach Bauchou"
+    assert report["absent"] == [] and report["problems"] == []
 
 
 def test_match_field_on_an_empty_field_resolves_nothing(espn_players):
-    """A pre-tournament event returns no competitors. Nothing should match, quietly."""
+    """
+    A pre-tournament event returns no competitors. Nothing should match, quietly.
+
+    The build does not call this at all in that case -- it produces a groups file
+    instead -- but the function still has to behave rather than divide by a field size
+    of zero.
+    """
     matches, report = espn.match_field(["Cameron Young"], [])
     assert matches == {} and report["unresolved"] == ["Cameron Young"]
+    assert report["espn_field_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Reviewed decisions
+# ---------------------------------------------------------------------------
+
+def test_a_decision_binds_a_name_to_an_athlete_id(espn_players):
+    matches, report = espn.match_field(
+        ["Zachary Bauchou"], espn_players,
+        decisions={"Zachary Bauchou": {"athlete_id": _athlete_id(espn_players, "Zach Bauchou")}})
+    assert matches["Zachary Bauchou"]["match"] == "decision"
+    assert matches["Zachary Bauchou"]["player"]["name"] == "Zach Bauchou"
+    assert report["matched_decision"] == 1
+
+
+def test_a_decision_can_name_the_espn_player_instead_of_the_id(espn_players):
+    """
+    A person editing the file by hand has the name in front of them and not the id, and
+    refusing that would be pedantry. The id is still what the file records afterwards.
+    """
+    matches, _ = espn.match_field(
+        ["Zachary Bauchou"], espn_players,
+        decisions={"Zachary Bauchou": {"espn_name": "Zach Bauchou"}})
+    assert matches["Zachary Bauchou"]["player"]["name"] == "Zach Bauchou"
+
+
+def test_a_confirmed_absence_is_not_the_same_as_an_unsettled_name(espn_players):
+    """
+    Both score nothing, so the standings cannot tell them apart. A person deciding
+    whether the build is finished can: `absent` was checked, `unresolved` was not.
+    """
+    matches, report = espn.match_field(
+        ["Brooks Koepka", "Jason Day"], espn_players,
+        decisions={"Jason Day": {"absent": True, "note": "withdrew before the first round"}})
+    assert matches == {}
+    assert report["absent"] == ["Jason Day"]
+    assert report["unresolved"] == ["Brooks Koepka"]
+
+
+def test_a_decision_naming_an_athlete_who_is_not_here_is_reported_and_then_ignored(espn_players):
+    """
+    A typo in a review file must not cost a golfer their whole week. The decision is
+    refused loudly, and the name then goes through the automatic tiers exactly as if
+    nobody had written anything -- which for an exactly-spelled name resolves it.
+    """
+    matches, report = espn.match_field(
+        ["Cameron Young"], espn_players,
+        decisions={"Cameron Young": {"athlete_id": "99999999"}})
+    assert matches["Cameron Young"]["match"] == "exact"
+    assert len(report["problems"]) == 1
+    assert "99999999" in report["problems"][0] and "not in this field" in report["problems"][0]
+
+
+def test_a_decision_that_decides_nothing_is_reported(espn_players):
+    _, report = espn.match_field(["Tiger Woods"], espn_players,
+                                 decisions={"Tiger Woods": {"note": "no idea"}})
+    assert report["unresolved"] == ["Tiger Woods"]
+    assert "decides nothing" in report["problems"][0]
+
+
+def test_one_athlete_cannot_be_held_by_two_golfers(espn_players):
+    """
+    Two Kalshi names reaching one person means one of them is wrong. Scoring both would
+    hand a team a golfer it does not have, so the second is refused and named.
+    """
+    young = _athlete_id(espn_players, "Cameron Young")
+    _, report = espn.match_field(
+        ["Cameron Young", "C Young"], espn_players,
+        decisions={"C Young": {"athlete_id": young}})
+    # The decision wins and the exact match is the one refused: somebody looked at one
+    # of these two, and it was not the one that merely spells the same.
+    assert report["unresolved"] == ["Cameron Young"]
+    assert "already held by" in report["problems"][0]
+
+
+@pytest.mark.parametrize("order", [
+    ["Cameron Young", "C Young"],
+    ["C Young", "Cameron Young"],
+])
+def test_which_of_the_two_is_refused_does_not_depend_on_the_kalshi_ordering(espn_players, order):
+    """
+    Kalshi returns its markets in whatever order it likes, and that must not decide
+    which of two competing golfers keeps the athlete. Decisions are settled in a first
+    pass and the automatic tiers fill in around them, so the answer is the same either
+    way round.
+    """
+    matches, _ = espn.match_field(
+        order, espn_players,
+        decisions={"C Young": {"athlete_id": _athlete_id(espn_players, "Cameron Young")}})
+    assert set(matches) == {"C Young"}
+
+
+def _athlete_id(players, name):
+    return next(p["athlete_id"] for p in players if p["name"] == name)
+
+
+# ---------------------------------------------------------------------------
+# Suggestions -- what replaced the first-initial match tier
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("kalshi,espn_name", [
+    ("Zachary Bauchou", "Zach Bauchou"),
+    ("Cameron Davis", "Cam Davis"),
+    ("Kris Ventura", "Kristoffer Ventura"),
+    ("Nicolas Echavarria", "Nico Echavarria"),
+    ("Matthew McCarty", "Matt McCarty"),
+    ("Benjamin James", "Ben James"),
+    ("Jordan L. Smith", "Jordan Smith"),
+    ("Hao-Tong Li", "Haotong Li"),
+])
+def test_every_formal_name_suggests_its_familiar_one_first(espn_players, kalshi, espn_name):
+    """
+    The regression fixture for the demotion. These eight pairs are the entire population
+    the deleted tier used to swallow silently, measured on a real field -- so if the
+    suggestion generator stops putting the right athlete at the top, the refactor has
+    cost eight golfers a week rather than made them visible.
+    """
+    top = espn.suggest_matches(kalshi, espn_players)
+    assert top, f"{kalshi} produced no suggestion at all"
+    assert top[0]["espn_name"] == espn_name
+    assert top[0]["why"] == "same first initial and last name"
+
+
+def test_a_colliding_key_does_not_produce_one_confident_answer():
+    """
+    Why the tier was demoted, kept as evidence. Widen the population past one field and
+    `c|young` stops being unique -- four tournaments back from the 2026 Wyndham it holds
+    Cameron Young and Carson Young at once.
+
+    As a MATCH that was a coin flip between two real people. As a SUGGESTION it is two
+    rows in a file with a person reading them, which is the entire difference.
+    """
+    field = [{"name": "Cameron Young", "athlete_id": "1"},
+             {"name": "Carson Young", "athlete_id": "2"}]
+    top = espn.suggest_matches("Cam Young", field)
+    assert [s["espn_name"] for s in top] == ["Cameron Young", "Carson Young"]
+    assert top[0]["confidence"] == top[1]["confidence"], (
+        "two candidates that tie must not be presented as one confident answer")
+
+
+def test_a_suggestion_carries_the_reason_it_was_offered(espn_players):
+    """A reviewer confirming a binding wants the reason, not a number."""
+    reasons = {s["why"] for name in ("Zachary Bauchou", "Cameron Smith")
+               for s in espn.suggest_matches(name, espn_players)}
+    assert reasons <= {"same first initial and last name", "same last name",
+                       "same first name", "similar spelling"} | {
+                           r for r in reasons if r.startswith("shares ")}
+
+
+def test_a_name_nobody_in_the_field_resembles_gets_no_suggestions(espn_players):
+    """
+    Which is itself the answer. An ESPN field and a Kalshi field for one tournament are
+    very nearly the same people, so a name with nothing close to it is a withdrawal --
+    and an empty suggestion list says so more clearly than a bad guess would.
+    """
+    assert espn.suggest_matches("Xavier Quetzalcoatl", espn_players) == []
+
+
+def test_suggestions_are_capped_and_ordered_by_confidence(espn_players):
+    top = espn.suggest_matches("Matthew McCarty", espn_players, limit=3)
+    assert len(top) <= 3
+    assert [s["confidence"] for s in top] == sorted((s["confidence"] for s in top), reverse=True)
+    assert all(s["confidence"] >= espn.SUGGESTION_FLOOR for s in top)
+
+
+def test_unclaimed_is_the_other_half_of_a_review(espn_players):
+    """
+    A reviewer given only the unmatched Kalshi names is guessing. Given both lists, the
+    answer is usually obvious -- and a SHORT unclaimed list is itself the evidence that
+    nothing was missed.
+    """
+    names = [p["name"] for p in espn_players[:5]]
+    matches, _ = espn.match_field(names, espn_players)
+    free = espn.unclaimed(espn_players, matches)
+    assert len(free) == len(espn_players) - 5
+    assert not ({p["name"] for p in free} & set(names))
 
 
 # ---------------------------------------------------------------------------
@@ -336,230 +560,3 @@ def test_the_calendar_is_read_from_a_single_day(calendar):
     assert calendar[0][1]["dates"] == "20260701"
     assert [r["event_id"] for r in rows] == ["1", "2", "3", "4", "5"]
     assert rows[0]["name"] == "January Open"
-
-
-def calendar_rows():
-    return [{"event_id": e["id"], "name": e["label"], "start": e["startDate"], "end": e["endDate"]}
-            for e in CALENDAR_PAYLOAD["leagues"][0]["calendar"]]
-
-
-def test_finished_before_takes_the_ones_that_are_over_newest_first():
-    rows = espn.finished_before(calendar_rows(), cutoff="2026-08-03T21:00:00+00:00")
-    assert [r["event_id"] for r in rows] == ["3", "2", "1"]
-
-
-def test_finished_before_can_skip_the_tournament_being_built():
-    assert [r["event_id"] for r in
-            espn.finished_before(calendar_rows(), "2026-09-10", exclude_ids=["3", "4"])] \
-        == ["5", "2", "1"]
-
-
-def test_finished_before_compares_on_the_date_alone():
-    """
-    ESPN writes `2026-08-02T07:00Z` and this project writes `2026-08-03T21:00:00+00:00`.
-    Only the first ten characters of either mean the same thing, and tournaments are
-    days apart, so only the first ten are compared.
-    """
-    rows = [{"event_id": "a", "name": "A", "start": "2026-08-02T07:00Z", "end": "2026-08-02T07:00Z"}]
-    assert espn.finished_before(rows, "2026-08-03T21:00:00+00:00")
-    assert not espn.finished_before(rows, "2026-08-02T23:59:59+00:00")
-
-
-# ---------------------------------------------------------------------------
-# Matching against earlier tournaments
-# ---------------------------------------------------------------------------
-
-def leaderboard(names, event_id="1", event="An Earlier Tournament"):
-    """A minimal but genuinely shaped ESPN payload, so parse_leaderboard does the work."""
-    return {"events": [{
-        "id": event_id, "name": event, "date": "2026-07-30T07:00Z",
-        "status": {"type": {"state": "post", "completed": True}},
-        "courses": [{"name": "Somewhere CC", "shotsToPar": 70}],
-        "competitions": [{
-            "status": {"period": 4, "type": {"detail": "Final"}},
-            "competitors": [{
-                "athlete": {"id": f"{event_id}{i:03d}", "displayName": name,
-                            "shortName": name, "headshot": {"href": f"https://x/{i}.png"},
-                            "flag": {"alt": "USA", "href": "https://x/usa.png"}},
-                "sortOrder": i + 1,
-                "status": {"position": {"displayName": str(i + 1), "isTie": False},
-                           "type": {"name": "STATUS_PLAY_COMPLETE"}},
-                "linescores": [{"period": 1, "displayValue": "-2", "value": 68}],
-            } for i, name in enumerate(names)],
-        }],
-    }]}
-
-
-@pytest.fixture
-def history(monkeypatch):
-    """
-    Three finished tournaments, newest first, each with a field of its own.
-
-    Returns the list of event ids actually fetched, because "it stopped once everything
-    was resolved" is a behaviour rather than an implementation detail: every extra event
-    is a 276 KB payload nobody needed.
-    """
-    fields = {
-        "3": ["Cameron Young", "Zach Bauchou", "Hideki Matsuyama"],
-        "2": ["Cam Davis", "Tom Kim"],
-        "1": ["Carson Young", "Somebody Else"],
-    }
-    fetched = []
-
-    def fake_fetch(event_id, league=espn.DEFAULT_LEAGUE):
-        fetched.append(str(event_id))
-        return leaderboard(fields[str(event_id)], event_id=str(event_id))
-
-    monkeypatch.setattr(espn, "fetch_leaderboard", fake_fetch)
-    monkeypatch.setattr(espn, "season_calendar", lambda season, league=espn.DEFAULT_LEAGUE, on=None: [
-        {"event_id": e["id"], "name": e["label"], "start": e["startDate"], "end": e["endDate"]}
-        for e in CALENDAR_PAYLOAD["leagues"][0]["calendar"]])
-    return fetched
-
-
-def test_identity_keeps_the_person_and_drops_the_week(espn_players):
-    """
-    The whole safety argument for looking backwards. A player object from a finished
-    tournament carries that tournament's position, sortOrder and to-par, and those are
-    exactly the fields the standings rule ranks on -- so a golfer who won in July would
-    show T1 on Thursday morning of a tournament nobody has teed off in.
-    """
-    ident = espn.identity(espn_players[0], {"event_id": "9", "name": "Last Week", "end": "x"})
-    assert ident["athlete_id"] and ident["name"] and ident["headshot"]
-    for scoring in ("position", "position_number", "sort_order", "to_par", "thru", "rounds",
-                    "status", "tied", "tee_time", "round"):
-        assert scoring not in ident
-    assert ident["from_event"]["name"] == "Last Week"
-
-
-def test_history_resolves_names_with_no_field_at_all(history):
-    matches, report = espn.match_history(
-        ["Cameron Young", "Hideki Matsuyama"], 2026, cutoff="2026-08-04", exclude_ids=["4"])
-    assert report["matched"] == 2
-    assert matches["Cameron Young"]["player"]["athlete_id"] == "3000"
-    assert matches["Cameron Young"]["source"] == "history"
-    assert matches["Cameron Young"]["event"]["name"] == "Last Week"
-
-
-def test_history_stops_as_soon_as_everything_is_resolved(history):
-    """Every extra tournament is a payload nobody needed."""
-    espn.match_history(["Cameron Young"], 2026, cutoff="2026-08-04", exclude_ids=["4"])
-    assert history == ["3"]
-
-
-def test_history_walks_back_until_it_finds_them(history):
-    matches, report = espn.match_history(
-        ["Cameron Young", "Tom Kim"], 2026, cutoff="2026-08-04", exclude_ids=["4"])
-    assert history == ["3", "2"]
-    assert report["matched"] == 2
-    assert matches["Tom Kim"]["event"]["name"] == "June Classic"
-
-
-def test_history_is_bounded_and_says_what_it_did_not_read(history):
-    matches, report = espn.match_history(
-        ["Somebody Else"], 2026, max_events=1, cutoff="2026-08-04", exclude_ids=["4"])
-    assert history == ["3"]
-    assert report["unresolved"] == ["Somebody Else"]
-    assert report["unscanned_events"] == 2, "two tournaments were left unread; say so"
-
-
-def test_history_can_be_switched_off(history):
-    matches, report = espn.match_history(["Cameron Young"], 2026, max_events=0)
-    assert matches == {} and report["unresolved"] == ["Cameron Young"] and history == []
-
-
-def test_history_matches_formal_names_across_tournaments(history):
-    """Kalshi's "Zachary Bauchou" and "Cameron Davis" against ESPN's Zach and Cam."""
-    matches, _ = espn.match_history(["Zachary Bauchou", "Cameron Davis"], 2026,
-                                    cutoff="2026-08-04", exclude_ids=["4"])
-    assert matches["Zachary Bauchou"]["match"] == "initial_last"
-    assert matches["Cameron Davis"]["player"]["name"] == "Cam Davis"
-
-
-def test_history_refuses_a_key_two_athletes_share(history):
-    """
-    Tier 2 is measured collision-free inside one field; a whole season is not one field.
-    Carson Young joins the union three tournaments back and `c|young` stops meaning
-    anything, so "Cam Young" comes back unresolved rather than bound to the wrong man --
-    while "Cameron Young", who matches exactly, is unaffected.
-    """
-    matches, report = espn.match_history(["Cam Young", "Cameron Young"], 2026,
-                                         cutoff="2026-08-04", exclude_ids=["4"])
-    assert report["unresolved"] == ["Cam Young"]
-    assert matches["Cameron Young"]["match"] == "exact"
-    assert "c|young" in report["ambiguous_keys"]
-
-
-def test_history_survives_a_leaderboard_that_will_not_load(history, monkeypatch):
-    """One unreadable tournament is not a reason to abandon the join."""
-    real = espn.fetch_leaderboard
-
-    def flaky(event_id, league=espn.DEFAULT_LEAGUE):
-        if str(event_id) == "3":
-            raise RuntimeError("ESPN returned HTTP 500")
-        return real(event_id, league)
-
-    monkeypatch.setattr(espn, "fetch_leaderboard", flaky)
-    matches, report = espn.match_history(["Tom Kim"], 2026, cutoff="2026-08-04", exclude_ids=["4"])
-    assert matches["Tom Kim"]["player"]["athlete_id"] == "2001"
-    assert any(e.get("error") for e in report["scanned"])
-
-
-# ---------------------------------------------------------------------------
-# The two halves together
-# ---------------------------------------------------------------------------
-
-def test_this_weeks_field_answers_first_and_history_only_covers_the_rest(history):
-    """
-    A golfer in this week's field must resolve against THIS week, scoring and all. Only
-    the ones it cannot answer for are looked up in tournaments that are over.
-    """
-    _, players = espn.parse_leaderboard(leaderboard(["Hideki Matsuyama"], event_id="4"))
-    matches, report = espn.match_field_and_history(
-        ["Hideki Matsuyama", "Tom Kim"], players, 2026, cutoff="2026-08-04", exclude_ids=["4"])
-
-    assert matches["Hideki Matsuyama"]["source"] == "field"
-    assert matches["Hideki Matsuyama"]["player"]["position_number"] == 1
-    assert matches["Tom Kim"]["source"] == "history"
-    assert "position_number" not in matches["Tom Kim"]["player"]
-    assert report["from_field"] == 1 and report["from_history"] == 1
-    assert report["matched"] == 2
-
-
-def test_a_golfer_missing_from_a_posted_field_is_reported_as_not_playing(history):
-    """
-    Two different facts, and the result file needs both. History can hand back Tom Kim's
-    headshot; it cannot make him a starter. "Not in this week's field" is what the pool
-    wants to know, and it survives being identified.
-    """
-    _, players = espn.parse_leaderboard(leaderboard(["Hideki Matsuyama"], event_id="4"))
-    matches, report = espn.match_field_and_history(
-        ["Hideki Matsuyama", "Tom Kim"], players, 2026, cutoff="2026-08-04", exclude_ids=["4"])
-    assert report["not_in_field"] == ["Tom Kim"]
-    assert report["unresolved"] == []
-
-
-def test_nobody_is_not_in_a_field_that_does_not_exist_yet(history):
-    _, report = espn.match_field_and_history(["Cameron Young"], [], 2026,
-                                             cutoff="2026-08-04", exclude_ids=["4"])
-    assert report["not_in_field"] == []
-    assert report["from_history"] == 1
-
-
-def test_the_combined_report_counts_both_sources(history):
-    _, players = espn.parse_leaderboard(leaderboard(["Hideki Matsuyama"], event_id="4"))
-    _, report = espn.match_field_and_history(
-        ["Hideki Matsuyama", "Zachary Bauchou"], players, 2026,
-        cutoff="2026-08-04", exclude_ids=["4"])
-    assert report["matched_exact"] == 1
-    assert report["matched_initial_last"] == 1
-    assert report["matched_alias"] == 0
-    assert report["history"]["scanned"][0]["name"] == "Last Week"
-
-
-def test_an_alias_still_wins_when_the_match_comes_out_of_history(history):
-    matches, _ = espn.match_field_and_history(
-        ["The Big Cat"], [], 2026, aliases={"The Big Cat": "Hideki Matsuyama"},
-        cutoff="2026-08-04", exclude_ids=["4"])
-    assert matches["The Big Cat"]["match"] == "alias"
-    assert matches["The Big Cat"]["player"]["name"] == "Hideki Matsuyama"

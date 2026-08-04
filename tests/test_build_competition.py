@@ -20,6 +20,7 @@ import espn_leaderboard
 import group as grouper_cli
 import groupers
 import league as league_mod
+import match_review
 
 
 # ---------------------------------------------------------------------------
@@ -128,15 +129,85 @@ def test_auto_exclusion_off_leaves_the_field_alone():
 # assemble()
 # ---------------------------------------------------------------------------
 
-def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
-    """Run the whole assembly with a synthetic field and no network."""
+# Synthetic golfer names that survive normalisation. "Golfer 00" does not: normalising
+# drops every non-letter, so all forty of them fold to "golfer", collide, and are refused
+# by the ambiguity guard -- which is the guard working correctly and a fixture that
+# cannot exercise a single match. Spelled-out numbers keep them distinct as NAMES.
+_ONES = ("Zero One Two Three Four Five Six Seven Eight Nine Ten Eleven Twelve Thirteen "
+         "Fourteen Fifteen Sixteen Seventeen Eighteen Nineteen").split()
+_TENS = ("", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety")
+
+
+def golfer_name(i):
+    """
+    `Golfer Seven`, `Golfer Thirty Four`, `Golfer One Hundred Six`.
+
+    Distinct to the name matcher, unlike a number, which normalisation deletes. Goes
+    past a hundred because the render suite deals out a real 147-player field.
+    """
+    return f"Golfer {_spell(i)}"
+
+
+def _spell(i):
+    if i >= 100:
+        rest = i % 100
+        return f"{_ONES[i // 100]} Hundred" + (f" {_spell(rest)}" if rest else "")
+    if i < 20:
+        return _ONES[i]
+    return _TENS[i // 10] + ("" if i % 10 == 0 else f" {_ONES[i % 10]}")
+
+
+def groups_stage():
+    """
+    The ESPN half of a build made before the field existed.
+
+    This is what `espn_stage` returns in groups mode, and it is mostly nulls on purpose:
+    there was no join, so there is no join to report on. See build_competition's module
+    docstring.
+    """
+    return {"mode": "groups", "meta": None, "players": [], "matches": {}, "report": None,
+            "decisions": {}, "error": None, "review": None}
+
+
+def live_stage(names, players=None, matches=None, report=None, decisions=None):
+    """
+    The ESPN half of a build made once the field was published.
+
+    `matches` is keyed by Kalshi name and shaped as espn_leaderboard.match_field returns
+    it. Anything not in it and not named in `report["absent"]` comes out `unresolved`.
+    """
+    players = players if players is not None else [
+        {"athlete_id": f"a{i:02d}", "name": name, "headshot": None, "country": None,
+         "position": str(i + 1), "sort_order": i + 1}
+        for i, name in enumerate(names)]
+    if matches is None:
+        by_name = {p["name"]: p for p in players}
+        matches = {n: {"player": by_name[n], "match": "exact"} for n in names if n in by_name}
+    report = report if report is not None else {
+        "espn_field_size": len(players), "requested": len(names), "matched": len(matches),
+        "matched_decision": 0, "matched_alias": 0, "matched_exact": len(matches),
+        "absent": [], "unresolved": [n for n in names if n not in matches],
+        "ambiguous_names": [], "problems": [],
+    }
+    return {"mode": "live", "meta": {"state": "in", "course": "Sedgefield", "par": 70},
+            "players": players, "matches": matches, "report": report,
+            "decisions": decisions or {}, "error": None, "review": None}
+
+
+def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None, espn=None):
+    """
+    Run the whole assembly with a synthetic field and no network.
+
+    Groups mode by default, because that is the first build of any competition. Pass
+    `espn=live_stage([...])` for the Thursday one.
+    """
     teams = [{"team_id": f"t{i}", "team_name": f"Team {i}", "player_name": f"P{i}",
               "team_logo": None} for i in range(n_teams)]
 
     raw = []
     for i in range(n_golfers):
         odds = round(0.002 * (n_golfers - i), 4)
-        raw.append({"golfer_name": f"Golfer {i:02d}", "odds": odds, "golfer_id": f"g{i:02d}",
+        raw.append({"golfer_name": golfer_name(i), "odds": odds, "golfer_id": f"g{i:02d}",
                     "_bid": odds - 0.001, "_ask": odds, "_spread": 0.001,
                     "_ticker": f"KX-T-{i:02d}"})
     raw = grouper_cli.sort_field(raw)
@@ -158,12 +229,12 @@ def make_result(n_teams=4, n_golfers=40, excluded_names=(), tmp_path=None):
         market_label="Outright Winner", exclusive=True, event_ticker="KXPGATOUR-WYC26",
         tournament_name="Wyndham Championship", season=2026,
         espn_event={"event_id": "401811961", "name": "Wyndham Championship", "state": "pre"},
-        espn_meta=None, matches={}, match_report=None, espn_field_size=0,
+        espn=espn if espn is not None else groups_stage(),
         field=raw, devigged=devigged, weighted=weighted, excluded=excluded,
         liquidity={"golfers": n_golfers}, raw_sum=sum(g["odds"] for g in raw),
         auto_exclude=True,
         tick_structures=["tapered_deci_cent"], report=report, groups=groups,
-        order=order, seed=7, aliases={},
+        order=order, seed=7,
     )
 
 
@@ -203,17 +274,17 @@ def test_team_totals_add_up_to_one():
 
 
 def test_an_excluded_golfer_has_no_weight_and_no_team():
-    result = make_result(excluded_names=["Golfer 00"])
-    excluded = next(g for g in result["golfers"] if g["name"] == "Golfer 00")
+    result = make_result(excluded_names=[golfer_name(0)])
+    excluded = next(g for g in result["golfers"] if g["name"] == golfer_name(0))
     assert excluded["excluded"] is True
     assert excluded["odds"]["grouping_weight"] is None
     assert excluded["team_id"] is None
     assert excluded["odds"]["devigged"] > 0            # it still records what they were worth
-    assert result["odds_snapshot"]["excluded"][0]["golfer_name"] == "Golfer 00"
+    assert result["odds_snapshot"]["excluded"][0]["golfer_name"] == golfer_name(0)
 
 
 def test_exclusion_rescales_the_survivors_back_to_one():
-    result = make_result(excluded_names=["Golfer 00", "Golfer 01"])
+    result = make_result(excluded_names=[golfer_name(0), golfer_name(1)])
     total = sum(g["odds"]["grouping_weight"] for g in result["golfers"]
                 if g["odds"]["grouping_weight"] is not None)
     assert total == pytest.approx(1.0, abs=1e-6)
@@ -225,7 +296,7 @@ def test_devigged_is_over_the_whole_field_and_sums_to_one_even_with_exclusions()
     The distinction the two keys exist to draw: `devigged` is the de-vig of the whole
     field, `grouping_weight` is what the partitioner actually saw.
     """
-    result = make_result(excluded_names=["Golfer 00"])
+    result = make_result(excluded_names=[golfer_name(0)])
     assert sum(g["odds"]["devigged"] for g in result["golfers"]) == pytest.approx(1.0, abs=1e-6)
 
 
@@ -256,15 +327,29 @@ def test_the_result_says_kalshi_is_unreachable_from_a_browser():
     assert result["sources"]["espn"]["browser_reachable"] is True
 
 
-def test_the_file_offers_the_page_no_kalshi_endpoint_to_fetch():
+def test_a_live_build_offers_the_page_espn_and_nothing_else_to_fetch():
     """
-    `live` is what the page does while it is open, and since 1.2 that is ESPN and
-    nothing else. A Kalshi URL or a relay slot in here is an invitation to write a
-    fetch that can only 403, which is the panel this simplification removed.
+    `live` is what the page does while it is open, and that is ESPN and nothing else. A
+    Kalshi URL or a relay slot in here is an invitation to write a fetch that can only
+    403, which is the panel this simplification removed.
+
+    There is no name-matching block either. A live build has already written an athlete
+    id onto every golfer it resolved, so the page joins on the id and needs nothing
+    here to do it with.
     """
-    live = make_result()["live"]
-    assert set(live) == {"espn_leaderboard_url", "poll_interval_seconds", "name_match"}
+    live = make_result(espn=live_stage([golfer_name(0), golfer_name(1)]))["live"]
+    assert set(live) == {"espn_leaderboard_url", "espn_event_id", "poll_interval_seconds"}
     assert "espn.com" in live["espn_leaderboard_url"]
+
+
+def test_a_groups_build_gives_the_page_nothing_to_fetch_at_all():
+    """
+    Null, not an empty object, and the difference is the whole instruction. An empty
+    object is a page that polls an endpoint it was not given; null is a page that does
+    not poll. Before the first tee time there is no field to score against, so a fetch
+    would be asking a question whose answer it could not use.
+    """
+    assert make_result()["live"] is None
 
 
 def test_the_result_carries_the_grouping_certificate():
@@ -276,15 +361,67 @@ def test_the_result_carries_the_grouping_certificate():
     assert sum(g["group_sizes"]) == len(result["golfers"])
 
 
-def test_a_pre_tournament_build_defers_the_espn_join_rather_than_calling_it_unresolved():
+def test_a_groups_build_says_nothing_at_all_about_espn_athletes():
     """
-    Different facts, and only one of them is a problem. Deferred means ESPN had no
-    field yet -- normal before Thursday, finished by the page at runtime. Unresolved
-    means the field existed and this golfer is not in it.
+    Before the first tee time nobody knows who this week's competitors are, so the file
+    says nothing rather than something empty. `espn: null` on a golfer is the absence of
+    a claim; a block of null fields would read as a join that ran and failed.
+
+    `match_report` is null for the same reason. There was no join, so there is no report
+    on one -- which is a different thing from a join that matched nobody, and a file
+    that cannot tell those apart cannot say whether the build is finished.
     """
-    deferred = make_result()
-    assert deferred["sources"]["espn"]["field_available_at_build"] is False
-    assert all(g["espn"]["match"] == "deferred" for g in deferred["golfers"])
+    result = make_result()
+    assert result["build_mode"] == "groups"
+    assert result["sources"]["espn"]["field_size_at_build"] == 0
+    assert result["sources"]["espn"]["match_report"] is None
+    assert all(g["espn"] is None for g in result["golfers"])
+    # The event is still recorded. The tournament was resolved on ESPN even though its
+    # field was not published, and the next build needs the id to ask again.
+    assert result["sources"]["espn"]["event_id"] == "401811961"
+
+
+def test_a_live_build_bakes_an_athlete_id_onto_every_golfer_it_resolved():
+    """
+    The page joins on this id and on nothing else, so a golfer without one scores
+    nothing for the life of that page. That makes this the single most load-bearing
+    field in a live result file.
+    """
+    names = [golfer_name(i) for i in range(12)]
+    result = make_result(n_teams=3, n_golfers=12, espn=live_stage(names))
+    assert result["build_mode"] == "live"
+    assert result["sources"]["espn"]["field_size_at_build"] == 12
+    for golfer in result["golfers"]:
+        assert golfer["espn"]["athlete_id"], golfer["name"]
+        assert golfer["espn"]["match"] == "exact"
+        assert golfer["espn"]["in_field"] is True
+
+
+def test_a_golfer_nobody_has_looked_at_is_not_reported_as_a_withdrawal():
+    """
+    Three states, because there are three. A golfer in the field is in it; a golfer a
+    review confirmed absent is not; a golfer the join could not settle is UNKNOWN, and
+    saying False there claims a withdrawal on evidence nobody gathered.
+
+    Both of the last two score nothing, so the standings cannot tell them apart and do
+    not need to. A person deciding whether the build is finished very much does.
+    """
+    names = [golfer_name(i) for i in range(12)]
+    # Golfer Zero was reviewed and is not playing; Golfer One nobody has looked at.
+    players = [{"athlete_id": f"a{i:02d}", "name": n, "position": str(i + 1),
+                "headshot": None, "country": None, "sort_order": i + 1}
+               for i, n in enumerate(names) if i > 1]
+    matches, report = espn_leaderboard.match_field(
+        names, players, decisions={golfer_name(0): {"absent": True}})
+    result = make_result(n_teams=3, n_golfers=12,
+                         espn=live_stage(names, players=players, matches=matches, report=report))
+
+    by_name = {g["name"]: g["espn"] for g in result["golfers"]}
+    assert by_name[golfer_name(0)] == {"athlete_id": None, "display_name": None, "headshot": None,
+                                    "country": None, "match": "absent", "in_field": False}
+    assert by_name[golfer_name(1)]["match"] == "unresolved"
+    assert by_name[golfer_name(1)]["in_field"] is None
+    assert by_name[golfer_name(2)]["in_field"] is True
 
 
 def test_the_result_carries_the_standings_rule_it_expects_to_be_scored_by():
@@ -348,17 +485,38 @@ def test_an_oversized_logo_is_refused_rather_than_inlined(tmp_path, capsys):
 # Aliases
 # ---------------------------------------------------------------------------
 
-def test_only_non_exact_matches_are_worth_learning():
+def test_a_reviewed_name_binding_is_worth_learning_and_an_exact_match_is_not():
+    """
+    The alias file only grows through review now, which is the whole reason the review
+    step is worth doing twice: settle "Nicolas Echavarria is Nico Echavarria" once and
+    every later tournament resolves it with nobody looking.
+
+    An exact match teaches nothing -- the two names were already the same string.
+    """
+    decisions = {"Zachary Bauchou": {"athlete_id": "3"}}
     matches = {
         "Cameron Young": {"match": "exact", "player": {"name": "Cameron Young"}},
-        "Zachary Bauchou": {"match": "initial_last", "player": {"name": "Zach Bauchou"}},
+        "Zachary Bauchou": {"match": "decision", "player": {"name": "Zach Bauchou"}},
     }
-    assert bc.learn_aliases(matches, {}) == {"Zachary Bauchou": "Zach Bauchou"}
+    assert match_review.learned_aliases(decisions, matches, {}) == {
+        "Zachary Bauchou": "Zach Bauchou"}
+
+
+def test_a_confirmed_withdrawal_is_not_learned_as_an_alias():
+    """
+    "Jason Day is not in the field" is true of one tournament and false of the next one
+    he enters. It belongs to this competition and nowhere else, so it stays in the
+    result file and never reaches the alias file.
+    """
+    decisions = {"Jason Day": {"absent": True, "note": "withdrew"}}
+    assert match_review.learned_aliases(decisions, {}, {}) == {}
 
 
 def test_an_alias_already_known_is_not_relearned():
-    matches = {"Zachary Bauchou": {"match": "initial_last", "player": {"name": "Zach Bauchou"}}}
-    assert bc.learn_aliases(matches, {"Zachary Bauchou": "Zach Bauchou"}) == {}
+    decisions = {"Zachary Bauchou": {"athlete_id": "3"}}
+    matches = {"Zachary Bauchou": {"match": "decision", "player": {"name": "Zach Bauchou"}}}
+    assert match_review.learned_aliases(
+        decisions, matches, {"Zachary Bauchou": "Zach Bauchou"}) == {}
 
 
 def test_aliases_round_trip(tmp_path):
