@@ -659,6 +659,8 @@ def finish(result, args, espn, aliases, started):
     league_dir = os.path.dirname(os.path.abspath(base))
     for team in result["teams"]:
         team["team_logo"] = inline_logo(team.get("team_logo"), league_dir)
+    for field in ("crest", "banner"):
+        result["league"][field] = inline_logo(result["league"].get(field), league_dir, field)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
@@ -757,6 +759,11 @@ def league_from_result(result):
         "league_name": league["league_name"],
         "league_slug": league.get("league_slug") or league_mod.slugify(league["league_name"]),
         "source_file": league.get("source_file"),
+        # Carried forward like the logos are: by the time a result file exists these
+        # are data: URIs, and a rebuild that dropped them would quietly un-brand a
+        # page somebody has already seen. `.get` because a file written before
+        # branding existed has no such keys and is still a perfectly good rebuild.
+        **{f: league.get(f) for f in league_mod.BRANDING_FIELDS},
         "teams": [{k: v for k, v in t.items() if k not in derived} for t in result["teams"]],
     }
 
@@ -1040,6 +1047,13 @@ def assemble(**k):
             "league_slug": k["league"]["league_slug"],
             "source_file": k["league"]["source_file"],
             "team_count": len(k["teams"]),
+            # The masthead. Paths here; finish() turns the local ones into data: URIs,
+            # the same pass that does it for the team logos. Null when the league file
+            # says nothing, which is the common case and needs no fallback beyond the
+            # league's name -- which every league has.
+            "crest": k["league"].get("crest"),
+            "banner": k["league"].get("banner"),
+            "tagline": k["league"].get("tagline"),
         },
         "teams": teams_out,
         "golfers": golfers_out,
@@ -1223,9 +1237,12 @@ def save_aliases(path, aliases):
         f.write("\n")
 
 
-def inline_logo(value, base_dir):
+def inline_logo(value, base_dir, what="logo"):
     """
-    Turn a local logo path into a data: URI so the export is one portable file.
+    Turn a local image path into a data: URI so the export is one portable file.
+
+    Used for team logos and for the league's crest and banner; `what` names which, so
+    the warnings say what is missing rather than calling a banner a logo.
 
     http(s) URLs and existing data: URIs pass through. A missing file is a warning
     rather than an error: a league is still perfectly playable without a crest.
@@ -1234,12 +1251,13 @@ def inline_logo(value, base_dir):
         return value
     path = value if os.path.isabs(value) else os.path.join(base_dir, value)
     if not os.path.exists(path):
-        print(f"!! logo not found: {value} (looked in {path}) -- the team will render without one")
+        print(f"!! {what} not found: {value} (looked in {path}) -- the page will render without it")
         return None
     size = os.path.getsize(path)
     if size > MAX_INLINE_LOGO_BYTES:
-        print(f"!! logo {value} is {size // 1024} KB, over the {MAX_INLINE_LOGO_BYTES // 1024} KB "
-              "inline limit. Left as a path; host it and use a URL instead.")
+        print(f"!! {what} {value} is {size // 1024} KB, over the {MAX_INLINE_LOGO_BYTES // 1024} KB "
+              "inline limit. Left as a path, which will not resolve in the exported page: "
+              "shrink it, save it as a JPEG, or host it and use a URL instead.")
         return value
     mime = mimetypes.guess_type(path)[0] or "image/png"
     with open(path, "rb") as f:

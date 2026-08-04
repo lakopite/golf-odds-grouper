@@ -10,7 +10,9 @@
     * the <script id="competition-data"> element with the marker inside it
     * local asset references the bundler can inline
     * whatever {{tokens}} it wants filled
-  See docs/FRONTEND-SPEC.md.
+  See docs/FRONTEND-SPEC.md, and frontend/scoreboard/ for the designed page this
+  repository actually ships. `lib.js` sits above both templates, at ../lib.js, so the
+  standings rule exists once and the parity test covers every page built from it.
 -->
 <html lang="en">
 <head>
@@ -44,7 +46,7 @@
 </main>
 
 <script id="competition-data" type="application/json">/*__COMPETITION_JSON__*/</script>
-<script src="lib.js"></script>
+<script src="../lib.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 """
-Parity between standings.py and frontend/template/lib.js.
+Parity between standings.py and frontend/lib.js.
 
 The rule that decides the pool exists twice: in Python, where it can be tested, and in
 JavaScript, where it actually runs. Two implementations of a rule is one implementation
@@ -22,7 +22,7 @@ import espn_leaderboard
 import standings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIB = os.path.join(ROOT, "frontend", "template", "lib.js")
+LIB = os.path.join(ROOT, "frontend", "lib.js")
 FINAL = os.path.join(ROOT, "tests", "fixtures", "espn_final_with_cut.json")
 MID = os.path.join(ROOT, "espn-api", "lb.json")
 

@@ -71,6 +71,66 @@ def test_missing_logo_becomes_none_rather_than_absent(league_file):
     assert teams["Alpha"]["team_logo"] == "logos/a.png"
 
 
+# ---------------------------------------------------------------------------
+# The league's own identity
+#
+# The scoreboard has a masthead, and what goes in it is a fact about the league rather
+# than about the template -- a template that hard-coded one league's crest would be
+# that league's template.
+# ---------------------------------------------------------------------------
+
+def test_branding_is_read_off_the_object_form(tmp_path):
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({
+        "league_name": "WCW", "crest": "logos/crest.png", "banner": "logos/banner.png",
+        "tagline": "10th Anniversary",
+        "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    loaded = league.load_league(str(path))
+    assert loaded["crest"] == "logos/crest.png"
+    assert loaded["banner"] == "logos/banner.png"
+    assert loaded["tagline"] == "10th Anniversary"
+
+
+@pytest.mark.parametrize("payload", [
+    [{"team_name": "A", "player_name": "Ann"}],
+    {"league_name": "X", "teams": [{"team_name": "A", "player_name": "Ann"}]},
+    {"league_name": "X", "crest": "  ", "tagline": None,
+     "teams": [{"team_name": "A", "player_name": "Ann"}]},
+], ids=["bare-list", "no-branding", "blank-branding"])
+def test_branding_keys_are_always_present_and_null_when_unset(tmp_path, payload):
+    """
+    Null rather than absent. A page that has to tell "this league has no crest" from
+    "this build predates crests" will get it wrong, and the difference is worth nothing
+    to anybody. A blank string counts as unset -- it is what a hand-edited file grows
+    when somebody clears a value, and an <img> with no src is worse than no <img>.
+    """
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps(payload))
+    loaded = league.load_league(str(path))
+    assert [loaded[f] for f in league.BRANDING_FIELDS] == [None, None, None]
+
+
+def test_branding_that_is_not_a_string_is_refused(tmp_path):
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({"league_name": "X", "crest": {"src": "a.png"},
+                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    with pytest.raises(ValueError, match="'crest' must be a string or null"):
+        league.load_league(str(path))
+
+
+def test_write_ids_keeps_the_branding_and_invents_none(tmp_path):
+    path = tmp_path / "l.json"
+    path.write_text(json.dumps({"league_name": "X", "tagline": "Season 4",
+                                "teams": [{"team_name": "A", "player_name": "Ann"}]}))
+    league.write_ids(str(path), league.load_league(str(path)))
+    written = json.loads(path.read_text())
+    assert written["tagline"] == "Season 4"
+    # It rewrites the user's file. Adding two null keys they never typed is how a tool
+    # teaches people not to run it.
+    assert "crest" not in written and "banner" not in written
+    assert league.load_league(str(path))["tagline"] == "Season 4"
+
+
 def test_unknown_fields_ride_along(tmp_path, capsys):
     path = tmp_path / "l.json"
     path.write_text(json.dumps([{"team_name": "A", "player_name": "Ann", "motto": "fore"}]))

@@ -1,0 +1,652 @@
+/*
+ * style.css -- the design, as a stylesheet.
+ *
+ * Ported from the wireframe in frontend-design/, which carried every rule as an inline
+ * `style` attribute on a React node and switched layouts on a JavaScript `narrow` flag.
+ * Neither survives here: inline styles cannot express :hover or :focus-visible, and a
+ * layout that depends on a resize listener is a layout that is wrong for the first
+ * frame, wrong when printed, and wrong in a browser that has not run the script yet.
+ * Media queries do the same job with none of that.
+ *
+ * TWO THINGS TO KNOW BEFORE EDITING
+ *
+ * 1. Every colour is a custom property, declared once for dark and remapped once for
+ *    light. The design is a dark page and that is the default, but the spec asks for
+ *    both schemes and a phone in a bright room asks for it harder. Light is not a
+ *    tint of dark -- gold at #d4af5f is a 2:1 contrast on white, so light mode reads
+ *    its text gold from a much deeper value and keeps the bright one for fills.
+ *
+ * 2. No @font-face and no font CDN. A `<link>` to Google Fonts is an absolute URL, so
+ *    the bundler leaves it alone, and the page then makes a network request on every
+ *    open and falls back to something unplanned the first time it is opened offline --
+ *    which for this page is most of the time. The families are named first anyway, so
+ *    anybody who has them installed gets them; everyone else gets a stack chosen to
+ *    keep the same shape.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  --bg: #070e1e;
+  --panel: #0d1730;
+  --panel-2: #0a1229;
+  --panel-head: #122040;
+  --thead: #0f1c39;
+  --rail: linear-gradient(180deg, #14254c 0%, #0c1531 62%, #0a1229 100%);
+  --detail: rgba(0, 0, 0, .22);
+
+  --ink: #eef2fa;
+  --ink-2: #dce4f2;
+  --ink-3: #c8d3e6;
+  --ink-4: #8fa3c8;
+  --ink-5: #7d8dab;
+  --ink-6: #6f7f9d;
+
+  --gold: #d4af5f;
+  --gold-text: #e8cf94;
+  --gold-bright: #f0dcae;
+  --gold-dim: #c9a961;
+  --gold-edge: rgba(212, 175, 95, .35);
+  --gold-edge-soft: rgba(212, 175, 95, .2);
+  --gold-wash: rgba(212, 175, 95, .1);
+  --gold-wash-2: rgba(212, 175, 95, .14);
+
+  --line: rgba(255, 255, 255, .09);
+  --line-soft: rgba(255, 255, 255, .055);
+  --line-faint: rgba(255, 255, 255, .04);
+  --fill: rgba(255, 255, 255, .07);
+  --fill-soft: rgba(255, 255, 255, .04);
+
+  --ok: #6ec48a;
+  --ok-ink: #b6e6c6;
+  --warn: #d9a441;
+  --warn-ink: #f0d3a0;
+  --bad: #d94444;
+  --bad-ink: #f0a8a8;
+
+  --sans: Archivo, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+  --display: "Barlow Condensed", "Archivo Narrow", "Roboto Condensed",
+             "Liberation Sans Narrow", "Arial Narrow", var(--sans);
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+          "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef0f6;
+    --panel: #ffffff;
+    --panel-2: #f7f8fc;
+    --panel-head: #e7ebf5;
+    --thead: #eff2f9;
+    --rail: linear-gradient(180deg, #eaeef9 0%, #f3f5fb 62%, #f7f8fc 100%);
+    --detail: rgba(18, 32, 64, .04);
+
+    --ink: #0f1a33;
+    --ink-2: #1d2b4a;
+    --ink-3: #2c3d61;
+    --ink-4: #4a5b7d;
+    --ink-5: #5a6b8c;
+    --ink-6: #6b7c9c;
+
+    /* Decorative fills stay bright; anything carrying text goes deep enough to read. */
+    --gold: #b08828;
+    --gold-text: #7a5a12;
+    --gold-bright: #6b4e0c;
+    --gold-dim: #8a6a1f;
+    --gold-edge: rgba(150, 113, 30, .45);
+    --gold-edge-soft: rgba(150, 113, 30, .3);
+    --gold-wash: rgba(212, 175, 95, .16);
+    --gold-wash-2: rgba(212, 175, 95, .24);
+
+    --line: rgba(18, 32, 64, .16);
+    --line-soft: rgba(18, 32, 64, .1);
+    --line-faint: rgba(18, 32, 64, .07);
+    --fill: rgba(18, 32, 64, .07);
+    --fill-soft: rgba(18, 32, 64, .04);
+
+    --ok: #1e7a45;
+    --ok-ink: #145c33;
+    --warn: #9a6b0d;
+    --warn-ink: #7a5409;
+    --bad: #b32020;
+    --bad-ink: #8f1a1a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(212, 175, 95, .28); }
+
+.sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* ------------------------------------------------------------------ *
+ * Frame
+ * ------------------------------------------------------------------ */
+
+.shell {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.rail {
+  width: 236px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--rail);
+  border-right: 1px solid var(--gold-edge-soft);
+}
+
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.crest {
+  width: 38px; height: 38px; flex: none;
+  border-radius: 50%; object-fit: cover;
+  border: 1px solid var(--gold-edge);
+  background: var(--fill-soft);
+}
+
+.brand-text { min-width: 0; line-height: 1.2; }
+.brand-name {
+  font-size: 13px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.brand-tag {
+  font-family: var(--display);
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--gold-dim);
+}
+
+.nav { display: flex; flex-direction: column; gap: 6px; padding: 12px 8px; }
+
+.nav-item {
+  flex: 1;
+  display: flex; align-items: center; gap: 9px;
+  padding: 12px 10px; min-height: 46px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--fill-soft);
+  color: var(--ink-3);
+  font: inherit; font-size: 13px; text-align: left;
+  cursor: pointer;
+}
+.nav-item:hover { background: var(--gold-wash); }
+.nav-item.is-on {
+  background: var(--gold-wash-2);
+  border-color: var(--gold-edge);
+  color: var(--gold-bright);
+}
+
+.nav-glyph { flex: none; }
+.nav-glyph-board { width: 15px; display: flex; flex-direction: column; gap: 3px; }
+.nav-glyph-board i { height: 2px; background: var(--ink-4); }
+.nav-item.is-on .nav-glyph-board i:first-child { background: var(--gold); }
+.nav-glyph-ring {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--ink-4);
+}
+.nav-item.is-on .nav-glyph-ring { border-color: var(--gold); }
+
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* ------------------------------------------------------------------ *
+ * Top bar and status
+ * ------------------------------------------------------------------ */
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px 16px; flex-wrap: wrap;
+  padding: 12px 20px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.event { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.event-name {
+  font-family: var(--display);
+  font-size: 18px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase;
+}
+.event-sub { font-size: 12px; color: var(--ink-4); }
+
+.statuswrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 20px;
+  font-family: var(--display);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+  background: var(--fill); border: 1px solid var(--line); color: var(--ink-3);
+}
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); }
+
+.pill.is-live { background: rgba(110, 196, 138, .12); border-color: rgba(110, 196, 138, .35); color: var(--ok-ink); }
+.pill.is-live .dot { background: var(--ok); }
+.pill.is-stale { background: rgba(217, 164, 65, .14); border-color: rgba(217, 164, 65, .4); color: var(--warn-ink); }
+.pill.is-stale .dot { background: var(--warn); }
+.pill.is-down { background: rgba(217, 68, 68, .14); border-color: rgba(217, 68, 68, .4); color: var(--bad-ink); }
+.pill.is-down .dot { background: var(--bad); }
+
+.status-note { font-size: 11.5px; color: var(--ink-5); }
+
+.bannerwrap { padding: 16px 20px 0; }
+.banner {
+  height: 184px; border-radius: 10px; overflow: hidden;
+  border: 1px solid rgba(212, 175, 95, .25);
+  background: var(--panel);
+}
+.banner img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
+
+/* ------------------------------------------------------------------ *
+ * View chrome
+ * ------------------------------------------------------------------ */
+
+.view { padding: 18px 20px 30px; }
+.view[hidden] { display: none; }
+
+.viewhead {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.viewhead h1 { margin: 0; font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1; }
+.viewsub { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-4); text-wrap: pretty; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip {
+  font-family: var(--mono); font-size: 9.5px;
+  padding: 3px 6px; border-radius: 3px;
+  background: var(--gold-wash); border: 1px solid var(--gold-edge-soft); color: var(--gold-dim);
+}
+
+.callout {
+  display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 11px;
+  padding: 11px 13px; margin-bottom: 14px;
+  border-radius: 9px;
+  background: var(--panel); border: 1px solid var(--line);
+}
+.callout[hidden] { display: none; }
+.callout-tag {
+  flex: none; padding-top: 2px;
+  font-family: var(--display); font-size: 11px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-4);
+}
+.callout p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-3); max-width: 88ch; text-wrap: pretty; }
+.callout.is-warn { border-color: rgba(217, 164, 65, .4); background: rgba(217, 164, 65, .08); }
+.callout.is-warn .callout-tag { color: var(--warn); }
+.callout.is-bad { border-color: rgba(217, 68, 68, .4); background: rgba(217, 68, 68, .07); }
+.callout.is-bad .callout-tag { color: var(--bad); }
+
+.panel {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); overflow: hidden;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 4px 12px;
+  padding: 9px 12px;
+  background: var(--panel-head); border-bottom: 1px solid var(--line);
+}
+.panel-title {
+  font-family: var(--display); font-size: 15px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.panel-note { font-size: 11px; color: var(--ink-4); }
+
+/* ------------------------------------------------------------------ *
+ * The league table
+ *
+ * A real <table>, one <tbody> per team holding the summary row and the group under
+ * it. The wireframe drew this as nested grid divs; a table gets the same columns,
+ * announces itself as a table, and lets a keyboard reach every team.
+ * ------------------------------------------------------------------ */
+
+.board { width: 100%; border-collapse: collapse; table-layout: fixed; }
+
+.board thead th {
+  padding: 7px 12px;
+  background: var(--thead);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--display); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--ink-5);
+  text-align: left;
+}
+.board th.c-b, .board th.c-c, .board th.c-odds { text-align: right; }
+
+/* Team is the one auto-width column: the pixel columns are honoured and it takes the
+ * slack. Keep it that way -- see the note on .is-narrow-collapse further down for what
+ * happens when a second auto column appears. */
+.board .c-rk { width: 46px; }
+.board .c-lead { width: 25%; }
+.board .c-b { width: 60px; }
+.board .c-c { width: 104px; }
+.board .c-odds { width: 92px; }
+.board .c-chev { width: 34px; }
+
+.board tbody.team { border-bottom: 1px solid var(--line-soft); }
+
+.team-row > td {
+  padding: 8px 12px;
+  vertical-align: middle;
+  border-left: 0;
+  cursor: pointer;
+}
+.team-row { background: transparent; }
+.team-row:hover > td { background: var(--gold-wash); }
+.team-row:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+
+/* The leader gets a wash and a rule down its left edge -- and the position number is
+ * also gold and also first, because a mark that is only a colour is not a mark. */
+tbody.team.is-leader .team-row > td { background: var(--gold-wash); }
+tbody.team.is-leader .team-row > td.c-rk { box-shadow: inset 3px 0 0 var(--gold); }
+
+td.c-rk {
+  font-family: var(--display); font-size: 19px; font-weight: 700; line-height: 1;
+  color: var(--ink-2);
+}
+tbody.team.is-leader td.c-rk { color: var(--gold-bright); }
+tbody.team.is-tied td.c-rk { color: var(--gold-dim); }
+
+.teamcell { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.mono {
+  width: 26px; height: 26px; flex: none; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--gold-wash-2); border: 1px solid var(--gold-edge);
+  font-family: var(--display); font-size: 11.5px; font-weight: 700; color: var(--gold-bright);
+  overflow: hidden;
+}
+/* A league with no logo is a normal league: the dashed ring says "none supplied"
+ * rather than leaving a hole where every other row has a badge. */
+.mono.is-empty { background: var(--fill-soft); border-style: dashed; }
+.mono img { width: 100%; height: 100%; object-fit: cover; }
+
+.teamnames { min-width: 0; line-height: 1.25; }
+.tname {
+  font-size: 13px; font-weight: 600; color: var(--gold-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.towner { font-size: 11px; color: var(--ink-5); }
+
+td.c-lead { min-width: 0; line-height: 1.25; }
+.leadname {
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.leadline { font-family: var(--mono); font-size: 10.5px; color: var(--ink-5); }
+.leadline.is-live { color: var(--gold-dim); }
+
+td.c-b { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+td.c-c { text-align: right; font-size: 11.5px; color: var(--ink-6); }
+td.c-c.is-decided { color: var(--ink-3); }
+td.c-odds { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--ink-4); }
+.board.is-draw td.c-odds { color: var(--gold); }
+
+td.c-chev { text-align: right; }
+.chev {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--fill); color: var(--ink-4);
+  font-size: 13px; line-height: 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * A team's group
+ * ------------------------------------------------------------------ */
+
+.team-detail > td { padding: 0 12px 8px 57px; background: var(--detail); }
+
+.group { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.group th {
+  padding: 5px 0 4px;
+  border-bottom: 1px solid var(--line-soft);
+  font-family: var(--display); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--ink-6);
+  text-align: left;
+}
+.group td { padding: 6px 0; border-bottom: 1px solid var(--line-faint); }
+
+/* Right-aligned columns sit flush against each other, so the padding goes on the left
+ * of each -- otherwise "SCORE" and "DRAW" touch the moment a media query drops the
+ * column that was between them. */
+.group th.g-score, .group th.g-thru, .group th.g-odds, .group th.g-move, .group th.g-tag,
+.group td.g-score, .group td.g-thru, .group td.g-odds, .group td.g-move, .group td.g-tag {
+  text-align: right;
+  padding-left: 10px;
+}
+
+.group .g-pos { width: 52px; }
+.group .g-score { width: 68px; }
+.group .g-thru { width: 56px; }
+.group .g-bar { width: 130px; padding-left: 10px; }
+.group .g-odds { width: 86px; }
+.group .g-move { width: 74px; }
+.group .g-tag { width: 118px; }
+
+/* The weight bar, and only on a groups sheet. Once there are scores the bar is the
+ * least interesting number in the row; before there are any it is the only one that
+ * shows the draw came out even without anybody adding up a column. */
+.bar { display: block; height: 3px; border-radius: 2px; background: var(--fill-soft); }
+.bar > i { display: block; height: 3px; border-radius: 2px; background: var(--gold); }
+.group:not(.is-draw) .g-bar { display: none; }
+
+td.g-pos { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+td.g-name { font-size: 12px; color: var(--ink); min-width: 0; }
+.gname-inner { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.gname-inner > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.g-score { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+td.g-thru { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-6); }
+td.g-odds { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-4); }
+td.g-move { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-4); }
+td.g-tag {
+  text-align: right; font-family: var(--display); font-size: 10px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-5);
+}
+
+/* Out of it: cut, withdrawn, or with no leaderboard row at all. Dimmed AND labelled --
+ * a row that is only paler is a row that is invisible across a room. */
+tr.golfer.out td.g-pos,
+tr.golfer.out td.g-name,
+tr.golfer.out td.g-score { color: var(--ink-5); }
+td.g-tag.is-unresolved { color: var(--warn); }
+
+/* The group is always on screen -- the top few golfers of it, anyway, down to and
+ * including whichever one decided the team's position. Expanding reveals the rest.
+ * Hidden in CSS rather than left unbuilt so that a browser find-in-page still has to
+ * be told about them, and so toggling costs no DOM work. */
+tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
+
+.decided-here {
+  flex: none;
+  font-family: var(--display); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--gold);
+}
+
+.more {
+  display: block; width: 100%; text-align: left;
+  padding: 10px 0 5px; min-height: 34px;
+  background: none; border: 0;
+  font: inherit; font-size: 11.5px; color: var(--ink-4);
+  cursor: pointer;
+}
+.more:hover { color: var(--gold-text); }
+
+/* ------------------------------------------------------------------ *
+ * The rank-tier legend
+ * ------------------------------------------------------------------ */
+
+.tiers {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  margin-top: 12px; padding: 10px 13px;
+  border-radius: 9px; background: var(--panel); border: 1px solid var(--line);
+  font-size: 11.5px; color: var(--ink-4);
+}
+.tiers[hidden] { display: none; }
+.tiers-title {
+  font-family: var(--display); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--gold);
+}
+.tiers b { color: var(--ink); font-weight: 600; }
+
+/* ------------------------------------------------------------------ *
+ * Odds view
+ * ------------------------------------------------------------------ */
+
+.tiles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+.tile { padding: 11px 13px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); }
+.tile.is-gold { border-color: var(--gold-edge); }
+.tile-label {
+  font-family: var(--display); font-size: 10px; font-weight: 600;
+  letter-spacing: .13em; text-transform: uppercase; color: var(--ink-5);
+}
+.tile.is-gold .tile-label { color: var(--gold-dim); }
+.tile-value { font-family: var(--display); font-size: 26px; font-weight: 700; line-height: 1.15; }
+.tile.is-gold .tile-value { color: var(--gold-bright); }
+.tile-note { font-size: 11px; color: var(--ink-4); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 12px; }
+.card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.card-head {
+  padding: 9px 12px;
+  background: var(--panel-head); border-bottom: 1px solid var(--line);
+  font-family: var(--display); font-size: 14px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.card-body { padding: 11px 12px; }
+.card-body p { margin: 0 0 9px; font-size: 12.5px; line-height: 1.55; color: var(--ink-3); text-wrap: pretty; }
+.card-body p:last-child { margin-bottom: 0; }
+.card-body p.small { font-size: 11.5px; color: var(--ink-4); }
+
+.card.is-cert { border-color: var(--gold-edge); background: linear-gradient(160deg, var(--gold-wash), transparent); }
+.card.is-cert .card-head { background: var(--gold-wash-2); border-bottom-color: var(--gold-edge-soft); color: var(--gold-bright); }
+.cert-delta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 9px; margin-bottom: 8px; }
+.cert-delta b { font-family: var(--display); font-size: 30px; font-weight: 700; color: var(--gold-bright); line-height: 1; }
+.cert-delta span { font-size: 11.5px; color: var(--gold-dim); }
+.stamp {
+  display: inline-block; padding: 3px 8px; border-radius: 4px;
+  background: var(--gold-wash-2); border: 1px solid var(--gold-edge);
+  font-family: var(--display); font-size: 11px; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--gold-bright);
+}
+.cert-sizes { margin-top: 9px; font-family: var(--mono); font-size: 11px; color: var(--ink-4); word-break: break-word; }
+
+.excl { display: grid; grid-template-columns: 1fr 78px 70px; gap: 8px; align-items: center;
+        padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.excl-name { font-size: 12.5px; color: var(--ink-2); }
+.excl-why { font-size: 11px; color: var(--ink-5); text-wrap: pretty; }
+.excl-raw { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink-4); }
+.excl-devig { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--gold); }
+
+.counts { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 9px; font-size: 11.5px; color: var(--ink-4); }
+.counts b { font-family: var(--mono); font-weight: 400; color: var(--ink); }
+
+.note-block { padding: 8px 10px; border-radius: 7px; background: var(--fill-soft); border: 1px solid var(--line); margin-bottom: 7px; }
+.note-block:last-child { margin-bottom: 0; }
+.note-block.is-warn { background: rgba(217, 164, 65, .1); border-color: rgba(217, 164, 65, .3); }
+.note-title {
+  font-family: var(--display); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--ink-4);
+}
+.note-block.is-warn .note-title { color: var(--warn); }
+.note-names { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.note-sub { font-size: 11px; color: var(--ink-4); margin-top: 3px; text-wrap: pretty; }
+
+.srcs { display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: var(--ink-4); }
+.srcs code { font-family: var(--mono); color: var(--ink-3); }
+
+/* ------------------------------------------------------------------ *
+ * Provenance
+ * ------------------------------------------------------------------ */
+
+.prov {
+  margin-top: auto;
+  padding: 12px 20px 18px;
+  border-top: 1px solid var(--line);
+  font-size: 11px; color: var(--ink-6);
+}
+.prov p { margin: 0 0 3px; text-wrap: pretty; }
+.prov-id { font-family: var(--mono); }
+
+/* ------------------------------------------------------------------ *
+ * A phone held one-handed in front of a television
+ *
+ * The rail becomes a header, the nav becomes a pair of tabs, and the table drops to
+ * the four things worth a thumb: rank, team, the shortest thing they hold, and the
+ * chevron. Everything dropped here is still one tap away in the group underneath.
+ * ------------------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  .shell { flex-direction: column; }
+  .rail { width: 100%; border-right: 0; border-bottom: 1px solid var(--gold-edge-soft); }
+  .nav { flex-direction: row; padding: 10px 12px 12px; }
+
+  .topbar { padding: 10px 12px; }
+  .bannerwrap { padding: 12px 12px 0; }
+  .banner { height: 108px; }
+  .view { padding: 14px 12px 26px; }
+  .viewhead h1 { font-size: 24px; }
+  .prov { padding: 12px 12px 18px; }
+
+  /* Collapsed to nothing, NOT display:none.
+   *
+   * `table-layout: fixed` takes its column model from the first row, but the group row
+   * under every team carries colspan="7". Remove three columns and the table still has
+   * to find seven, so it invents the missing three -- and those phantoms are
+   * auto-width, which means they split the slack with the only real auto column there
+   * is: the one holding the team's name. Measured at 390px it got 4 pixels and rendered
+   * as a lone ellipsis. Zero-width columns keep the count at seven and take nothing. */
+  .board .c-lead, .board .c-b, .board .c-c {
+    width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .board .c-rk { width: 36px; }
+  .board .c-odds { width: 76px; }
+  .board .c-chev { width: 32px; }
+  .board thead th { padding: 7px 10px; }
+  .team-row > td { padding: 12px 10px; }
+  td.c-rk { font-size: 17px; }
+
+  .team-detail > td { padding: 0 10px 8px 12px; }
+  .group .g-pos { width: 42px; }
+  .group .g-thru, .group .g-tag, .group .g-bar { display: none; }
+  .group .g-score { width: 56px; }
+  .group .g-odds { width: 70px; }
+  .group .g-move { width: 62px; }
+
+  .cards { grid-template-columns: 1fr; }
+  .excl { grid-template-columns: 1fr 62px 58px; }
+}
+
+/* A group table on a groups-mode page has no positions, scores or thru to show --
+ * nobody has teed off. Hiding the columns beats four columns of em dashes. */
+.group.is-draw .g-pos,
+.group.is-draw .g-score,
+.group.is-draw .g-thru,
+.group.is-draw .g-tag { display: none; }
+
+/* No rebuild, no second reading, so no movement column. Not a blank one. */
+.group.no-move .g-move { display: none; }

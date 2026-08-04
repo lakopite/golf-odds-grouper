@@ -8,9 +8,11 @@ the most it ever fetches while running is the ESPN leaderboard, and a page built
 before the field posted does not fetch even that (§2). It opens from a `file://` URL,
 from a USB stick, from Dropbox, from anywhere.
 
-A working reference implementation lives in `frontend/template/`. It is deliberately
-plain — it exists to prove the contract, not to be the design. Read it for *what*, and
-ignore it for *how*.
+Two implementations ship. `frontend/scoreboard/` is the designed page and the one
+`bundle_frontend.py` produces by default; `frontend/template/` is a deliberately plain
+reference that exists to prove the contract rather than to be the design — read it for
+*what*, and ignore it for *how*. Both inline `frontend/lib.js`, which is where the rule
+in §6 actually lives. See `frontend/README.md`.
 
 > **The one thing to read first.** §4. Kalshi will not answer a browser, so **the page
 > fetches at most one thing: the ESPN leaderboard.** There is no live-odds panel, no
@@ -359,10 +361,11 @@ runs out of golfers mid-comparison. Expected output:
 | 4 | delta | golfer 1 | `[[1,79],[1,80]]` |
 | 5 | echo | golfer 2 | `[[1,79]]` |
 
-`frontend/template/lib.js` implements the rule and `standings.py` implements it again;
+`frontend/lib.js` implements the rule and `standings.py` implements it again;
 `tests/test_frontend_parity.py` runs both over the same payloads and fails if they
-disagree. **Reuse `lib.js` verbatim** and write only presentation — then the parity
-test covers your page too.
+disagree. It sits above the template directories and every template pulls it in as
+`../lib.js`, so there is exactly one copy. **Reuse it verbatim** and write only
+presentation — then the parity test covers your page too.
 
 ---
 
@@ -412,7 +415,15 @@ much worse fact than no join having been possible. See §2.
                     "first_built_at": "…", "rebuild_count": 2 },
 
   "league":   { "league_id": "uuid", "league_name": "Sunday Fivesome",
-                "league_slug": "sunday-fivesome", "team_count": 5 },
+                "league_slug": "sunday-fivesome", "team_count": 5,
+                // The masthead, from the league file. All three are optional and all
+                // three are NULL rather than absent when unset -- a page that has to
+                // tell "this league has no crest" from "this build predates crests"
+                // will get it wrong, and the difference is worth nothing to anybody.
+                // crest and banner are already data: URIs (or a URL) by the time they
+                // are here; the build inlines them exactly as it does a team logo.
+                "crest": "data:image/png;base64,…", "banner": null,
+                "tagline": "10th Anniversary" },
 
   "teams": [{
     "team_id": "uuid",  "team_name": "Bogey Boys",  "player_name": "Mo",
@@ -662,9 +673,14 @@ is the one defect in a scoreboard that the scoreboard cannot recover from on its
    inside the data cannot end the element. Missing marker → the build fails loudly.
 
 2. **Local assets are inlined.** `<link rel=stylesheet href>` and `<script src>` become
-   `<style>` / `<script>`; `<img src>` becomes a `data:` URI. Absolute URLs are left
-   alone — but the page must still work when they fail to load, because it will
-   routinely be opened with no network at all.
+   `<style>` / `<script>`; `<img src>` becomes a `data:` URI. A reference may point
+   above the template directory — `../lib.js` is how both shipped templates share one
+   copy of §6. Absolute URLs are left alone — but the page must still work when they
+   fail to load, because it will routinely be opened with no network at all, so in
+   practice a template should have none.
+
+   Leave `src` **off** an `<img>` whose source arrives from the data at runtime. An
+   empty `src=""` resolves to the template directory, and a directory is not an image.
 
 3. **`{{tokens}}` are substituted**, HTML-escaped: `league_name`, `tournament`,
    `market`, `generated_at`, `team_count`, `competition_id`. This is how a `<title>`
@@ -737,5 +753,8 @@ reference honours `prefers-color-scheme`.
       not a blank one, not a spinner, not an apology
 - [ ] Handles `pre` (zero competitors), ESPN down, null logos
 - [ ] With no leaderboard: every roster and its odds are shown, and nothing is ranked
+- [ ] The league's own crest, banner and tagline are shown when `DATA.league` carries
+      them, and the page looks finished when it does not
 - [ ] Readable on a phone; works in light and dark
-- [ ] `python -m pytest tests/test_frontend_parity.py tests/test_frontend_render.py` passes
+- [ ] `python -m pytest tests/test_frontend_parity.py tests/test_scoreboard_render.py
+      tests/test_frontend_render.py` passes

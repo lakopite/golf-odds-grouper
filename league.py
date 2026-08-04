@@ -16,6 +16,19 @@ A team object is what the pool needs to draw a scoreboard row:
 
     {"team_name": "Bogey Boys", "player_name": "Mo", "team_logo": "logos/mo.png"}
 
+The object form also carries the league's own identity, which the scoreboard puts
+in its masthead:
+
+    {"crest": "logos/crest.png", "banner": "logos/banner.png", "tagline": "10th Anniversary"}
+
+All three are optional and all three are null by default -- a league with no art
+is a normal league and the page is designed for it. Paths are relative to the
+league file and are inlined as data: URIs at build time, exactly as team logos
+are, so an exported page still shows them on a plane. They are the one part of a
+league file that is about how the pool looks rather than who is in it, and they
+live here rather than in the template because a template that hard-coded one
+league's crest would be that league's template.
+
 WHY THE TEAM ID IS DERIVED RATHER THAN DRAWN
 --------------------------------------------
 Every team needs an id the rest of the system can key on. Drawing a random UUID
@@ -43,6 +56,10 @@ NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 REQUIRED_FIELDS = ("team_name", "player_name")
 OPTIONAL_FIELDS = ("team_logo", "team_id", "color", "abbreviation")
 
+# The league's own identity, for the scoreboard masthead. Every one of them is
+# optional and every one of them is null when absent -- see the module docstring.
+BRANDING_FIELDS = ("crest", "banner", "tagline")
+
 
 def slugify(text):
     """A filename-safe, url-safe token. Used for league slugs and export names."""
@@ -68,8 +85,9 @@ def load_league(path):
     """
     Read a league file and return it normalised, validated, and fully identified.
 
-    Returns {"league_id", "league_name", "league_slug", "source_file", "teams": [...]}
-    where every team carries team_id / team_name / player_name / team_logo.
+    Returns {"league_id", "league_name", "league_slug", "source_file", "crest",
+    "banner", "tagline", "teams": [...]} where every team carries
+    team_id / team_name / player_name / team_logo.
 
     Validation is loud and specific on purpose. A league file is hand-written, it is
     read once at the top of a build, and every mistake in it is cheap to state and
@@ -106,6 +124,7 @@ def load_league(path):
         _fail(path, "holds no teams")
 
     league_id = (raw.get("league_id") if isinstance(raw, dict) else None) or league_id_for(league_name)
+    branding = _branding(path, raw if isinstance(raw, dict) else {})
 
     seen_names, seen_ids, out = set(), set(), []
     for i, t in enumerate(teams):
@@ -147,8 +166,31 @@ def load_league(path):
         "league_name": league_name,
         "league_slug": slugify(league_name),
         "source_file": path,
+        **branding,
         "teams": out,
     }
+
+
+def _branding(path, raw):
+    """
+    The three optional masthead fields, validated and always present as keys.
+
+    Always present, and null when unset: a page that has to distinguish "this league
+    has no crest" from "this build predates crests" is a page that will get it wrong,
+    and the difference is worth nothing to anybody. An empty string is treated as
+    unset for the same reason -- it is what a hand-edited file grows when somebody
+    clears a value, and rendering an <img> with no src is worse than rendering none.
+    """
+    out = {}
+    for field in BRANDING_FIELDS:
+        value = raw.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            out[field] = None
+            continue
+        if not isinstance(value, str):
+            _fail(path, f"{field!r} must be a string or null, got {type(value).__name__}")
+        out[field] = value.strip()
+    return out
 
 
 def write_ids(path, league):
@@ -161,6 +203,9 @@ def write_ids(path, league):
     payload = {
         "league_id": league["league_id"],
         "league_name": league["league_name"],
+        # Written back only when set. This rewrites the user's file, and adding three
+        # null keys they never typed is how a tool teaches people not to run it.
+        **{f: league[f] for f in BRANDING_FIELDS if league.get(f)},
         "teams": league["teams"],
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -184,6 +229,11 @@ def main(argv=None):
         raise SystemExit(str(exc))
 
     print(f"{league['league_name']}  ({league['league_id']})")
+    if league.get("tagline"):
+        print(f"  {league['tagline']}")
+    for field in ("crest", "banner"):
+        if league.get(field):
+            print(f"  {field}: {league[field]}")
     print(f"{len(league['teams'])} teams -> {len(league['teams'])} groups\n")
     width = max(len(t["team_name"]) for t in league["teams"])
     for t in league["teams"]:

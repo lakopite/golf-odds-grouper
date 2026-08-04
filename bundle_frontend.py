@@ -8,6 +8,10 @@ Produces a single self-contained `.html` -- no build step, no server, no network
 load -- and a `.zip` holding that page, the result JSON it was built from, and a
 manifest. Both are artifacts of one run; neither is written back into the repo.
 
+Two templates ship. `frontend/scoreboard/` is the designed page and the default;
+`frontend/template/` is the plain reference that exists to prove the contract below.
+Both inline `frontend/lib.js`, which is where the standings rule lives.
+
 THE TEMPLATE CONTRACT
 ---------------------
 A template is a directory with an `index.html` in it. Three things happen to it:
@@ -24,7 +28,9 @@ A template is a directory with an `index.html` in it. Three things happen to it:
 
   2. Local `<link rel=stylesheet>`, `<script src>` and `<img src>` are inlined --
      stylesheets and scripts as text, images as data: URIs. Absolute URLs are left
-     alone, and so is anything the CSP of a locked-down host would reject anyway.
+     alone, and so is anything the CSP of a locked-down host would reject anyway. A
+     reference may point above the template directory: `../lib.js` is how both shipped
+     templates share one copy of the standings rule.
 
   3. `{{title}}` style tokens are substituted from a small set of fields, so a
      template can name the league in its <title> without running any JavaScript.
@@ -47,7 +53,16 @@ from datetime import datetime, timezone
 
 from league import slugify
 
-DEFAULT_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "template")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The designed page, and what a plain `python bundle_frontend.py --result ...` produces.
+DEFAULT_TEMPLATE = os.path.join(_HERE, "frontend", "scoreboard")
+
+# The plain one. It exists to prove the contract rather than to be the design, and it is
+# the thing to bundle against when the question is "is the page wrong, or is the data?"
+#   python bundle_frontend.py --result build/result.json --template frontend/template
+REFERENCE_TEMPLATE = os.path.join(_HERE, "frontend", "template")
+
 JSON_MARKER = "/*__COMPETITION_JSON__*/"
 
 _LINK_RE = re.compile(r'<link\b[^>]*?href=["\']([^"\']+)["\'][^>]*?>', re.I)
@@ -58,6 +73,34 @@ _TOKEN_RE = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 
 def is_remote(url):
     return url.startswith(("http://", "https://", "//", "data:", "#", "mailto:"))
+
+
+def local_asset(base_dir, ref):
+    """
+    Resolve one asset reference. Returns (path, status).
+
+    status is "file" (path is the file to inline), "skip" (nothing to inline) or
+    "missing" (a real reference to a file that is not there; path is where it was
+    looked for, and it is worth reporting).
+
+    `os.path.exists` is not the check, and the difference is a crash. A template that
+    carries `<img src="">` -- which is what an element whose source arrives from the
+    data at runtime looks like -- joins to the template directory itself. That exists,
+    so an exists() check sends the bundler off to base64-encode a directory. Empty
+    references and directories are both "nothing here", not files and not errors.
+
+    A reference may also point above the template directory: `../lib.js` is how both
+    shipped templates share one copy of the standings rule. That is deliberate and it
+    inlines like anything else.
+    """
+    if not ref or not ref.strip() or is_remote(ref):
+        return None, "skip"
+    path = os.path.join(base_dir, ref)
+    if os.path.isfile(path):
+        return path, "file"
+    if os.path.exists(path):
+        return None, "skip"
+    return path, "missing"
 
 
 def json_for_script(payload):
@@ -76,13 +119,21 @@ def json_for_script(payload):
 def inline_assets(markup, base_dir, report):
     """Replace local stylesheet, script and image references with their contents."""
 
+    def resolve(ref):
+        """The file to inline, or None -- and a note in the report if it should
+        have been one. A missing asset is left in the markup as it was written:
+        honest breakage beats a silent drop."""
+        path, status = local_asset(base_dir, ref)
+        if status == "missing":
+            report["missing"].append(ref)
+        return path if status == "file" else None
+
     def do_link(match):
         tag, href = match.group(0), match.group(1)
-        if is_remote(href) or "stylesheet" not in tag.lower():
+        if "stylesheet" not in tag.lower():
             return tag
-        path = os.path.join(base_dir, href)
-        if not os.path.exists(path):
-            report["missing"].append(href)
+        path = resolve(href)
+        if not path:
             return tag
         report["inlined"].append(href)
         with open(path, encoding="utf-8") as f:
@@ -90,11 +141,8 @@ def inline_assets(markup, base_dir, report):
 
     def do_script(match):
         tag, src = match.group(0), match.group(1)
-        if is_remote(src):
-            return tag
-        path = os.path.join(base_dir, src)
-        if not os.path.exists(path):
-            report["missing"].append(src)
+        path = resolve(src)
+        if not path:
             return tag
         report["inlined"].append(src)
         with open(path, encoding="utf-8") as f:
@@ -103,11 +151,8 @@ def inline_assets(markup, base_dir, report):
 
     def do_img(match):
         prefix, src = match.group(1), match.group(2)
-        if is_remote(src):
-            return match.group(0)
-        path = os.path.join(base_dir, src)
-        if not os.path.exists(path):
-            report["missing"].append(src)
+        path = resolve(src)
+        if not path:
             return match.group(0)
         mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
         with open(path, "rb") as f:

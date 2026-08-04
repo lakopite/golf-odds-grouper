@@ -481,6 +481,70 @@ def test_an_oversized_logo_is_refused_rather_than_inlined(tmp_path, capsys):
     assert "inline limit" in capsys.readouterr().out
 
 
+def test_a_warning_names_what_is_missing_rather_than_calling_it_a_logo(tmp_path, capsys):
+    """The same inliner runs over crests and banners, and a build that says "logo not
+    found" while looking for a banner sends somebody hunting through the wrong list."""
+    assert bc.inline_logo("nope.png", str(tmp_path), "banner") is None
+    assert "banner not found" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The league's own identity
+# ---------------------------------------------------------------------------
+
+def test_the_result_carries_the_leagues_crest_banner_and_tagline():
+    result = make_result(n_teams=3, n_golfers=10)
+    assert set(("crest", "banner", "tagline")) <= set(result["league"])
+    assert result["league"]["crest"] is None       # make_result's league has no art
+
+
+def test_finish_inlines_the_crest_and_the_banner_against_the_league_file(tmp_path):
+    """
+    Relative to the league file, not to wherever the build was run from -- exactly as
+    the team logos are, and for the same reason: that is where somebody put them.
+    """
+    (tmp_path / "logos").mkdir()
+    for name in ("crest.svg", "banner.svg"):
+        (tmp_path / "logos" / name).write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    league_path = tmp_path / "wcw.json"
+    league_path.write_text("{}")
+
+    result = make_result(n_teams=2, n_golfers=6)
+    result["league"]["crest"] = "logos/crest.svg"
+    result["league"]["banner"] = "logos/banner.svg"
+
+    args = types.SimpleNamespace(league=str(league_path), from_result=None,
+                                 output=str(tmp_path / "out" / "result.json"),
+                                 update_aliases=False, alias_file=str(tmp_path / "a.json"))
+    bc.finish(result, args, {"review": None, "decisions": {}, "matches": {}, "report": None},
+              {}, 0.0)
+
+    assert result["league"]["crest"].startswith("data:image/svg+xml;base64,")
+    assert result["league"]["banner"].startswith("data:image/svg+xml;base64,")
+
+
+def test_a_rebuild_carries_the_branding_forward(tmp_path):
+    """
+    By the time a result file exists these are data: URIs, and a rebuild has no league
+    file to read them out of again. Dropping them would quietly un-brand a page
+    somebody has already seen.
+    """
+    result = make_result(n_teams=2, n_golfers=6)
+    result["league"].update(crest="data:image/png;base64,AA", banner=None,
+                            tagline="10th Anniversary")
+    league = bc.league_from_result(result)
+    assert league["crest"] == "data:image/png;base64,AA"
+    assert league["banner"] is None
+    assert league["tagline"] == "10th Anniversary"
+
+
+def test_a_result_file_written_before_branding_existed_still_rebuilds():
+    result = make_result(n_teams=2, n_golfers=6)
+    for field in ("crest", "banner", "tagline"):
+        result["league"].pop(field)
+    assert bc.league_from_result(result)["crest"] is None
+
+
 # ---------------------------------------------------------------------------
 # Aliases
 # ---------------------------------------------------------------------------

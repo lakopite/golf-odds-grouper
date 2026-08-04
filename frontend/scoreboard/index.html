@@ -1,0 +1,137 @@
+<!doctype html>
+<!--
+  The scoreboard. This is the page the pipeline ships.
+
+  It is the design in `frontend-design/` built for real data: the same navy-and-gold
+  chrome, the same two views, driven entirely by the result JSON that gets baked into
+  the element at the bottom of this file. There is no framework, no CDN and no build
+  step -- the bundler inlines style.css, ../lib.js and app.js, substitutes the
+  {{tokens}}, replaces the marker with the competition, and the output is one file that
+  opens from a USB stick with the wifi off.
+
+  Everything visible below is a shell. Every string in it comes from the data at
+  runtime, EXCEPT the {{tokens}}, which the bundler fills in so the tab is named before
+  a line of JavaScript runs. Nothing here is specific to a league: the crest, the
+  banner and the tagline arrive on `DATA.league` from the league file, and a league
+  that has none of them gets a page that looks finished anyway.
+
+  The plain reference implementation is `frontend/template/`; `docs/FRONTEND-SPEC.md`
+  is the contract both of them honour.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{league_name}} — {{tournament}}</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+
+  <aside class="rail">
+    <div class="brand">
+      <!-- No src, on purpose. app.js sets it from DATA.league.crest, which is already a
+           data: URI by the time it gets here; a src="" would resolve to the template
+           directory at bundle time and there is nothing there to inline. -->
+      <img class="crest" id="league-crest" alt="" hidden>
+      <div class="brand-text">
+        <div class="brand-name" id="league-name">{{league_name}}</div>
+        <div class="brand-tag" id="league-tagline" hidden></div>
+      </div>
+    </div>
+    <nav class="nav" id="nav" role="tablist" aria-label="Views">
+      <button class="nav-item is-on" type="button" role="tab" id="tab-standings"
+              data-view="standings" aria-controls="view-standings" aria-selected="true">
+        <span class="nav-glyph nav-glyph-board" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span id="nav-standings-label">Standings</span>
+      </button>
+      <button class="nav-item" type="button" role="tab" id="tab-odds"
+              data-view="odds" aria-controls="view-odds" aria-selected="false">
+        <span class="nav-glyph nav-glyph-ring" aria-hidden="true"></span>
+        Odds &amp; the draw
+      </button>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <div class="topbar">
+      <div class="event">
+        <span class="event-name" id="tournament">{{tournament}}</span>
+        <span class="event-sub" id="event-sub"></span>
+      </div>
+      <div class="statuswrap">
+        <span class="pill" id="status-pill"><span class="dot" aria-hidden="true"></span><span
+              id="status-label">Loading</span></span>
+        <span class="status-note" id="status-note"></span>
+      </div>
+    </div>
+
+    <div class="bannerwrap" id="bannerwrap" hidden>
+      <div class="banner"><img id="league-banner" alt=""></div>
+    </div>
+
+    <!-- View 1: who is winning, and why. -->
+    <section class="view" id="view-standings" role="tabpanel" aria-labelledby="tab-standings">
+      <div class="viewhead">
+        <div>
+          <h1 id="standings-heading">Standings</h1>
+          <p class="viewsub" id="standings-sub"></p>
+        </div>
+        <div class="chips" id="standings-chips"></div>
+      </div>
+
+      <div class="callout" id="not-started" hidden>
+        <span class="callout-tag" id="not-started-tag">Not started</span>
+        <p id="not-started-note"></p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title" id="board-title">League table</span>
+          <span class="panel-note" id="board-note"></span>
+        </div>
+        <table class="board" id="board">
+          <thead>
+            <tr>
+              <th class="c-rk" scope="col">Rk</th>
+              <th class="c-team" scope="col">Team</th>
+              <th class="c-lead" scope="col" id="head-lead">Leading golfer</th>
+              <th class="c-b" scope="col" id="head-b">In it</th>
+              <th class="c-c" scope="col" id="head-c">Decided on</th>
+              <th class="c-odds" scope="col">Draw odds</th>
+              <th class="c-chev" scope="col"><span class="sr">Expand</span></th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+
+      <div class="tiers" id="tiers" hidden></div>
+    </section>
+
+    <!-- View 2: what everyone was worth, and the proof the draw came out even. -->
+    <section class="view" id="view-odds" role="tabpanel" aria-labelledby="tab-odds" hidden>
+      <div class="viewhead">
+        <div>
+          <h1>Odds &amp; the draw</h1>
+          <p class="viewsub">What every golfer was worth when the groups were drawn, and the
+            proof the draw came out even.</p>
+        </div>
+      </div>
+
+      <div class="tiles" id="odds-tiles"></div>
+      <div class="cards" id="odds-cards"></div>
+    </section>
+
+    <footer class="prov">
+      <p id="provenance"></p>
+      <p class="prov-id">competition {{competition_id}}</p>
+    </footer>
+  </main>
+</div>
+
+<script id="competition-data" type="application/json">/*__COMPETITION_JSON__*/</script>
+<script src="../lib.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
