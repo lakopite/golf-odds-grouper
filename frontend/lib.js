@@ -74,6 +74,12 @@ var GolfPool = (function () {
    * `score.displayValue` counts COMPLETED ROUNDS ONLY and was wrong for 42 of 147
    * players in the measured mid-round payload, so the live total is summed from
    * the linescores -- which carry stub entries for rounds not yet played.
+   *
+   * ESPN posts the FIELD about two days before the first round and posts no
+   * POSITIONS with it: measured 2026-08-04 on the Wyndham, 147 competitors with
+   * athlete ids and tee times, every one of them at position "-". So a payload
+   * full of players is not a tournament in progress, and `meta.started` is what
+   * tells the two apart. Nothing ranks until it is true.
    * ---------------------------------------------------------------- */
 
   function toPar(value) {
@@ -93,6 +99,22 @@ var GolfPool = (function () {
   function positionNumber(display) {
     var m = /^T?(\d+)$/.exec(String(display == null ? '' : display).trim());
     return m ? parseInt(m[1], 10) : null;
+  }
+
+  /* Has anybody teed off? Mirrors espn_leaderboard.has_started, and the two are
+   * checked against each other by tests/test_frontend_parity.py.
+   *
+   * Two signals, either sufficient, because they fail in opposite directions.
+   * `state` is ESPN's own answer, read off the event envelope; a golfer holding a
+   * real position is proof from the field itself. Requiring both would blank the
+   * board on a good payload with an odd envelope. Requiring neither is what this
+   * exists to prevent: a pre-tournament field ranks perfectly well on sortOrder
+   * and means nothing at all. */
+  function hasStarted(state, players) {
+    if (state === 'in' || state === 'post') return true;
+    return players.some(function (p) {
+      return p.positionNumber !== null && p.positionNumber !== undefined;
+    });
   }
 
   function parseLeaderboard(payload) {
@@ -146,6 +168,9 @@ var GolfPool = (function () {
     });
 
     players.sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+    /* Derived here so there is one answer to it. A field exists from about two days
+     * out; a leaderboard does not exist until somebody hits a ball. */
+    meta.started = hasStarted(meta.state, players);
     return { meta: meta, players: players };
   }
 
@@ -250,6 +275,7 @@ var GolfPool = (function () {
     toPar: toPar,
     fmtPar: fmtPar,
     positionNumber: positionNumber,
+    hasStarted: hasStarted,
     parseLeaderboard: parseLeaderboard,
     golferRank: golferRank,
     compareVectors: compareVectors,

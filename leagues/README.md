@@ -86,8 +86,8 @@ files themselves are not.
 ### Once built, it is settled
 
 The result file records the slug, and a rebuild carries it forward — including a
-deliberate absence. A page rebuilt on Thursday looks like the one sent on Wednesday, and
-a rebuild never grows art the first build did not have. Replacing `leagues/wcw/logo.png`
+deliberate absence. A rebuilt page looks exactly like the one that was sent, and a
+rebuild never grows art the first build did not have. Replacing `leagues/wcw/logo.png`
 and re-exporting *will* change the page, which is the one way to update the art of a
 competition already drawn.
 

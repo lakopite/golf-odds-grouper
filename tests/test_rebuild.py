@@ -6,10 +6,13 @@ the next build of it: `--from-result` reads the league, the tournament on both A
 the market, the price mode, the hand-picked exclusions and the seed straight back out.
 
 What these tests are really holding shut is the thing a rebuild must never do. People
-have already been told which golfers they own. A rebuild refreshes what the world did
--- the ESPN join above all, which is the entire difference between the groups sheet
-drawn on Wednesday and the scoreboard built on Thursday -- and leaves the draw exactly
-where it was. Re-dealing is `--regroup`, it is opt-in, and it says so.
+have already been told which golfers they own. A rebuild refreshes the ESPN join and
+leaves the draw exactly where it was. Re-dealing is `--regroup`, it is opt-in, and it
+says so.
+
+Scoring is no longer a reason to rebuild -- the page starts ranking by itself at the
+first tee time. What a rebuild is for is the join: names somebody settled in the review
+file, a golfer who has since withdrawn, an ESPN event pinned to the wrong id.
 """
 
 import json
@@ -98,11 +101,11 @@ def espn_field(monkeypatch, result_file):
 @pytest.fixture
 def espn_no_field(monkeypatch):
     """
-    ESPN as it is the night the groups are drawn: the event exists and lists nobody.
+    ESPN answering for an event it lists nobody for.
 
-    There is nothing else to stub. A build that finds no field does not go looking
-    anywhere else -- not at last week's leaderboard, not at the season calendar. It
-    writes the groups and says so.
+    This used to be the ordinary Wednesday answer and is now an error: ESPN posts a
+    field about two days out, so an empty one means the event id is wrong, the run is
+    very early, or ESPN is having a bad morning. All three are worth stopping for.
     """
     fetched = []
 
@@ -301,57 +304,50 @@ def test_a_league_file_for_a_different_league_is_refused(result_file, espn_field
 # What a rebuild refreshes
 # ---------------------------------------------------------------------------
 
-def test_a_rebuild_finishes_the_espn_join_the_first_build_could_not(result_file, espn_field,
-                                                                    tmp_path):
+def test_a_rebuild_redoes_the_espn_join_and_changes_nothing_else(result_file, espn_field,
+                                                                 tmp_path):
     """
-    The reason to rebuild at all, and the whole shape of a normal week in one test.
+    What a rebuild is now for. The draw comes through untouched and the ESPN half is
+    read again -- which is what makes a settled name, or a withdrawal, take effect.
 
-    The first build ran before the first tee time. ESPN listed nobody, so it made no
-    claim about anybody: `build_mode` is groups, `live` is null and every golfer's `espn`
-    block is null. The same competition rebuilt on Thursday has an athlete id for every
-    one of them and a `live` block telling the page where to poll.
+    The first build already had a field and already baked ids, so this is not a
+    transition between two kinds of file. It is the same file, asked again.
     """
     path, before = result_file
-    assert before["build_mode"] == "groups"
-    assert before["live"] is None
-    assert all(g["espn"] is None for g in before["golfers"])
+    assert before["live"] is not None
+    assert all(g["espn"] is not None for g in before["golfers"])
 
     out = str(tmp_path / "after.json")
     run(["--from-result", path, "--output", out])
     after = rebuilt(out)
 
     assert espn_field == ["401811961"], "the stub must be what answered"
-    assert after["build_mode"] == "live"
     assert set(after["live"]) == {"espn_leaderboard_url", "espn_event_id",
                                   "poll_interval_seconds"}
     assert all(g["espn"]["athlete_id"] for g in after["golfers"])
     assert all(g["espn"]["match"] == "exact" for g in after["golfers"])
     assert all(g["espn"]["in_field"] is True for g in after["golfers"])
     assert after["sources"]["espn"]["field_size_at_build"] == len(after["golfers"])
+    assert ([t["golfer_names"] for t in after["teams"]]
+            == [t["golfer_names"] for t in before["teams"]])
 
 
-def test_a_rebuild_before_the_field_exists_stays_a_groups_sheet(result_file, espn_no_field,
-                                                                tmp_path):
+def test_a_rebuild_that_finds_no_field_is_refused_rather_than_written(result_file,
+                                                                     espn_no_field, tmp_path):
     """
-    The Wednesday case, which is most of the life of a result file. ESPN answers with no
-    competitors, so the rebuild claims nothing about anybody and asks nowhere else.
-
-    It used to go looking through the season's finished tournaments for an athlete id.
-    That recovered an identity the page could not score with, at the cost of a join whose
-    correctness nothing could check -- so it does not, and the file says so plainly
-    instead.
+    This used to be the ordinary Wednesday answer and produced a groups sheet. It is now
+    a refusal, because there is no longer any hour at which an empty field is normal:
+    ESPN posts one about two days out, so finding none means the event id is wrong or
+    the read failed. Writing on it would strip every athlete id off a working file.
     """
     path, _ = result_file
-    out = str(tmp_path / "after.json")
-    run(["--from-result", path, "--output", out])
-    after = rebuilt(out)
+    out = tmp_path / "after.json"
+    with pytest.raises(SystemExit) as exc:
+        bc.main(["--from-result", path, "--output", str(out)])
 
     assert espn_no_field == ["401811961"], "one request, and no reason for a second"
-    assert after["build_mode"] == "groups"
-    assert after["live"] is None
-    assert after["sources"]["espn"]["field_size_at_build"] == 0
-    assert after["sources"]["espn"]["match_report"] is None
-    assert all(g["espn"] is None for g in after["golfers"])
+    assert "no competitors" in str(exc.value)
+    assert not out.exists(), "a refused rebuild must not leave a half-written file"
 
 
 def test_a_golfer_missing_from_a_posted_field_is_unresolved_until_somebody_looks(
@@ -526,16 +522,52 @@ def test_an_alias_that_fired_is_recorded_so_a_rebuild_elsewhere_still_resolves_i
     assert golfer["espn"]["match"] == "alias" and golfer["espn"]["display_name"] == "Adam Ashe"
 
 
-def test_a_rebuild_will_not_turn_a_scoreboard_back_into_a_groups_sheet(result_file, monkeypatch,
-                                                                       tmp_path, capsys):
+def test_a_pinned_espn_event_for_the_wrong_tournament_is_called_out(result_file, monkeypatch,
+                                                                    tmp_path, capsys):
     """
-    ESPN does not withdraw a field once it has posted one, so a rebuild that finds none
-    where the last one found forty has failed to ask rather than learned something.
+    A wrong `--espn-event` got more dangerous, not less, so it gets a warning it never
+    had. It used to produce an obviously empty groups build most weeks -- the pinned
+    event had no field posted either. Now any id with competitors on it builds a
+    complete, confident scoreboard joined against the wrong 150 people, and every number
+    in the file is internally consistent.
 
-    Writing the file anyway would null `live` and every athlete id, and the page built
-    from it would announce that a tournament halfway through its final round has not
-    started. Nothing is written and the run says why; the file that was passed in is
-    still correct, and rebuilding is cheap.
+    A note rather than a refusal: the name match is fuzzy and the pin is the override of
+    last resort, so refusing on the same lookup that sent somebody here would leave them
+    nowhere.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    other = leaderboard(names, event_id="401999999")
+    other["events"][0]["name"] = "Sanderson Farms Championship"
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: other)
+
+    run(["--from-result", path, "--espn-event", "401999999",
+         "--output", str(tmp_path / "pinned.json")])
+    err = capsys.readouterr().err
+    assert "do not look like the same tournament" in err
+    assert "Sanderson Farms Championship" in err and "Wyndham Championship" in err
+
+
+def test_a_pinned_espn_event_for_the_right_tournament_says_nothing(result_file, espn_field,
+                                                                   tmp_path, capsys):
+    """The other half: the warning has to stay quiet on the ordinary pin, or it is noise."""
+    path, _ = result_file
+    run(["--from-result", path, "--espn-event", "401811961",
+         "--output", str(tmp_path / "pinned.json")])
+    assert "do not look like the same tournament" not in capsys.readouterr().err
+
+
+def test_a_rebuild_mid_tournament_will_not_strip_a_working_scoreboard(result_file,
+                                                                      monkeypatch, tmp_path):
+    """
+    The worst case the refusal exists for. A tournament is halfway through its final
+    round, ESPN blinks, and a rebuild answers with nothing.
+
+    Writing on that would null every athlete id, and the page built from it would
+    announce that a tournament three days old has not started -- a total loss of the
+    scoreboard, presented as a normal build. Nothing is written; the file passed in is
+    untouched and still correct, and rebuilding is cheap.
     """
     path, result = result_file
     names = [g["name"] for g in result["golfers"]]
@@ -544,7 +576,7 @@ def test_a_rebuild_will_not_turn_a_scoreboard_back_into_a_groups_sheet(result_fi
                         leaderboard(names, state="in"))
     live_path = str(tmp_path / "live.json")
     run(["--from-result", path, "--output", live_path])
-    assert rebuilt(live_path)["build_mode"] == "live"
+    assert all(g["espn"]["athlete_id"] for g in rebuilt(live_path)["golfers"])
 
     monkeypatch.setattr(espn, "fetch_leaderboard",
                         lambda event_id, league=espn.DEFAULT_LEAGUE:
@@ -552,7 +584,7 @@ def test_a_rebuild_will_not_turn_a_scoreboard_back_into_a_groups_sheet(result_fi
     out = tmp_path / "downgraded.json"
     with pytest.raises(SystemExit) as exc:
         bc.main(["--from-result", live_path, "--output", str(out)])
-    assert "found none" in str(exc.value)
+    assert "no competitors" in str(exc.value)
     assert not out.exists(), "a refused rebuild must not leave a half-written file"
 
 
@@ -579,20 +611,40 @@ def test_an_espn_outage_during_a_live_tournament_is_refused_too(result_file, mon
     assert "503" in str(exc.value)
 
 
-def test_the_mode_a_file_was_built_in_is_readable_without_the_key(result_file):
+def test_a_3x_groups_file_rebuilds_into_a_4_0_one_with_the_espn_half_it_never_had(
+        result_file, espn_field, tmp_path):
     """
-    Files written before 2.0 carry no `build_mode`, and a rebuild has to know the mode to
-    refuse a downgrade. Inferring it is exact rather than a guess: those files recorded
-    the ESPN field size, and having a field is the whole of what the mode means.
-    """
-    _, result = result_file
-    assert bc.prior_build_mode(result) == "groups"
-    assert bc.prior_build_mode({"build_mode": "live"}) == "live"
+    The upgrade path, and the one migration this change actually needs.
 
-    legacy = {"sources": {"espn": {"field_size_at_build": 156}}}
-    assert bc.prior_build_mode(legacy) == "live"
-    assert bc.prior_build_mode({"sources": {"espn": {"field_size_at_build": 0}}}) == "groups"
-    assert bc.prior_build_mode({}) == "groups"
+    A 3.x file built on a Wednesday has `build_mode: "groups"`, `live: null` and no
+    `espn` block on any golfer, because on that Wednesday there was no field. Rebuilding
+    it against a posted field fills all of that in and drops the key, without anybody
+    having to convert anything by hand -- and without touching the draw, which is the
+    whole reason the file is worth upgrading rather than replacing.
+    """
+    path, result = result_file
+    legacy = json.loads(json.dumps(result))
+    legacy["schema_version"] = "3.0"
+    legacy["build_mode"] = "groups"
+    legacy["live"] = None
+    legacy["sources"]["espn"]["field_size_at_build"] = 0
+    legacy["sources"]["espn"]["match_report"] = None
+    legacy["sources"]["espn"].pop("started_at_build", None)
+    for golfer in legacy["golfers"]:
+        golfer["espn"] = None
+    legacy_path = tmp_path / "legacy.json"
+    legacy_path.write_text(json.dumps(legacy))
+
+    out = str(tmp_path / "upgraded.json")
+    run(["--from-result", str(legacy_path), "--output", out])
+    after = rebuilt(out)
+
+    assert after["schema_version"] == "4.0"
+    assert "build_mode" not in after
+    assert after["live"] is not None
+    assert all(g["espn"]["athlete_id"] for g in after["golfers"])
+    assert ([t["golfer_names"] for t in after["teams"]]
+            == [t["golfer_names"] for t in result["teams"]])
 
 
 def kalshi_market(golfer, ask, ticker=None):
@@ -825,23 +877,25 @@ def test_the_rebuild_inputs_and_the_file_they_are_read_from_stay_in_step(result_
 # What a rebuild must not quietly lose
 # ---------------------------------------------------------------------------
 
-def test_the_tournaments_dates_and_course_survive_an_espn_outage(result_file, monkeypatch,
-                                                                 tmp_path):
+def test_the_tournaments_dates_and_course_survive_a_payload_that_omits_them(
+        result_file, monkeypatch, tmp_path):
     """
-    Start, end and course are static facts about the tournament -- ESPN being down does
-    not un-schedule it. Nulling them costs the page its "Not started -- first round
-    <date>" line, which is exactly the state a rebuild is usually run to serve.
+    Start, end and course are static facts about the tournament, so a payload that does
+    not restate them does not un-schedule it. Losing them costs the page its "first
+    round <date>" line -- which, now that a page spends its first day or two showing the
+    draw, is the one thing on screen that answers "so when does this start?".
     """
     path, before = result_file
     before["tournament"].update(start="2026-08-06T07:00Z", end="2026-08-09T07:00Z",
                                 course={"name": "Sedgefield CC", "par": 70})
     (tmp_path / "with-dates.json").write_text(json.dumps(before))
 
-    def down(*a, **kw):
-        raise RuntimeError("ESPN returned HTTP 503")
-
-    monkeypatch.setattr(espn, "fetch_leaderboard", down)
-    monkeypatch.setattr(espn, "season_calendar", lambda *a, **k: [])
+    names = [g["name"] for g in before["golfers"]]
+    thin = leaderboard(names)
+    thin["events"][0].pop("date")
+    thin["events"][0].pop("courses")
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: thin)
 
     out = str(tmp_path / "after.json")
     run(["--from-result", str(tmp_path / "with-dates.json"), "--output", out])
@@ -850,8 +904,8 @@ def test_the_tournaments_dates_and_course_survive_an_espn_outage(result_file, mo
     assert after["start"] == "2026-08-06T07:00Z"
     assert after["end"] == "2026-08-09T07:00Z"
     assert after["course"] == {"name": "Sedgefield CC", "par": 70}
-    # But not the state: this run could not read it, so it does not claim to know it.
-    assert after["state_at_build"] is None
+    # The state is NOT static and gets no such fallback: it is read fresh or not claimed.
+    assert after["state_at_build"] == "post"
 
 
 def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, espn_field,

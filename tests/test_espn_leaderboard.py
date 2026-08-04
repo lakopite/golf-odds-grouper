@@ -249,15 +249,64 @@ def test_match_field_reports_every_tier(espn_players):
 
 def test_match_field_on_an_empty_field_resolves_nothing(espn_players):
     """
-    A pre-tournament event returns no competitors. Nothing should match, quietly.
+    Nothing should match, quietly, rather than dividing by a field size of zero.
 
-    The build does not call this at all in that case -- it produces a groups file
-    instead -- but the function still has to behave rather than divide by a field size
-    of zero.
+    The build never gets here with an empty field -- it stops instead, because ESPN
+    posts a field about two days out and finding none means the read failed. But this
+    function is also called directly from the CLI, and it has to behave.
     """
     matches, report = espn.match_field(["Cameron Young"], [])
     assert matches == {} and report["unresolved"] == ["Cameron Young"]
     assert report["espn_field_size"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Has anybody teed off -- the gate everything that ranks is behind
+# ---------------------------------------------------------------------------
+
+def test_a_posted_field_with_no_positions_has_not_started(espn_pre_payload):
+    """
+    The measurement the whole program was re-shaped around, held in place.
+
+    The real 2026 Wyndham leaderboard, captured 2026-08-04 for a tournament starting on
+    the 6th: a complete field, with athlete ids and headshots and tee times, and not one
+    position in it. So "there are players in this payload" stopped meaning "this
+    tournament is under way", and everything that ranks is gated on this instead.
+    """
+    meta, players = espn.parse_leaderboard(espn_pre_payload)
+    assert meta["state"] == "pre"
+    assert len(players) == 147
+    assert all(p["athlete_id"] and p["name"] for p in players), "joinable"
+    assert all(p["position_number"] is None for p in players), "not rankable"
+    assert meta["started"] is False
+
+
+def test_play_under_way_and_a_finished_tournament_have_both_started(espn_payload,
+                                                                    espn_final_payload):
+    assert espn.parse_leaderboard(espn_payload)[0]["started"] is True
+    assert espn.parse_leaderboard(espn_final_payload)[0]["started"] is True
+
+
+def test_either_signal_is_enough_and_neither_is_required_of_the_other():
+    """
+    Two signals, either sufficient, because they fail in opposite directions.
+
+    `state` is ESPN's own answer and is read off the event envelope, so a payload with a
+    missing or stale envelope would otherwise blank a board that is plainly live. A
+    golfer holding a real position is proof from the field itself. Requiring both would
+    lose a good board on a bad envelope; requiring neither is what this exists to
+    prevent.
+    """
+    positionless = [{"position_number": None}, {"position_number": None}]
+    assert espn.has_started("in", positionless) is True
+    assert espn.has_started("post", positionless) is True
+    assert espn.has_started("pre", positionless) is False
+    assert espn.has_started(None, positionless) is False
+    # One real position is enough on its own, whatever the envelope says.
+    assert espn.has_started(None, [{"position_number": None}, {"position_number": 4}]) is True
+    assert espn.has_started("pre", [{"position_number": 1}]) is True
+    # An empty field has not started and cannot be ranked either way.
+    assert espn.has_started("pre", []) is False
 
 
 # ---------------------------------------------------------------------------

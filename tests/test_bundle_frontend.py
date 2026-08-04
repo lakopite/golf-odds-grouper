@@ -27,10 +27,10 @@ def result():
 
 @pytest.fixture
 def live_result():
-    """The same competition once ESPN has published a field, so the page has scoring."""
-    from test_build_competition import golfer_name, live_stage, make_result
+    """The same competition built once play is under way, rather than the night before."""
+    from test_build_competition import espn_stage, golfer_name, make_result
     return make_result(n_teams=3, n_golfers=20,
-                       espn=live_stage([golfer_name(i) for i in range(20)]))
+                       espn=espn_stage([golfer_name(i) for i in range(20)], started=True))
 
 
 @pytest.fixture
@@ -321,30 +321,52 @@ def test_the_zip_carries_the_page_the_data_and_a_manifest(live_result, template,
     assert live_result["live"]["espn_leaderboard_url"] in manifest
 
 
-def test_the_manifest_does_not_promise_scoring_a_groups_page_cannot_do(result, template,
-                                                                      tmp_path):
+def test_the_manifest_says_the_page_starts_ranking_by_itself(result, template, tmp_path):
     """
     The manifest travels inside the zip and is the only thing in there that says what
-    the page does. A groups page fetches nothing at all, so a manifest naming a
-    leaderboard endpoint and announcing live scores is a lie that ships -- and one
-    nothing would catch, because prose does not raise.
+    the page does. A page built the night before shows the draw when it is opened, and
+    somebody who is handed one needs to know that it turns into a scoreboard on its own
+    rather than that it is broken or that a second file is coming.
 
-    The failure it causes is somebody waiting all afternoon for a number to appear.
+    The failure this prevents is somebody waiting all afternoon for a number that was
+    always going to arrive, or asking for a rebuild that does nothing.
     """
     paths, _ = bundler.bundle(result, template, str(tmp_path / "out"))
     with zipfile.ZipFile(paths[1]) as z:
         manifest = z.read("MANIFEST.txt").decode()
-    assert "build mode      groups" in manifest
-    assert "It fetches NOTHING" in manifest
-    assert "espn.com" not in manifest
-    assert "live scoring    none" in manifest
+    assert "build mode" not in manifest
+    assert "It fetches NOTHING" not in manifest
+    assert "espn.com" in manifest, "the page polls from the moment it opens"
+    assert "not started yet" in manifest
+    assert "starts ranking on its own" in manifest
 
 
-def test_a_groups_result_bundles_without_a_half_written_directory(result, template, tmp_path):
+def test_a_result_from_before_the_field_was_published_is_refused(result, template, tmp_path):
     """
-    The manifest is written after the HTML, so anything in it that assumed a live build
-    used to fail with the page already on disk -- a dist/ directory holding a scoreboard
-    and no zip, plus a traceback pointing at the bundler rather than at the result.
+    The one migration guard, and it lives here because this is the only place a result
+    file re-enters the program from disk.
+
+    A pre-4.0 file built ahead of the first tee time has `live: null`. The shipped
+    templates read `DATA.live` at the top of the script, so bundling one produces a page
+    that dies before it draws anything -- an empty skeleton, in a zip, with a manifest
+    describing a working scoreboard. Refusing costs one rebuild and names it.
+    """
+    legacy = json.loads(json.dumps(result))
+    legacy["schema_version"] = "3.0"
+    legacy["live"] = None
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit) as exc:
+        bundler.bundle(legacy, template, str(out))
+    assert "--from-result" in str(exc.value)
+    assert not out.exists(), "nothing half-written, not even the html"
+
+
+def test_a_result_bundles_without_a_half_written_directory(result, template, tmp_path):
+    """
+    The manifest is written after the HTML, so anything in it that assumed a different
+    build used to fail with the page already on disk -- a dist/ directory holding a
+    scoreboard and no zip, plus a traceback pointing at the bundler rather than at the
+    result.
     """
     out = tmp_path / "out"
     paths, report = bundler.bundle(result, template, str(out))

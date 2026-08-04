@@ -253,6 +253,31 @@ def substitute_tokens(markup, result):
     return _TOKEN_RE.sub(lambda m: html.escape(values.get(m.group(1), m.group(0))), markup)
 
 
+def require_scoreable(result):
+    """
+    Refuse a result file the shipped templates cannot render.
+
+    This is the one place a result file re-enters the program from disk, so it is where
+    a file from an older schema gets caught. Before 4.0 a build made ahead of the first
+    tee time wrote `live: null` and `espn: null` on every golfer, and the pages of that
+    era checked for it. The pages of this era do not -- there is no such file any more,
+    so they read `DATA.live` at the top and would die on the null before `start()` was
+    even defined, leaving an empty skeleton and a manifest describing a working page.
+
+    Failing here instead costs one rebuild and says which one.
+    """
+    if result.get("live"):
+        return
+    raise SystemExit(
+        f"this result file has no `live` block (schema_version "
+        f"{result.get('schema_version', 'unknown')}), so it was built before ESPN "
+        "published a field and carries no ESPN athlete id for anybody.\n"
+        "Pages built from it could never score, and the current templates cannot render "
+        "it at all. ESPN now posts a field about two days before the first round, so "
+        "rebuilding fills that half in without touching the draw:\n"
+        "    python build_competition.py --from-result <this file> --output <this file>")
+
+
 def bundle(result, template_dir, out_dir, basename=None, keep_result=True, leagues_dir=None):
     """
     Build the page and the zip. Returns the paths written.
@@ -265,6 +290,8 @@ def bundle(result, template_dir, out_dir, basename=None, keep_result=True, leagu
     The art is the one thing the page has and that JSON does not, and the copy written
     to the zip is the one that was handed in -- untouched, slug and all.
     """
+    require_scoreable(result)
+
     index = os.path.join(template_dir, "index.html")
     if not os.path.exists(index):
         raise SystemExit(f"template {template_dir} has no index.html")
@@ -320,33 +347,35 @@ def manifest(result, report):
     """
     What is in the zip, and -- the part worth getting right -- what the page does.
 
-    A groups page and a live page are different artifacts and the manifest travels with
-    them, so it says which one this is rather than describing the live page twice. A
-    manifest that promises live scoring on a page built before the field existed is the
-    kind of wrong that makes somebody wait all afternoon for a number to appear.
+    The manifest travels with the page, and the thing it has to be right about is when
+    the page starts ranking. That is a question about the clock rather than about this
+    build: a competition drawn the night before is complete, and it shows the draw
+    until the first tee time and then ranks, by itself, with nothing re-run.
     """
     k = result["sources"]["kalshi"]
     g = result["grouping"]
-    live = result.get("live")
-    scoring = ([f"live scoring    {live['espn_leaderboard_url']}"] if live else
-               ["live scoring    none -- built before ESPN published a field"])
+    live = result.get("live") or {}
+    started = bool((result["sources"].get("espn") or {}).get("started_at_build"))
+    scoring = [f"live scoring    {live.get('espn_leaderboard_url')}"
+               + ("" if started else "  (not started yet -- see below)")]
     # The one thing the page holds that the result.json beside it does not, and most of
     # the page's weight. Named file by file, so a heavy export says where the bytes went.
     art = [f"league art      {name}  {path}  ({size // 1024} KB)"
            for name, path, size in report.get("art") or []]
     behaviour = ([
         "ESPN is the only thing it fetches, and it fetches it for the scores.",
-    ] if live else [
-        "It fetches NOTHING. The tournament had not started when this was built,",
-        "so ESPN had published no field and there is nothing to score against.",
-        "Rebuild once play begins for a page that ranks.",
+    ] if started else [
+        "ESPN is the only thing it fetches. Play had not started when this was",
+        "built, so the page opens on the draw -- every roster, every price, no",
+        "ranking. It polls from the moment it opens and starts ranking on its own",
+        "at the first tee time. Nothing needs rebuilding and nobody needs the link",
+        "again.",
     ])
     return "\n".join([
         f"{result['league']['league_name']} -- {result['tournament']['name']}",
         f"{k['market_label']} ({k['odds_type']}), priced off the {k['price_mode']}",
         "",
         f"competition_id  {result['competition_id']}",
-        f"build mode      {result.get('build_mode', 'live')}",
         f"built           {result['generated_at']}",
         f"tool            {result['generator']['tool']} @ {result['generator']['git_commit']}",
         f"seed            {result['generator']['seed']}",

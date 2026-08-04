@@ -78,11 +78,17 @@ python bundle_frontend.py --result build/result.json --template frontend/mine --
 
 Everything else is taste. These are not:
 
-- **Branch on `DATA.live` once.** Null means the page was built before ESPN published a
-  field: it is a groups sheet, it fetches nothing, and it ranks nothing. Non-null means
-  poll, join on `golfers[].espn.athlete_id`, and rank.
-- **Never rank an empty board.** A live page can be handed zero competitors any
-  afternoon — ESPN down, a payload refused for the wrong event, a first poll still in
-  flight. Show every roster and every price; show no positions.
+- **Rank only when `meta.started` is true.** ESPN posts a tournament's field about two
+  days before the first round and gives every one of those golfers position `"-"`, so
+  a page is handed a complete, joinable, unrankable board for the first day or two of
+  its life. Ranking it produces a full league table ordered by ESPN's pre-tournament
+  sort — with a leader and tie-breaks, and entirely invented. `GolfPool.hasStarted` is
+  the question; ask it on every poll, and relabel the page from what it answers, because
+  the changeover happens while somebody is looking at it.
+- **Never rank an empty board.** Separately from the above, the page can be handed zero
+  competitors any afternoon — ESPN down, a payload refused for the wrong event, a first
+  poll still in flight. Show every roster and every price; show no positions. The draw
+  is baked in, so a page with no network at all still opens and still says everything
+  that was decided at the draw.
 - **Say the odds are a snapshot.** Kalshi 403s every browser origin, so the page cannot
   fetch odds and never tries. The prices are the ones the groups were drawn on, dated.

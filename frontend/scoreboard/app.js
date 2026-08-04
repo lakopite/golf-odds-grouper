@@ -11,24 +11,25 @@
  * page and ESPN is the only host it ever asks for anything -- the only one that will
  * answer a browser at all (see docs/FRONTEND-SPEC.md §4 on Kalshi's origin allowlist).
  *
- * TWO PAGES, ONE FILE
- * -------------------
- * `DATA.live` is null when the competition was built before ESPN published a field.
- * That page is a groups sheet: teams, rosters, the odds the groups were drawn on, and
- * no network of any kind. It is not a scoreboard waiting for a fetch to succeed --
- * there is nothing to fetch, because the field does not exist yet.
+ * TWO PAGES, ONE FILE, AND THE CLOCK DECIDES WHICH
+ * ------------------------------------------------
+ * This page is built the night before, when ESPN has posted the field but nobody has
+ * teed off. So it opens as the groups sheet -- every team, every roster, the odds the
+ * groups were drawn on, nothing ranked -- and it becomes a scoreboard by itself, at
+ * the first tee time, while it is sitting open. Nothing is rebuilt and nobody is sent
+ * a new link. It is one page that starts early.
  *
- * `DATA.live` non-null means the field existed at build time and every golfer the join
- * settled carries an ESPN athlete id. That page polls, joins on the id, and ranks.
+ * That works because a field is joinable long before it is rankable. ESPN posts the
+ * competitors about two days out and gives them no positions until play starts, so
+ * every golfer's athlete id is already baked in on Wednesday and the only thing
+ * missing is scores. `meta.started` off each poll is what says whether they have
+ * arrived; `ranked()` below is where this file asks, and it is the only thing here
+ * that decides whether a position ever appears on screen.
  *
- * AND ONE MORE STATE THAT IS NEITHER
- * ----------------------------------
- * A live page can be holding an empty board any afternoon of the week: ESPN down, a
- * payload refused for the wrong event, a first poll still in flight. It then renders
- * exactly like the groups sheet -- every roster, every price, no ranking -- and the
- * status pill says which of the reasons it is, in four words rather than a paragraph.
- * `ranked()` below is that distinction, and it is the only thing in this file that
- * decides whether a position ever appears on screen.
+ * The same branch covers the afternoons when there is nothing to show for a worse
+ * reason: ESPN down, a payload refused for the wrong event, a first poll still in
+ * flight. All of them render the draw, and the status pill says which one it is in
+ * four words rather than a paragraph.
  *
  * ONE PRICE PER GOLFER
  * --------------------
@@ -54,8 +55,9 @@ var ART = (function () {
   catch (e) { return {}; }
 })();
 
-/* The whole of the difference between the two pages above. */
-var LIVE = DATA.live || null;
+/* Where the page polls and what it will accept back. Always present since schema 4.0
+ * -- a competition cannot be built without a published ESPN field. */
+var LIVE = DATA.live;
 
 var GOLFERS_BY_TEAM = new Map();
 DATA.golfers.forEach(function (g) {
@@ -74,7 +76,7 @@ var STATE = {
   lastGood: null
 };
 
-var POLL_SECONDS = (LIVE && LIVE.poll_interval_seconds) || 60;
+var POLL_SECONDS = LIVE.poll_interval_seconds || 60;
 
 /* Older than three polls with nothing new is stale rather than live, and saying so is
  * cheaper than being quietly wrong on a Sunday. */
@@ -104,10 +106,10 @@ function resolvePlayer(golfer) {
 
 function pct(v, places) { return v == null ? '—' : (v * 100).toFixed(places === undefined ? 2 : places) + '%'; }
 
-/* The strongest golfer in the field, for the weight bars on a groups sheet. That page
- * has no scores to show, and a column of percentages is a column of percentages; the
- * bar is what makes "these two groups are worth the same" visible at a glance, which is
- * the only claim the page is making before anybody tees off. */
+/* The strongest golfer in the field, for the weight bars on the draw. With no scores
+ * to show, a column of percentages is a column of percentages; the bar is what makes
+ * "these two groups are worth the same" visible at a glance, which is the only claim
+ * the page is making before anybody tees off. */
 var MAX_WEIGHT = DATA.golfers.reduce(function (m, g) {
   return Math.max(m, g.odds.grouping_weight || 0);
 }, 0);
@@ -145,6 +147,19 @@ function fmtDelta(v) {
   return n >= 0.000001 ? n.toFixed(6) : n.toExponential(1);
 }
 
+/* When the first round starts, for the pill that has to explain why nothing is ranked
+ * yet. Off the baked tournament dates rather than off ESPN, because it is a fact the
+ * file already states and the page should not need a poll to answer it. Near enough is
+ * the point: "Thursday" is what somebody is actually asking. */
+function teeOff() {
+  var d = stamp(DATA.tournament.start);
+  if (!d) return null;
+  var days = Math.round((d.getTime() - Date.now()) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'tomorrow';
+  return d.toLocaleDateString(undefined, { weekday: 'long' }) + ', ' + shortDate(d);
+}
+
 function since(d) {
   var s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
   if (s < 60) return s + 's ago';
@@ -166,7 +181,19 @@ function initials(name) {
  * The one thing that decides whether a position appears
  * ------------------------------------------------------------------ */
 
-function ranked() { return !!LIVE && STATE.players.length > 0; }
+/* Both halves are load-bearing and neither implies the other.
+ *
+ * `players.length` is "did a poll come back at all" -- false while the first one is in
+ * flight, or when ESPN is down, or when a payload was refused for the wrong event.
+ *
+ * `meta.started` is "has anybody teed off". ESPN posts the whole field about two days
+ * early with every player at position "-", so a payload can be complete, correct and
+ * entirely unrankable. Ranking it anyway would order the league by ESPN's
+ * pre-tournament sort and present that as a leaderboard, which is a worse answer than
+ * saying the tournament has not started. See GolfPool.hasStarted. */
+function ranked() {
+  return STATE.players.length > 0 && !!(STATE.meta && STATE.meta.started);
+}
 
 /* ------------------------------------------------------------------ *
  * Masthead. Baked data only, so it is drawn once.
@@ -204,9 +231,6 @@ function renderBrand() {
   var when = dateRange(DATA.tournament.start, DATA.tournament.end);
   if (when) bits.push(when);
   $('event-sub').textContent = bits.join(' · ');
-
-  $('nav-standings-label').textContent = LIVE ? 'Standings' : 'Groups';
-  $('standings-heading').textContent = LIVE ? 'Standings' : 'Groups';
 }
 
 /* ------------------------------------------------------------------ *
@@ -217,10 +241,6 @@ function renderBrand() {
  * ------------------------------------------------------------------ */
 
 function statusView() {
-  if (!LIVE) {
-    return { cls: '', label: 'Not started',
-             note: 'Built before the field posted · this page fetches nothing' };
-  }
   var good = STATE.lastGood;
   if (STATE.error) {
     return { cls: 'is-down', label: 'ESPN unreachable',
@@ -239,12 +259,22 @@ function statusView() {
     return { cls: 'is-stale', label: 'Stale',
              note: 'ESPN last answered ' + since(good) + ' · retrying every ' + POLL_SECONDS + 's' };
   }
-  // ESPN answering with an empty field is a working page and a tournament that has not
-  // begun, not a live board. A green dot over no positions reads as a page that has
-  // broken rather than one that is early.
-  if (!STATE.players.length) {
+  // The ordinary state of a page for the first day or two of its life: ESPN is
+  // answering, the field is posted, and nobody has hit a ball. That is a working page
+  // and an early one, not a live board -- a green dot over no positions reads as
+  // something broken. The pill says when play starts, because that is the only
+  // question this state raises and the page already knows the answer.
+  if (!meta.started) {
+    var tee = teeOff();
     return { cls: '', label: 'Not started',
-             note: 'ESPN answered ' + since(good) + ' with no field yet · retrying every '
+             note: (tee ? 'First round ' + tee : 'The tournament has not started')
+                   + ' · ranking begins on its own, no refresh needed' };
+  }
+  // Answering, under way, and still nothing to show: a payload with no competitors in
+  // it at all. Rare, and not the same thing as being early.
+  if (!STATE.players.length) {
+    return { cls: 'is-stale', label: 'No field',
+             note: 'ESPN answered ' + since(good) + ' with an empty field · retrying every '
                    + POLL_SECONDS + 's' };
   }
   return { cls: 'is-live', label: 'Live',
@@ -264,7 +294,7 @@ function renderStatus() {
 
 /* One golfer, ready to draw. `player` is null before the first tee time and for anyone
  * who never teed off, and the row still has to say who they are and what they were
- * worth -- a roster does not shrink because the leaderboard has not opened.
+ * worth -- a roster does not shrink because the leaderboard has not opened yet.
  *
  * Those two nulls are different, which is why "out" is conditioned on the board
  * existing: once it does, a golfer with no player is a golfer who is not playing and
@@ -274,7 +304,15 @@ function golferView(golfer, player, isRanked) {
   var espn = golfer.espn || null;
   var tag = '';
   if (isRanked && !madeCut) {
-    if (player) tag = player.statusShort || 'CUT';
+    // A golfer with a row but no position has either finished with the tournament or
+    // not started it, and the board is open for hours while both are true -- the
+    // afternoon wave of round one sits here every Thursday morning. Measured: ESPN
+    // marks them STATUS_SCHEDULED and puts their tee time in `statusShort` as a raw ISO
+    // timestamp, where CUT and WD golfers get "CUT" and "WD". So the scheduled ones are
+    // named rather than printed: a chip reading "2026-08-06T18:00:00Z" beside a name
+    // says less than one reading "tees off later".
+    if (player) tag = player.status === 'STATUS_SCHEDULED' ? 'tees off later'
+                                                          : (player.statusShort || 'CUT');
     else if (!espn) tag = 'no join';
     else if (espn.match === 'absent') tag = 'not in field';
     else if (espn.match === 'unresolved') tag = 'unresolved';
@@ -500,9 +538,16 @@ function renderStandings() {
   var rows = isRanked ? liveRows() : drawRows();
   var meta = STATE.meta || {};
 
+  /* Both of these used to be drawn once, in the masthead, off a build-time flag. They
+   * are redrawn on every poll now because the page relabels itself the moment play
+   * starts -- a tab left open on Wednesday night says "Groups" and is saying
+   * "Standings" by Thursday lunchtime without anybody touching it. */
+  $('nav-standings-label').textContent = isRanked ? 'Standings' : 'Groups';
+  $('standings-heading').textContent = isRanked ? 'Standings' : 'Groups';
+
   /* A few words, not a paragraph. Which of the several ways there is nothing to rank
-   * yet -- ESPN down, wrong event, no field posted, built before the tournament -- is
-   * the status pill's job, and it says it in two words at the top of the page. Saying
+   * yet -- the tournament has not started, ESPN is down, the payload was for the wrong
+   * event -- is the status pill's job, and it says it in two words up the page. Saying
    * it twice, the second time at length, read as an apology for a page that was
    * working exactly as built. */
   $('standings-sub').textContent = isRanked
@@ -797,9 +842,11 @@ function poll() {
     .then(render);
 }
 
-/* One loop, one endpoint -- or no loop at all. A groups page has `live: null`, which is
- * not a missing setting to work around but the build saying there was no field to score
- * against. It renders once, from data it already has, and stops. */
+/* One loop, one endpoint, always running. The page polls from the moment it opens even
+ * when the tournament is days away, because the poll is how it finds out that it is
+ * not any more -- that is the whole mechanism by which a groups sheet turns into a
+ * scoreboard with nobody rebuilding anything. Until then every poll costs one small
+ * GET and changes nothing on screen. */
 function start() {
   renderBrand();
   showView('standings');
@@ -813,7 +860,6 @@ function start() {
     if (button) showView(button.dataset.view);
   });
 
-  if (!LIVE) return;
   poll();
   setInterval(poll, POLL_SECONDS * 1000);
   // The pill's wording is relative to now, so it has to be redrawn by the clock rather

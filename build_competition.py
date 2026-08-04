@@ -16,36 +16,43 @@ later is in it too: which endpoints were read, when, at what prices, who was
 excluded and why, and how good the partition was. Nothing in the frontend re-derives
 a number that this file already states.
 
-TWO BUILDS, AND THE ESPN LEADERBOARD DECIDES WHICH
----------------------------------------------------
-ESPN publishes ZERO competitors until the first tee time. That single fact splits
-this program in half, and the split is read off the payload rather than off a flag:
+ONE BUILD, THE NIGHT BEFORE
+---------------------------
+Both APIs are posted by Wednesday night, so one run does the whole job.
 
-  groups   ESPN has published no field. There is nobody to join the Kalshi names
-           against and no score to show, so the build does not try: no ESPN block on
-           any golfer, `live` is null, and the page that gets built fetches nothing
-           at all. What it has is everything that is already decided -- the teams,
-           the groups, and the odds the groups were drawn on. That is a complete,
-           deployable, honest artifact: it is the groups sheet, and the groups sheet
-           is what exists on Wednesday.
+Kalshi posts winner markets Sunday ~23:00Z of tournament week and keeps ADDING them
+through Wednesday as the field firms up. ESPN posts its field about two days before
+the first round -- measured 2026-08-04 against the Wyndham, whose first round was the
+6th: 147 competitors with athlete ids, headshots and tee times, while the event was
+still `pre`. So Wednesday night is the first moment both are complete, and it is also
+when a pool wants to be drawn. The timings agree; there is nothing to work around.
 
-  live     ESPN has published a field. Now the Kalshi names can be joined against
-           THIS week's actual competitors, every match is against a person who is
-           really in this tournament, and the page can rank. A golfer the join does
-           not resolve carries no athlete id, scores nothing and is not counted --
-           and, crucially, is NAMED, so the gap is a thing somebody can close rather
-           than a silence.
+    python build_competition.py --league ... --tournament ...   # and that is it
 
-So the normal week is two runs of this program against one competition: build the
-groups before the tournament, rebuild once it starts.
+This did not use to be true. ESPN published zero competitors until the first tee time,
+which split the program in half: a Wednesday "groups" build that could join no names
+and score nothing, and a Thursday rebuild that turned it into a scoreboard. Both modes
+are gone, along with `build_mode` itself. A build now joins the Kalshi field onto the
+real ESPN one and writes an athlete id for every golfer it settles, so the page has
+everything it needs before anyone tees off.
 
-    python build_competition.py --league ... --tournament ...   # Wednesday, groups
-    python build_competition.py --from-result build/result.json # Thursday, live
+WHICH LEAVES ONE DISTINCTION, AND IT MOVED TO THE PAGE
+------------------------------------------------------
+A field is joinable long before it is rankable. A `pre` payload lists all 147 players
+and gives not one of them a position, so nothing built on Wednesday can rank anything
+-- but nothing needs to be rebuilt for it to start. The exported page polls ESPN,
+reads `started` off the payload, shows the draw until somebody tees off and ranks from
+then on. The transition happens in the browser, on its own, while the page is open.
+
+That is the whole of what the second build used to do, and it is now free.
+
+A golfer the join does not resolve carries no athlete id, scores nothing, and is
+NAMED, so the gap is something somebody can close rather than a silence.
 
 SETTLING THE NAMES THE JOIN WILL NOT GUESS AT
 ----------------------------------------------
 The join is exact and explicit in all three of its tiers -- there is no fuzzy match,
-for the reasons in espn_leaderboard's docstring -- so a live build leaves a handful of
+for the reasons in espn_leaderboard's docstring -- so a build leaves a handful of
 names open. It writes them to a review file, each beside the ESPN athletes nobody
 claimed and a ranked suggestion or two, and the next build reads that file back and
 applies whatever has been filled in. See match_review.py. The review is the step a
@@ -61,11 +68,16 @@ next build of it:
 
 That reads the league, the tournament on both APIs, the market, the price mode, the
 hand-picked exclusions, the seed and any reviewed name decisions out of the file,
-carries the groups and the odds at creation forward untouched, and redoes the parts
-that have a "now" -- above all the ESPN join, which is the whole difference between
-the two builds above. It does not re-read the odds, ever: they were read once, when
-the groups were drawn, and that reading is the competition. `--regroup` is the one
-that deals again, and it says so.
+carries the groups and the odds at creation forward untouched, and redoes the ESPN
+join. It does not re-read the odds, ever: they were read once, when the groups were
+drawn, and that reading is the competition. `--regroup` is the one that deals again,
+and it says so.
+
+A rebuild is no longer part of a normal week -- the page ranks by itself once play
+starts, so nothing has to be re-run to make scoring appear. What it is for now is
+settling names: fill in the review file and rebuild, and the golfers the join would
+not guess at get their athlete ids. Also a late withdrawal, a redraw, or an ESPN
+event that was pinned wrong the first time.
 
 WHY IT ALL GOES IN ONE FILE
 ---------------------------
@@ -142,7 +154,17 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # inlines them into the one artifact that has to be portable. The exported page is
 # unchanged -- still a single file with nothing to fetch. A 2.x file rebuilds, and its
 # inlined art is dropped with a line saying so; name the slug and it comes back.
-SCHEMA_VERSION = "3.0"
+# 4.0 REMOVED `build_mode`, and with it the half of this file that could be null. ESPN
+# now posts the field about two days before the first round (measured 2026-08-04 on the
+# Wyndham: 147 competitors while the event was still `pre`), so the premise 2.0 split
+# the file on -- no field before the first tee time -- is simply no longer true. There
+# is one kind of build. `live` and `golfers[].espn` are ALWAYS objects; a reader no
+# longer has to check which document it is holding before reading it. The distinction
+# the mode used to carry did not disappear, it moved to where it belongs: the page asks
+# the leaderboard whether anybody has teed off and shows the draw until somebody has.
+# A 3.x file rebuilds into a 4.0 one, and a groups-mode 3.x file gains the ESPN half it
+# never had. Nothing was added; this version is strictly smaller than the last.
+SCHEMA_VERSION = "4.0"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -232,72 +254,95 @@ def resolve_espn_event(query, season, league="pga"):
 # The ESPN join
 # ---------------------------------------------------------------------------
 
-def read_espn_field(args, espn_event):
+def read_espn_field(args, espn_event) -> tuple:
     """
-    This week's ESPN field, and the build mode it decides.
-    -> (mode, meta, players, error).
+    This week's ESPN field. -> (meta, players).
 
-    "live" the moment ESPN lists a single competitor, "groups" until then. Read off the
-    payload rather than off the event's `state` string, because the field is the thing
-    that actually gates the work: a build can only join names against competitors that
-    exist, whatever ESPN is currently calling the event.
+    A published field is a PRECONDITION of building, not a mode selector. ESPN posts it
+    about two days before the first round, so any run made when a pool is actually
+    drawn -- the night before -- has one to read. Not finding one means something is
+    wrong with this run, and the three things it can be are worth telling apart, so
+    they get three different sentences.
 
-    An ESPN that cannot be reached at all yields "groups" too, and that is the right
-    outcome for a FIRST build: a groups build is complete and correct on its own terms,
-    where a live build missing its leaderboard would be a scoreboard with every golfer
-    unresolved, which reads as 150 withdrawals. It is emphatically NOT the right
-    outcome for a rebuild of a competition that already had a field -- see
-    refuse_downgrade, which is where that gets caught.
+    This is deliberately fatal. It used to fall back to a groups sheet, which was the
+    right answer when a Wednesday field genuinely did not exist yet; now it would hand
+    somebody a page that can never score, built from a failed read, on a night when the
+    field was there for the asking. Stopping costs one re-run. The alternative costs
+    the scoreboard, silently.
 
-    Returns the error as well, because "ESPN published nothing" and "ESPN did not
-    answer" are the same empty list and completely different facts.
+    A rebuild gets one extra sentence, and it is the important one. Somebody whose
+    tournament is halfway through its final round and whose rebuild just died needs to
+    be told, in the same breath, that their existing file is untouched -- otherwise the
+    reasonable reading of any error here is "the scoreboard is gone".
     """
-    meta, players, error = None, [], None
-    if espn_event:
-        try:
-            payload = espn_leaderboard.fetch_leaderboard(espn_event["event_id"], args.espn_league)
-            meta, players = espn_leaderboard.parse_leaderboard(payload)
-        except Exception as exc:                   # noqa: BLE001 -- reported, not fatal here
-            error = str(exc)
-            print(f"!! could not read the ESPN leaderboard: {exc}", file=sys.stderr)
-    else:
-        error = "no ESPN event was resolved for this tournament"
+    intact = ("\nNothing has been written: " + args.from_result + " is untouched and still "
+              "correct." if args.from_result else "")
 
-    state = (meta or {}).get("state") or (espn_event or {}).get("state") or "unknown"
-    if players:
-        print(f"ESPN:    {len(players)} competitors in the field [{state}] -- building with "
-              "live scoring")
-    elif error:
-        print("ESPN:    unreadable -- building the groups only. Nothing is scored.")
-    else:
-        print(f"ESPN:    no field published [{state}] -- normal before the first tee time. "
-              "Building the groups; re-run --from-result once play starts to add scoring.")
-    return ("live" if players else "groups"), meta, players, error
+    if not espn_event:
+        raise SystemExit(
+            "no ESPN event was resolved for this tournament, so there is no field to join "
+            "the Kalshi names against and nothing this competition could ever score.\n"
+            "Find the event id with `python espn_leaderboard.py --season <year> --find "
+            "<name>` and pass it as --espn-event <id>." + intact)
+
+    try:
+        payload = espn_leaderboard.fetch_leaderboard(espn_event["event_id"], args.espn_league)
+        meta, players = espn_leaderboard.parse_leaderboard(payload)
+    except Exception as exc:                       # noqa: BLE001 -- turned into a clean exit
+        raise SystemExit(
+            f"could not read the ESPN leaderboard for event {espn_event['event_id']}: {exc}\n"
+            "The field is what every golfer's athlete id comes from, so a build without it "
+            "would produce a page that can never score, and this run has stopped rather than "
+            "write one. Try again." + intact)
+
+    state = (meta or {}).get("state") or espn_event.get("state") or "unknown"
+    if not players:
+        raise SystemExit(
+            f"ESPN lists no competitors for event {espn_event['event_id']} [{state}].\n"
+            "ESPN posts a tournament's field about two days before the first round, so an "
+            "empty field usually means one of three things: the event id is wrong (check it "
+            "with `python espn_leaderboard.py --season <year> --find <name>`), this is being "
+            "run more than a couple of days out, or ESPN is having a bad morning. All three "
+            "are worth fixing before drawing a pool -- the athlete ids in this join are the "
+            "only key the exported page has." + intact)
+
+    # Said out loud because it is the one thing about this run that the clock decides.
+    # A build made the night before is correct and complete and still cannot rank
+    # anything, and a reader who does not know that reads the page as broken.
+    print(f"ESPN:    {len(players)} competitors in the field [{state}]"
+          + ("" if meta.get("started") else
+             " -- not started, so the page shows the draw until the first tee time and "
+             "ranks from then on by itself"))
+    return meta, players
 
 
-def refuse_downgrade(espn, prior_mode, source_file):
+def check_pinned_event(espn_event, meta, tournament_name, pinned):
     """
-    Refuse to rebuild a live competition into a groups sheet.
+    A pinned `--espn-event` names its own tournament. Say so if it is a different one.
 
-    Once ESPN has published a field it does not unpublish it, so a rebuild that finds
-    no field where the last one found 150 competitors has not learned something -- it
-    has failed to ask. Writing the file anyway would null `live` and every golfer's
-    athlete id, and the page built from it would show a finished tournament as "not
-    started yet": a total loss of the scoreboard, presented as a normal build.
+    This got more dangerous rather than less. A wrong id used to produce an obviously
+    empty groups build most weeks, because most weeks the pinned event had no field
+    posted either; now any id with competitors on it builds a complete, confident,
+    entirely wrong scoreboard, joined against the wrong 150 people. Nothing downstream
+    can tell -- every number in the file is internally consistent.
 
-    A rebuild is cheap and repeatable, so the right move is to stop. The previous
-    result file is untouched and still correct.
+    A note rather than a refusal, because the name match is fuzzy and the pin is the
+    override of last resort: somebody pinning an id has usually just been let down by
+    the name lookup, and refusing on the same lookup would leave them nowhere.
     """
-    if prior_mode != "live" or espn["mode"] == "live":
+    if not pinned or not meta:
         return
-    raise SystemExit(
-        f"{source_file} was built with a published ESPN field, and this run found none"
-        + (f" ({espn['error']})" if espn["error"] else " (ESPN returned zero competitors)")
-        + ".\nESPN does not withdraw a field once it has posted it, so this is a failed "
-        "read rather than a change in the world. Rebuilding on it would produce a page "
-        "with no scoring at all and no sign that anything went wrong, so nothing has been "
-        "written -- the file you passed is untouched and still correct. Try again, or pass "
-        "--espn-event <id> if the event lookup is what is failing.")
+    found = meta.get("event")
+    if not found or not tournament_name:
+        return
+    if espn_leaderboard.score_name(tournament_name, found) > 0:
+        return
+    print(f"!! --espn-event {espn_event['event_id']} is ESPN's {found!r}, and the Kalshi "
+          f"event is {tournament_name!r}. Those do not look like the same tournament.\n"
+          "   Every golfer in this build is about to be joined against that field, and a "
+          "build against the wrong one comes out looking completely normal. Check the id "
+          "with `python espn_leaderboard.py --season <year> --find <name>` before handing "
+          "the page over.", file=sys.stderr)
 
 
 def join_field(names, players, aliases, decisions):
@@ -336,12 +381,12 @@ def join_field(names, players, aliases, decisions):
 def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament_name,
                aliases, recorded_decisions=None):
     """
-    The whole ESPN half of a build: read the field, let it decide the mode, join what
-    there is to join, and assemble the review of whatever is left over.
+    The whole ESPN half of a build: read the field, join it, and assemble the review of
+    whatever is left over.
 
     Shared verbatim by build() and rebuild(), because the ESPN side of a competition
-    depends on the tournament and on the clock and on nothing either of them decided.
-    That is the entire reason a rebuild exists: same draw, later clock.
+    depends on the tournament and on nothing the pool decided. That is why a rebuild
+    can settle a name without touching the draw.
 
     Reviewed decisions come from two places and both are wanted. The result file
     carries the ones already applied, so a rebuild does not re-ask a question somebody
@@ -350,11 +395,9 @@ def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament
     in this Kalshi field are dropped -- they are left over from a different draw and
     binding them would be binding somebody else's competition.
     """
-    mode, meta, players, error = read_espn_field(args, espn_event)
+    meta, players = read_espn_field(args, espn_event)
+    check_pinned_event(espn_event, meta, tournament_name, args.espn_event)
     event_id = (espn_event or {}).get("event_id")
-    if mode == "groups":
-        return {"mode": mode, "meta": meta, "players": players, "matches": {},
-                "report": None, "decisions": {}, "review": None, "error": error}
 
     path = match_review.review_path(args.output, args.match_review)
     from_file, notes = match_review.load(path, event_id)
@@ -380,8 +423,8 @@ def espn_stage(args, espn_event, field, weight_by_name, team_name_of, tournament
 
     matches, report = join_field(names, players, aliases, decisions)
     return {
-        "mode": mode, "meta": meta, "players": players, "matches": matches,
-        "report": report, "decisions": decisions, "error": error,
+        "meta": meta, "players": players, "matches": matches,
+        "report": report, "decisions": decisions,
         "review": {
             "path": path,
             "tournament": tournament_name,
@@ -456,21 +499,7 @@ def resolve_exclusions(golfers, n_groups, named, auto):
 # The build
 # ---------------------------------------------------------------------------
 
-def prior_build_mode(result):
-    """
-    The mode a previous result file was built in.
-
-    Files written before 2.0 carry no `build_mode` and have to be inferred, which is
-    exact rather than a guess: they recorded the ESPN field size at build time, and
-    having a field is the whole of what the mode means.
-    """
-    if result.get("build_mode"):
-        return result["build_mode"]
-    espn = (result.get("sources") or {}).get("espn") or {}
-    return "live" if espn.get("field_size_at_build") else "groups"
-
-
-def build(args, league=None, rebuilt_from=None, prior_mode=None, recorded_decisions=None):
+def build(args, league=None, rebuilt_from=None, recorded_decisions=None):
     started = time.time()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -515,8 +544,8 @@ def build(args, league=None, rebuilt_from=None, prior_mode=None, recorded_decisi
         espn_event, espn_ranked = resolve_espn_event(tournament_name, season, args.espn_league)
         if not espn_event:
             print(f"!! no ESPN {args.espn_league} event in {season} matches {tournament_name!r}. "
-                  "The scoreboard will fall back to ESPN's current event, which may be the "
-                  "wrong tournament. Pass --espn-event <id> to pin it.", file=sys.stderr)
+                  "There is no field to join the Kalshi names against, so this build is about "
+                  "to stop. Pass --espn-event <id> to pin it.", file=sys.stderr)
         elif espn_ranked and espn_ranked[0].get("score", 1.0) < 1.0:
             print(f"note: ESPN matched {espn_event['event_id']} ({espn_event['name']}) on a "
                   f"partial name match. Pass --espn-event to override.")
@@ -587,7 +616,6 @@ def build(args, league=None, rebuilt_from=None, prior_mode=None, recorded_decisi
     # except that the partitioner ran again.
     espn = espn_stage(args, espn_event, field, weight_by_name, team_name_of,
                       tournament_name, aliases, recorded_decisions=recorded_decisions)
-    refuse_downgrade(espn, prior_mode, args.from_result)
 
     # -- assemble ------------------------------------------------------------
     result = assemble(
@@ -747,15 +775,18 @@ def rebuild(args, result):
 
     What moves between two runs of the same competition is what the world did, not what
     the pool decided. So the draw is carried forward verbatim and the run re-reads the
-    parts that have a "now": the ESPN join (a Wednesday build has no field to join
-    against and a Thursday one does) and the tournament's state. Kalshi is not read at
-    all. The odds were read once, when the groups were drawn, and a rebuild that went
-    back for a second reading would be putting a price nobody was dealt on next to the
-    one everybody was.
+    ESPN join and the tournament's state. Kalshi is not read at all. The odds were read
+    once, when the groups were drawn, and a rebuild that went back for a second reading
+    would be putting a price nobody was dealt on next to the one everybody was.
 
-    Re-partitioning is deliberately NOT what this does. Rebuilding a live competition
-    and quietly dealing everyone new golfers is the single most destructive thing this
-    tool could do; --regroup asks for it explicitly and goes through build().
+    Scoring is NOT a reason to run this. The page polls ESPN and starts ranking on its
+    own at the first tee time; nothing has to be rebuilt for that. What this is for is
+    the join: names settled in the review file, a golfer who has since withdrawn, or an
+    ESPN event that was pinned to the wrong id.
+
+    Re-partitioning is deliberately NOT what this does. Rebuilding a competition and
+    quietly dealing everyone new golfers is the single most destructive thing this tool
+    could do; --regroup asks for it explicitly and goes through build().
     """
     started = time.time()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -837,7 +868,6 @@ def rebuild(args, result):
     espn = espn_stage(args, espn_event, field, weight_by_name, team_name_of,
                       tournament["name"], aliases,
                       recorded_decisions=espn_source.get("match_decisions"))
-    refuse_downgrade(espn, prior_build_mode(result), args.from_result)
 
     # -- assemble ------------------------------------------------------------
     rebuilt_from = {
@@ -879,14 +909,14 @@ def assemble(**k):
     Grouped by what a reader is asking. `league` / `teams` / `golfers` answer "who has
     whom". `odds_snapshot` and `grouping` answer "why". `sources` answers "where did
     this come from and can I check it". `live` answers "what does the page fetch while
-    it runs" -- ESPN, or in a groups build nothing at all, and then it is null rather
-    than an empty object, because there is no polling to configure.
+    it runs" -- ESPN, and only ESPN.
 
-    `build_mode` is the key to reading the rest; see the module docstring.
+    Every block here is always present. There is no longer a version of this file with
+    half of it nulled out: a build cannot complete without a published ESPN field, so
+    a reader never has to establish which document they are holding before reading it.
     """
     field, devigged, weighted = k["field"], k["devigged"], k["weighted"]
     espn = k["espn"]
-    is_live = espn["mode"] == "live"
     match_report = espn["report"] or {}
     absent = set(match_report.get("absent") or [])
     weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
@@ -928,10 +958,10 @@ def assemble(**k):
                 "grouping_weight": (round(weight_by_name[name], WEIGHT_PRECISION)
                                     if name in weight_by_name else None),
             },
-            # Null in a groups build, and null rather than a shell of nulls: before the
-            # first tee time this golfer has no ESPN presence to describe, and a block
-            # of empty fields reads as a join that was attempted and failed.
-            "espn": ({
+            # Always an object: a build has a published field or it has stopped, so
+            # every golfer has been looked for. What varies is whether they were found,
+            # and `match` says which of the four ways that went.
+            "espn": {
                 "athlete_id": player["athlete_id"] if player else None,
                 "display_name": player["name"] if player else None,
                 "headshot": player["headshot"] if player else None,
@@ -947,7 +977,7 @@ def assemble(**k):
                 # there are three, and folding the third into False would report a
                 # withdrawal this build has no evidence for.
                 "in_field": True if hit else (False if name in absent else None),
-            } if is_live else None),
+            },
         })
     golfers_out.sort(key=lambda g: -g["odds"]["raw"])
 
@@ -973,19 +1003,13 @@ def assemble(**k):
 
     return {
         "schema_version": SCHEMA_VERSION,
-        # "groups" or "live", and which one is a fact about the ESPN leaderboard at
-        # build time rather than a setting. Read this first: it says whether the rest
-        # of the file describes a draw or a scoreboard.
-        "build_mode": espn["mode"],
         "competition_id": str(uuid.uuid5(
             league_mod.NAMESPACE,
             f"competition:{k['league']['league_id']}:{k['event_ticker']}:{k['odds_type']}")),
         "generated_at": k["now"],
-        # The inputs that shaped this run rather than facts about the world, which is
-        # why the poll interval is here and not only under `live`: `live` is null in a
-        # groups build, and a setting somebody typed should survive the rebuild that
-        # turns that groups sheet into a scoreboard. `live` mirrors it when there is a
-        # page to configure, so the page still reads it in one line.
+        # The inputs that shaped this run rather than facts about the world. The poll
+        # interval is one -- somebody typed it -- and `live` mirrors it below so the
+        # page reads its own settings in one place rather than two.
         "generator": {
             "tool": "golf-odds-grouper/build_competition.py",
             "git_commit": _git_commit(),
@@ -1060,11 +1084,14 @@ def assemble(**k):
                 "scoreboard_endpoint": espn_leaderboard.scoreboard_url(k["season"], k["args"].espn_league),
                 "browser_reachable": True,
                 "browser_note": "ESPN sends access-control-allow-origin: * -- fetch it directly.",
-                # Zero in a groups build, and the reason it is a groups build.
+                # Never zero: a build with no field to join against does not get this
+                # far. See read_espn_field.
                 "field_size_at_build": len(espn["players"]),
-                # Null in a groups build. There was no join, so there is no report on
-                # one -- as opposed to a join that found nothing, which is a different
-                # and much worse thing for a file to be unable to distinguish.
+                # Had anybody teed off when this was built? A record of the clock, not
+                # an instruction -- the page asks the leaderboard the same question on
+                # every poll and believes the answer it gets. False here is the normal
+                # case, because a pool is drawn the night before.
+                "started_at_build": bool((espn["meta"] or {}).get("started")),
                 "match_report": espn["report"],
                 # The reviewed decisions this build applied, carried so the next rebuild
                 # does not re-ask a question somebody already answered. Absences belong
@@ -1131,19 +1158,19 @@ def assemble(**k):
         # Kalshi 403s every browser origin, so the odds are baked rather than fetched
         # and there is no second endpoint here to configure. See sources.kalshi.
         #
-        # NULL in a groups build, and that is the whole instruction: fetch nothing, poll
-        # nothing, rank nothing. There is no field to score against, so a page that
-        # polled would be asking a question whose answer it could not use. It also means
-        # a groups page needs no network at all -- it opens from disk on a plane.
+        # Always present. A page built the night before polls from the moment it opens,
+        # which is the point: it is watching for the first tee time. Until then it draws
+        # the groups sheet from the data it already has, and the poll is what tells it
+        # to stop. Nothing is re-run to make that happen.
         #
-        # There is no name-matching block here in either mode. A live build has already
-        # written an ESPN athlete id onto every golfer it resolved, and the page joins
-        # on that id: exact, and incapable of quietly picking the wrong Smith.
-        "live": ({
+        # There is no name-matching block here. The build has already written an ESPN
+        # athlete id onto every golfer it resolved, and the page joins on that id:
+        # exact, and incapable of quietly picking the wrong Smith.
+        "live": {
             "espn_leaderboard_url": leaderboard,
             "espn_event_id": espn_event.get("event_id"),
             "poll_interval_seconds": k["args"].poll_interval,
-        } if is_live else None),
+        },
 
         "standings_rules": {
             "description": (
@@ -1151,9 +1178,15 @@ def assemble(**k):
                 "next-best golfer, and so on. A team that runs out of golfers loses to one "
                 "that has not."
             ),
+            # This rule reads a LEADERBOARD, so nothing may run it before play starts.
+            # Every golfer in a pre-tournament field lands in tier 1 and comes out
+            # ranked on a sortOrder that is not a leaderboard at all -- confidently,
+            # and meaninglessly. The gate is upstream, in the page: see `started` in
+            # espn_leaderboard.has_started and lib.js's hasStarted.
             "golfer_rank_tiers": {
                 "0": "still in the tournament -- rank on the displayed position number (T12 -> 12)",
-                "1": "cut, withdrawn or disqualified -- no ESPN position, rank on sortOrder",
+                "1": ("in the field with no ESPN position: cut, withdrawn, disqualified, or "
+                      "not yet teed off. Rank on sortOrder"),
                 "2": ("no ESPN athlete on this golfer: either confirmed absent from the field, "
                       "or not yet reviewed. Scores nothing either way"),
                 "3": "padding: this team has no golfer this deep",
@@ -1319,8 +1352,7 @@ def build_parser():
     ap.add_argument("--match-review", metavar="PATH",
                     help="the review file for golfer names the join will not guess at. "
                          "Read for decisions before the join and rewritten after it. "
-                         "Defaults to match-review.json beside --output. Only a live "
-                         "build has anything to review.")
+                         "Defaults to match-review.json beside --output.")
     ap.add_argument("--update-aliases", action="store_true",
                     help="write name bindings settled in the review file back to the alias "
                          "file, so the next tournament resolves them automatically")
@@ -1391,9 +1423,10 @@ def apply_result_defaults(args, result, typed=()):
         "exclude": [e["golfer_name"] for e in result["odds_snapshot"]["excluded"]
                     if e["reason"] == "named"] or None,
         "auto_exclude": result["odds_snapshot"].get("auto_exclude"),
-        # From `generator`, not from `live`. A groups build has no `live` block at all,
-        # and reading it there loses the setting on exactly the rebuild that first needs
-        # it. Pre-2.0 files only have the `live` copy, so fall back to it.
+        # From `generator`, which is where an input somebody typed belongs. A 3.x file
+        # built before the first tee time has no `live` block at all, so reading it
+        # there would drop the setting on exactly the rebuild that upgrades that file;
+        # pre-2.0 files have only the `live` copy, so it is still the fallback.
         "poll_interval": (result["generator"].get("poll_interval_seconds")
                           or (result.get("live") or {}).get("poll_interval_seconds")),
     }
@@ -1455,7 +1488,6 @@ def main(argv=None):
             if args.regroup:
                 build(args, league=(league_mod.load_league(args.league) if args.league
                                     else league_from_result(result)),
-                      prior_mode=prior_build_mode(result),
                       recorded_decisions=((result["sources"].get("espn") or {})
                                           .get("match_decisions")),
                       rebuilt_from={
