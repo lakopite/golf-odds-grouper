@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#070e1e;color:#eef2fa;font-family:Archivo,system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:#e8cf94;text-decoration:none}
+a:hover{color:#f7e8c2}
+::selection{background:rgba(212,175,95,.28)}
+</style>
+</helmet>
+<div ref="{{ rootRef }}" style="display:flex;flex-direction: {{ rootDir }};align-items:stretch;min-height:100vh;background:#070e1e">
+
+  <aside style="width: {{ sideW }};flex:none;display:flex;flex-direction:column;background:linear-gradient(180deg,#14254c 0%,#0c1531 62%,#0a1229 100%);border-right: {{ sideBorderR }};border-bottom: {{ sideBorderB }}">
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 14px 12px;border-bottom:1px solid rgba(255,255,255,.07)">
+      <img src="assets/wcw-crest.png" alt="WCW Fantasy League crest" style="width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;border:1px solid rgba(212,175,95,.45)" />
+      <div style="min-width:0;line-height:1.2">
+        <div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">WCW Fantasy League</div>
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#c9a961">10th Anniversary</div>
+      </div>
+    </div>
+
+    <nav style="display:flex;flex-direction: {{ navDir }};gap:6px;padding: {{ navPad }}">
+      <div onClick="{{ navStandings }}" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:9px;padding:12px 10px;border-radius:7px;font-size:13px;min-height:46px;background: {{ navBgStandings }};color: {{ navInkStandings }};border:1px solid {{ navEdgeStandings }}">
+        <span style="flex:none;width:15px;display:flex;flex-direction:column;gap:3px">
+          <span style="height:2px;background: {{ navBarStandings }}"></span>
+          <span style="height:2px;background:#8fa3c8"></span>
+          <span style="height:2px;background:#8fa3c8"></span>
+        </span>Standings
+      </div>
+      <div onClick="{{ navOdds }}" style="flex:1;cursor:pointer;display:flex;align-items:center;gap:9px;padding:12px 10px;border-radius:7px;font-size:13px;min-height:46px;background: {{ navBgOdds }};color: {{ navInkOdds }};border:1px solid {{ navEdgeOdds }}">
+        <span style="flex:none;width:14px;height:14px;border-radius:50%;border:2px solid {{ navBarOdds }}"></span>Odds &amp; the draw
+      </div>
+    </nav>
+  </aside>
+
+  <main style="flex:1;min-width:0;display:flex;flex-direction:column">
+
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;padding: {{ topPad }};border-bottom:1px solid rgba(255,255,255,.07);background:#0a1229">
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;min-width:0">
+        <span style="font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:#f2f5fb">Wyndham Championship</span>
+        <span style="font-size:12px;color:#8fa3c8">Sedgefield CC · par 70 · 13–16 Aug 2026</span>
+      </div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px">
+        <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:20px;background: {{ status.bg }};border:1px solid {{ status.border }};font-family:'Barlow Condensed',sans-serif;font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color: {{ status.ink }}">
+          <span style="width:6px;height:6px;border-radius:50%;background: {{ status.dot }}"></span>{{ status.label }}
+        </span>
+        <span style="font-size:11.5px;color:#7d8dab">{{ status.note }}</span>
+      </div>
+    </div>
+
+    <div style="padding: {{ bannerPad }}">
+      <div style="border-radius:10px;overflow:hidden;border:1px solid rgba(212,175,95,.25);background:#0d1a35;height: {{ bannerH }}">
+        <img src="assets/wcw-banner.png" alt="WCW Fantasy League — 10th Anniversary Season, 2016–2026" style="display:block;width:100%;height:100%;object-fit:cover;object-position:50% 50%" />
+      </div>
+    </div>
+
+    <sc-if value="{{ isStandings }}" hint-placeholder-val="{{ true }}">
+      <section style="padding: {{ secPad }}">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <h1 style="margin:0;font-family:'Barlow Condensed',sans-serif;font-size: {{ h1Size }};font-weight:700;line-height:1">Standings</h1>
+            <p style="margin:4px 0 0;font-size:12.5px;color:#8fa3c8;text-wrap:pretty">{{ standSub }}</p>
+          </div>
+          <sc-if value="{{ annot }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-wrap:wrap;gap:5px">
+              <sc-for list="{{ standChips }}" as="c" hint-placeholder-count="2">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;padding:3px 6px;border-radius:3px;background:rgba(212,175,95,.1);border:1px solid rgba(212,175,95,.22);color:#c9a961">{{ c.text }}</span>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+
+        <sc-if value="{{ notStarted }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:flex-start;flex-wrap:wrap;gap:6px 11px;padding:11px 13px;margin-bottom:14px;border-radius:9px;background:#101d3b;border:1px solid rgba(143,163,200,.25)">
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#8fa3c8;padding-top:2px;flex:none">Not started</span>
+            <p style="margin:0;font-size:13px;line-height:1.5;color:#c8d3e6;max-width:88ch;text-wrap:pretty">ESPN had published no field when this page was made, so no golfer has a position and nothing is ranked on play. The same table stands, ordered by the price each group was drawn at — every team sits within a tick of 8.33%. It fetches nothing and will not change until somebody rebuilds it.</p>
+          </div>
+        </sc-if>
+
+        <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;overflow:hidden;background:#0d1730">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 12px;padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08)">
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#f2f5fb">{{ tableTitle }}</span>
+            <span style="font-size:11px;color:#8fa3c8">12 teams · 105 golfers grouped · tap a team for its full group</span>
+          </div>
+
+          <div style="display:grid;grid-template-columns: {{ cols }};gap:8px;padding:7px 12px;background:#0f1c39;border-bottom:1px solid rgba(255,255,255,.07);font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">
+            <span>Rk</span><span>Team</span><span style="display: {{ dColA }}">{{ headA }}</span><span style="text-align:right;display: {{ dColB }}">{{ headB }}</span><span style="text-align:right;display: {{ dColC }}">{{ headC }}</span><span style="text-align:right">Draw odds</span><span></span>
+          </div>
+
+          <sc-for list="{{ rows }}" as="row" hint-placeholder-count="12">
+            <div style="border-bottom:1px solid rgba(255,255,255,.055)">
+              <div onClick="{{ row.toggle }}" style="display:grid;grid-template-columns: {{ cols }};gap:8px;align-items:center;padding: {{ rowPad }};cursor:pointer;background: {{ row.rowBg }};border-left:3px solid {{ row.mark }}" style-hover="background:rgba(212,175,95,.07)">
+                <span style="font-family:'Barlow Condensed',sans-serif;font-size:19px;font-weight:700;color: {{ row.posInk }};line-height:1">{{ row.position }}</span>
+                <div style="display:flex;align-items:center;gap:9px;min-width:0">
+                  <div style="width:26px;height:26px;flex:none;border-radius:50%;background: {{ row.monoBg }};border: {{ row.monoBorder }};display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-size:11.5px;font-weight:700;color:#f0dcae">{{ row.mono }}</div>
+                  <div style="min-width:0;line-height:1.25">
+                    <div style="font-size:13px;font-weight:600;color:#e8cf94;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.name }}</div>
+                    <div style="font-size:11px;color:#7d8dab">{{ row.owner }}</div>
+                  </div>
+                </div>
+                <div style="min-width:0;line-height:1.25;display: {{ dColABlock }}">
+                  <div style="font-size:12.5px;font-weight:500;color:#dce4f2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ row.leadName }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color: {{ row.leadInk }}">{{ row.leadLine }}</div>
+                </div>
+                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dce4f2;display: {{ dColB }}">{{ row.colB }}</span>
+                <span style="text-align:right;font-size:11.5px;color: {{ row.colCInk }};display: {{ dColC }}">{{ row.colC }}</span>
+                <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color: {{ oddsInk }}">{{ row.odds }}</span>
+                <span style="justify-self:end;width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;font-size:13px;line-height:1;color:#8fa3c8">{{ row.chev }}</span>
+              </div>
+
+              <div style="padding: {{ subPad }};background:rgba(0,0,0,.22)">
+                <div style="display:grid;grid-template-columns: {{ subCols }};gap:8px;padding:5px 0 4px;font-family:'Barlow Condensed',sans-serif;font-size:9.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#6f7f9d;border-bottom:1px solid rgba(255,255,255,.05)">
+                  <span style="display: {{ dPos }}">Pos</span><span>Golfer</span><span style="text-align:right;display: {{ dScore }}">Score</span><span style="text-align:right;display: {{ dThru }}">Thru</span><span style="display: {{ dBar }}"></span><span style="text-align:right;display: {{ dDraw }}">Draw</span><span style="text-align:right;display: {{ dTag }}">{{ tagHead }}</span>
+                </div>
+                <sc-for list="{{ row.shown }}" as="g" hint-placeholder-count="3">
+                  <div style="display:grid;grid-template-columns: {{ subCols }};gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color: {{ g.ink }};display: {{ dPos }}">{{ g.pos }}</span>
+                    <span style="font-size:12px;color: {{ g.ink }};display:flex;align-items:center;gap:7px;min-width:0"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</span><span style="flex:none;font-family:'Barlow Condensed',sans-serif;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#d4af5f">{{ g.decidedTag }}</span></span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color: {{ g.ink }};display: {{ dScore }}">{{ g.score }}</span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6f7f9d;display: {{ dThru }}">{{ g.thru }}</span>
+                    <span style="height:3px;border-radius:2px;background:rgba(255,255,255,.045);display: {{ dBar }}"><span style="display:block;height:3px;border-radius:2px;background: {{ g.barInk }};width: {{ g.barW }}"></span></span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fa3c8;display: {{ dDraw }}">{{ g.odds }}</span>
+                    <span style="text-align:right;font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color: {{ g.tagInk }};display: {{ dTag }}">{{ g.tag }}</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ row.expanded }}" hint-placeholder-val="{{ false }}">
+                  <sc-for list="{{ row.rest }}" as="g" hint-placeholder-count="6">
+                    <div style="display:grid;grid-template-columns: {{ subCols }};gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color: {{ g.ink }};display: {{ dPos }}">{{ g.pos }}</span>
+                      <span style="font-size:12px;color: {{ g.ink }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</span>
+                      <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color: {{ g.ink }};display: {{ dScore }}">{{ g.score }}</span>
+                      <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6f7f9d;display: {{ dThru }}">{{ g.thru }}</span>
+                      <span style="height:3px;border-radius:2px;background:rgba(255,255,255,.045);display: {{ dBar }}"><span style="display:block;height:3px;border-radius:2px;background: {{ g.barInk }};width: {{ g.barW }}"></span></span>
+                      <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fa3c8;display: {{ dDraw }}">{{ g.odds }}</span>
+                      <span style="text-align:right;font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color: {{ g.tagInk }};display: {{ dTag }}">{{ g.tag }}</span>
+                    </div>
+                  </sc-for>
+                </sc-if>
+                <div onClick="{{ row.toggle }}" style="padding:10px 0 5px;font-size:11.5px;color:#8fa3c8;cursor:pointer;min-height:34px">{{ row.moreLabel }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ isLive }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:12px;padding:10px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08);font-size:11.5px;color:#8fa3c8">
+            <span style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#d4af5f">Rank tiers</span>
+            <span><span style="color:#eef2fa">0</span> in the tournament — displayed position</span>
+            <span><span style="color:#eef2fa">1</span> cut / WD / DQ — ESPN sortOrder</span>
+            <span><span style="color:#eef2fa">2</span> no ESPN athlete — absent or unresolved</span>
+            <span><span style="color:#eef2fa">3</span> padding — team has no golfer this deep</span>
+          </div>
+        </sc-if>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{ isOdds }}" hint-placeholder-val="{{ false }}">
+      <section style="padding: {{ secPad }}">
+        <div style="margin-bottom:14px">
+          <h1 style="margin:0;font-family:'Barlow Condensed',sans-serif;font-size: {{ h1Size }};font-weight:700;line-height:1">Odds &amp; the draw</h1>
+          <p style="margin:4px 0 0;font-size:12.5px;color:#8fa3c8;text-wrap:pretty">What every golfer was worth when the groups were drawn, and the proof the draw came out even.</p>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:14px">
+          <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Field priced</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">107</div>
+            <div style="font-size:11px;color:#8fa3c8">105 grouped · 2 excluded</div>
+          </div>
+          <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Book sum</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">1.166</div>
+            <div style="font-size:11px;color:#8fa3c8">ask prices · probability basis</div>
+          </div>
+          <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(255,255,255,.08)">
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#7d8dab">Captured</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f2f5fb;line-height:1.15">12 Aug</div>
+            <div style="font-size:11px;color:#8fa3c8">18:05 UTC · never moves</div>
+          </div>
+          <div style="padding:11px 13px;border-radius:9px;background:#0d1730;border:1px solid rgba(212,175,95,.3)">
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:#c9a961">Fair share</div>
+            <div style="font-family:'Barlow Condensed',sans-serif;font-size:26px;font-weight:700;color:#f0dcae;line-height:1.15">8.33%</div>
+            <div style="font-size:11px;color:#8fa3c8">1/12 · auto-exclude on</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns: {{ oddsCols }};gap:12px">
+          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
+            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Excluded from the draw</div>
+            <div style="padding:4px 12px 10px">
+              <sc-for list="{{ excluded }}" as="e" hint-placeholder-count="2">
+                <div style="display:grid;grid-template-columns: {{ exclCols }};gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+                  <div style="min-width:0">
+                    <div style="font-size:12.5px;color:#dce4f2">{{ e.name }}</div>
+                    <div style="font-size:11px;color:#7d8dab;text-wrap:pretty">{{ e.why }}</div>
+                  </div>
+                  <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8fa3c8">{{ e.raw }} raw</span>
+                  <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#d4af5f">{{ e.devig }}</span>
+                </div>
+              </sc-for>
+              <p style="margin:9px 0 0;font-size:11.5px;line-height:1.5;color:#8fa3c8;text-wrap:pretty">A golfer worth more than a whole group's fair share cannot be balanced around, so they were dropped before the partition ran.</p>
+            </div>
+          </div>
+
+          <div style="border:1px solid rgba(212,175,95,.3);border-radius:10px;background:linear-gradient(160deg,rgba(212,175,95,.09),rgba(13,23,48,0));overflow:hidden">
+            <div style="padding:9px 12px;background:rgba(212,175,95,.14);border-bottom:1px solid rgba(212,175,95,.25);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#f0dcae">Grouping certificate</div>
+            <div style="padding:11px 12px">
+              <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 9px;margin-bottom:8px">
+                <span style="font-family:'Barlow Condensed',sans-serif;font-size:30px;font-weight:700;color:#f0dcae;line-height:1">0.000934</span>
+                <span style="font-size:11.5px;color:#c9a961">delta · 1 tick · 0.09% of the field</span>
+              </div>
+              <span style="display:inline-block;padding:3px 8px;border-radius:4px;background:rgba(212,175,95,.2);border:1px solid rgba(212,175,95,.45);font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#f0dcae">Proven optimal</span>
+              <p style="margin:9px 0 0;font-size:11.5px;line-height:1.5;color:#c8d3e6;text-wrap:pretty">No partition of this field does better. Group sizes are uneven on purpose — forcing them equal costs real balance, and "more golfers" is a real tie-break.</p>
+              <div style="margin-top:9px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fa3c8;word-break:break-word">group_sizes {{ groupSizes }}</div>
+            </div>
+          </div>
+
+          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
+            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Prices do not move here</div>
+            <div style="padding:11px 12px">
+              <p style="margin:0;font-size:12.5px;line-height:1.55;color:#c8d3e6;text-wrap:pretty">These are the prices the groups were drawn on. They do not move while this page is open: Kalshi's API returns 403 to every browser origin, so no odds are ever fetched here. A rebuilt page carries a second reading and shows how far each price moved.</p>
+              <div style="margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07);font-size:11.5px;color:#8fa3c8;text-wrap:pretty">This page has no movement column, and that is the default — not a blank one, not a spinner.</div>
+            </div>
+          </div>
+
+          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
+            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Name join · needs review</div>
+            <div style="padding:10px 12px">
+              <div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:9px;font-size:11.5px;color:#8fa3c8">
+                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">100</span> matched</span>
+                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">95</span> exact</span>
+                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">4</span> decision</span>
+                <span><span style="font-family:'IBM Plex Mono',monospace;color:#eef2fa">1</span> alias</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <div style="padding:8px 10px;border-radius:7px;background:rgba(217,164,65,.1);border:1px solid rgba(217,164,65,.3)">
+                  <div style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#d9a441">Unresolved — nobody has looked yet</div>
+                  <div style="font-size:12px;color:#dce4f2;margin-top:2px">Hao-Tong Li, Jordan L. Smith</div>
+                  <div style="font-size:11px;color:#8fa3c8;margin-top:3px;text-wrap:pretty">Unscoreable for the life of this page. The fix is a rebuild, not a refresh.</div>
+                </div>
+                <div style="padding:8px 10px;border-radius:7px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
+                  <div style="font-family:'Barlow Condensed',sans-serif;font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#8fa3c8">Absent — checked and confirmed out</div>
+                  <div style="font-size:12px;color:#dce4f2;margin-top:2px">Jason Day, Taylor Moore, Daniel Brown — all withdrawn before play</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#0d1730;overflow:hidden">
+            <div style="padding:9px 12px;background:#122040;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Barlow Condensed',sans-serif;font-size:14px;font-weight:700;letter-spacing:.06em;text-transform:uppercase">Where the numbers came from</div>
+            <div style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:#8fa3c8">
+              <span>Kalshi <span style="font-family:'IBM Plex Mono',monospace;color:#c8d3e6">KXPGATOUR-WYC26</span> · Outright Winner · ask · mutually exclusive</span>
+              <span>ESPN <span style="font-family:'IBM Plex Mono',monospace;color:#c8d3e6">pga / 401811961</span> · {{ pollLine }}</span>
+              <span>{{ rebuildLine }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </sc-if>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;buildMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;not started&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Build configuration&quot;},&quot;espnState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;stale&quot;,&quot;down&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Build configuration&quot;},&quot;showAnnotations&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Build configuration&quot;}}">
+class Component extends DCLogic {
+  rootRef = React.createRef();
+  state = {
+    view: null,
+    open: {},
+    narrow: typeof window !== "undefined" && window.innerWidth < 760
+  };
+
+  TEAMS = [
+    ["Rough Justice", "Owen R.", "RJ", "oklch(0.46 0.09 262)"],
+    ["Divot Dynasty", "Hannah K.", "DD", "oklch(0.44 0.08 250)"],
+    ["Bogey Nights", "Marcus L.", "BN", "oklch(0.58 0.10 84)"],
+    ["Fairway Faithful", "Priya S.", "FF", "oklch(0.42 0.10 268)"],
+    ["Sand Trap Society", "Cody T.", "ST", "oklch(0.52 0.08 92)"],
+    ["Albatross Alliance", "Darwin M.", "AA", "oklch(0.40 0.09 258)"],
+    ["Mulligan Mafia", "Luis O.", "MM", "oklch(0.48 0.07 240)"],
+    ["Chip Shot Chaos", "Tasha W.", "CS", "transparent"],
+    ["Green Jacket Bandits", "Reggie P.", "GJ", "oklch(0.55 0.09 78)"],
+    ["Slice of Life", "Kenji A.", "SL", "oklch(0.43 0.08 274)"],
+    ["Putts & Prayers", "Fiona D.", "PP", "oklch(0.50 0.09 256)"],
+    ["Tee Time Terrors", "Grant V.", "TT", "oklch(0.45 0.10 246)"]
+  ];
+
+  FIELD = [
+    ["Cameron Young", "1", -14, "F", 7.6], ["J.T. Poston", "T2", -12, "F", 6.4],
+    ["Russell Henley", "T2", -12, "16", 5.9], ["Shane Lowry", "T4", -11, "F", 5.1],
+    ["Sungjae Im", "T4", -11, "15", 4.6], ["Billy Horschel", "T4", -11, "F", 4.2],
+    ["Maverick McNealy", "T7", -10, "F", 3.8], ["Aaron Rai", "T7", -10, "14", 3.4],
+    ["Si Woo Kim", "T9", -9, "F", 3.0], ["Lucas Glover", "T9", -9, "F", 2.8],
+    ["Byeong Hun An", "T9", -9, "13", 2.6], ["Nick Taylor", "T12", -8, "F", 2.4],
+    ["Alex Noren", "T12", -8, "15", 2.2], ["Taylor Pendrith", "T12", -8, "F", 2.1],
+    ["Kevin Yu", "T15", -7, "F", 1.9], ["Mackenzie Hughes", "T15", -7, "16", 1.8],
+    ["Davis Thompson", "T15", -7, "F", 1.7], ["Max Greyserman", "T18", -6, "F", 1.6],
+    ["Erik van Rooyen", "T18", -6, "14", 1.5], ["Rickie Fowler", "T18", -6, "F", 1.45],
+    ["Ben Griffin", "T21", -5, "F", 1.4], ["Ryan Fox", "T21", -5, "15", 1.3],
+    ["Chris Kirk", "T21", -5, "F", 1.25], ["Emiliano Grillo", "T24", -4, "F", 1.2],
+    ["Christiaan Bezuidenhout", "T24", -4, "13", 1.15], ["Beau Hossler", "T24", -4, "F", 1.1],
+    ["Matt Kuchar", "T27", -3, "F", 1.05], ["Adam Scott", "T27", -3, "16", 1.0],
+    ["Jhonattan Vegas", "T27", -3, "F", 0.95], ["Karl Vilips", "T30", -2, "F", 0.9],
+    ["Michael Thorbjornsen", "T30", -2, "15", 0.88], ["Nico Echavarria", "T30", -2, "F", 0.85],
+    ["Matt McCarty", "T33", -1, "F", 0.82], ["Zach Bauchou", "T33", -1, "14", 0.8],
+    ["Cam Davis", "T36", 0, "F", 0.75], ["Kristoffer Ventura", "T36", 0, "16", 0.72],
+    ["Matt Wallace", "T36", 0, "F", 0.7], ["Vince Whaley", "T39", 1, "F", 0.68],
+    ["Andrew Putnam", "T39", 1, "15", 0.66], ["Harris English", "T39", 1, "F", 0.64],
+    ["Doug Ghim", "T42", 2, "F", 0.62], ["Patrick Rodgers", "T42", 2, "14", 0.6],
+    ["Joel Dahmen", "T42", 2, "F", 0.58], ["Chandler Phillips", "T45", 3, "F", 0.56],
+    ["Ricky Castillo", "T45", 3, "13", 0.54], ["Steven Fisk", "T45", 3, "F", 0.52],
+    ["Isaiah Salinda", "T48", 4, "F", 0.5], ["Hayden Springer", "T48", 4, "15", 0.48],
+    ["Trey Mullinax", "T48", 4, "F", 0.46], ["Jacob Bridgeman", "T51", 5, "F", 0.44],
+    ["Rico Hoey", "T51", 5, "14", 0.42], ["Chad Ramey", "T51", 5, "F", 0.4],
+    ["Kevin Roy", "T54", 6, "F", 0.38], ["Danny Walker", "T54", 6, "16", 0.36],
+    ["Sam Stevens", "T54", 6, "F", 0.34], ["Ben Kohles", "T57", 7, "F", 0.33],
+    ["Braden Thornberry", "T57", 7, "15", 0.32], ["Quade Cummins", "T57", 7, "F", 0.31],
+    ["Ben James", "T60", 8, "F", 0.3], ["Norman Xiong", "T60", 8, "F", 0.29],
+    ["Ben Silverman", "-", 3, "", 0.45, 74], ["Zac Blair", "-", 3, "", 0.44, 75],
+    ["Peter Malnati", "-", 3, "", 0.43, 76], ["Adam Schenk", "-", 3, "", 0.42, 77],
+    ["Mark Hubbard", "-", 4, "", 0.41, 78], ["Kevin Streelman", "-", 4, "", 0.4, 79],
+    ["Nick Hardy", "-", 4, "", 0.39, 80], ["Carson Young", "-", 4, "", 0.38, 81],
+    ["Greyson Sigg", "-", 4, "", 0.37, 82], ["Vincent Norrman", "-", 5, "", 0.36, 83],
+    ["Alex Smalley", "-", 5, "", 0.35, 84], ["Dylan Wu", "-", 5, "", 0.34, 85],
+    ["Sam Ryder", "-", 5, "", 0.33, 86], ["Callum Tarren", "-", 5, "", 0.32, 87],
+    ["Justin Lower", "-", 6, "", 0.31, 88], ["Max McGreevy", "-", 6, "", 0.3, 89],
+    ["Matt NeSmith", "-", 6, "", 0.29, 90], ["Ryan Gerard", "-", 6, "", 0.28, 91],
+    ["S.H. Kim", "-", 6, "", 0.27, 92], ["Takumi Kanaya", "-", 7, "", 0.26, 93],
+    ["Paul Peterson", "-", 7, "", 0.25, 94], ["David Skinns", "-", 7, "", 0.24, 95],
+    ["Lanto Griffin", "-", 7, "", 0.23, 96], ["Robby Shelton", "-", 8, "", 0.22, 97],
+    ["Hank Lebioda", "-", 8, "", 0.21, 98], ["Scott Piercy", "-", 8, "", 0.2, 99],
+    ["Brandon Wu", "-", 8, "", 0.19, 100], ["Wesley Bryan", "-", 9, "", 0.185, 101],
+    ["Harry Hall", "-", 9, "", 0.18, 102], ["Erik Barnes", "-", 9, "", 0.175, 103],
+    ["Chesson Hadley", "-", 9, "", 0.17, 104], ["Bud Cauley", "-", 10, "", 0.165, 105],
+    ["Sami Valimaki", "-", 10, "", 0.16, 106], ["Nicolai Hojgaard", "-", 10, "", 0.155, 107],
+    ["Seamus Power", "-", 11, "", 0.15, 108], ["Aldrich Potgieter", "-", 11, "", 0.145, 109],
+    ["Trace Crowe", "-", 11, "", 0.14, 110], ["Kensei Hirata", "-", 12, "", 0.135, 111],
+    ["Rikuya Hoshino", "-", 12, "", 0.13, 112], ["Ryo Hisatsune", "-", 12, "", 0.125, 113],
+    ["Jason Day", "", null, "", 0.9, null, "absent"],
+    ["Taylor Moore", "", null, "", 0.55, null, "absent"],
+    ["Daniel Brown", "", null, "", 0.5, null, "absent"],
+    ["Hao-Tong Li", "", null, "", 0.62, null, "unresolved"],
+    ["Jordan L. Smith", "", null, "", 0.47, null, "unresolved"]
+  ];
+
+  componentDidMount() {
+    var self = this, el = this.rootRef.current;
+    var apply = function (w) {
+      var n = w > 0 && w < 760;
+      if (n !== self.state.narrow) self.setState({ narrow: n });
+    };
+    this._onR = function () {
+      apply(el && el.clientWidth ? el.clientWidth : (window.innerWidth || 0));
+    };
+    if (el && typeof ResizeObserver !== "undefined") {
+      this._ro = new ResizeObserver(function (e) { apply(e[0].contentRect.width); });
+      this._ro.observe(el);
+    }
+    this._onR();
+    window.addEventListener("resize", this._onR);
+  }
+
+  componentWillUnmount() {
+    if (this._ro) this._ro.disconnect();
+    if (this._onR) window.removeEventListener("resize", this._onR);
+  }
+
+  fmtPar(n) {
+    if (n === null || n === undefined) return "\u2014";
+    return n === 0 ? "E" : (n > 0 ? "+" + n : "\u2212" + Math.abs(n));
+  }
+
+  rank(g) {
+    if (g.tier === 0) return [0, g.posNum];
+    if (g.tier === 1) return [1, g.sortOrder];
+    return [2, 0];
+  }
+
+  cmp(a, b) { return (a[0] - b[0]) || (a[1] - b[1]); }
+
+  cmpVec(va, vb) {
+    var pad = [3, 0], d = Math.max(va.length, vb.length);
+    for (var i = 0; i < d; i++) {
+      var c = this.cmp(va[i] || pad, vb[i] || pad);
+      if (c !== 0) return { result: c < 0 ? -1 : 1, at: i + 1 };
+    }
+    return { result: 0, at: null };
+  }
+
+  build() {
+    var self = this, n = this.TEAMS.length;
+    var golfers = this.FIELD.map(function (r, i) {
+      var pos = r[1], match = r[6] || "exact";
+      var tier = (match === "absent" || match === "unresolved") ? 2 : (pos && pos !== "-" ? 0 : 1);
+      return {
+        name: r[0], pos: pos, toPar: r[2], thru: r[3], w: r[4],
+        sortOrder: r[5] || 9999, match: match, tier: tier, idx: i,
+        posNum: tier === 0 ? parseInt(String(pos).replace("T", ""), 10) : null
+      };
+    });
+    var sumW = golfers.reduce(function (s, g) { return s + g.w; }, 0);
+    var maxW = golfers[0].w;
+    golfers.forEach(function (g) { g.weight = g.w / sumW; g.barW = (g.w / maxW * 100).toFixed(1) + "%"; });
+
+    var sorted = golfers.slice().sort(function (a, b) { return b.w - a.w; });
+    sorted.forEach(function (g, i) {
+      var round = Math.floor(i / n), p = i % n;
+      g.group = round % 2 === 0 ? p : n - 1 - p;
+    });
+
+    var teams = this.TEAMS.map(function (t, i) {
+      var roster = sorted.filter(function (g) { return g.group === i; });
+      roster.sort(function (a, b) { return self.cmp(self.rank(a), self.rank(b)); });
+      return {
+        id: "t" + (i < 9 ? "0" : "") + (i + 1), name: t[0], owner: t[1], mono: t[2],
+        monoBg: t[3], logoNull: t[3] === "transparent", groupNo: i + 1, roster: roster,
+        byWeight: roster.slice().sort(function (a, b) { return b.w - a.w; }),
+        total: roster.reduce(function (s, g) { return s + g.weight; }, 0),
+        vector: roster.map(function (g) { return self.rank(g); })
+      };
+    });
+
+    var rows = teams.slice().sort(function (a, b) {
+      return self.cmpVec(a.vector, b.vector).result || a.id.localeCompare(b.id);
+    });
+    var rk = 1;
+    rows.forEach(function (r, i) {
+      r.tied = false; r.decidedAt = null;
+      if (i > 0) {
+        var c = self.cmpVec(rows[i - 1].vector, r.vector);
+        if (c.result === 0) { r.tied = true; rows[i - 1].tied = true; }
+        else { rk = i + 1; r.decidedAt = c.at; }
+      }
+      r.rk = rk;
+    });
+    rows.forEach(function (r) { r.position = r.tied ? "T" + r.rk : String(r.rk); });
+
+    return { teams: teams, rows: rows, sizes: teams.map(function (t) { return t.roster.length; }) };
+  }
+
+  toggler(key) {
+    var self = this;
+    return function () {
+      self.setState(function (s) {
+        var o = Object.assign({}, s.open);
+        o[key] = !o[key];
+        return { open: o };
+      });
+    };
+  }
+
+  golferLive(g, row, depth) {
+    return {
+      pos: g.tier === 0 ? g.pos : "\u2014",
+      name: g.name,
+      score: g.tier === 2 ? "\u2014" : this.fmtPar(g.toPar),
+      thru: g.tier === 0 ? g.thru : "",
+      odds: (g.weight * 100).toFixed(2) + "%",
+      barW: g.barW, barInk: g.w > 2 ? "#d4af5f" : "#5f7ba8",
+      tag: g.tier === 0 ? "" : (g.tier === 1 ? "CUT" : (g.match === "absent" ? "NOT IN FIELD" : "UNRESOLVED")),
+      tagInk: g.match === "unresolved" ? "#d9a441" : "#7d8dab",
+      ink: g.tier === 0 ? "#eef2fa" : "#7d8dab",
+      decidedTag: row && row.decidedAt === depth ? "decided here" : ""
+    };
+  }
+
+  golferDraw(g) {
+    return {
+      pos: "\u2014", name: g.name, score: "\u2014", thru: "",
+      odds: (g.weight * 100).toFixed(2) + "%",
+      barW: g.barW, barInk: g.w > 2 ? "#d4af5f" : "#5f7ba8",
+      tag: "", tagInk: "#7d8dab", ink: "#dce4f2", decidedTag: ""
+    };
+  }
+
+  liveRow(row) {
+    var self = this;
+    var counting = row.roster.filter(function (g) { return g.tier === 0; }).length;
+    var best = row.roster[0];
+    var open = !!this.state.open[row.id];
+    var keep = Math.min(row.roster.length, Math.max(3, row.decidedAt || 0));
+    var views = row.roster.map(function (g, i) { return self.golferLive(g, row, i + 1); });
+    var hidden = row.roster.length - keep;
+    var leader = row.rk === 1;
+    return {
+      position: row.position, name: row.name, owner: row.owner, mono: row.mono,
+      monoBg: row.logoNull ? "rgba(255,255,255,.05)" : row.monoBg,
+      monoBorder: row.logoNull ? "1px dashed rgba(212,175,95,.55)" : "1px solid rgba(212,175,95,.35)",
+      leadName: best ? best.name : "no golfers",
+      leadLine: best ? (best.tier === 0
+        ? best.pos + " \u00b7 " + this.fmtPar(best.toPar) + " \u00b7 thru " + best.thru
+        : (best.tier === 1 ? "cut \u00b7 " + this.fmtPar(best.toPar) : "not on the board")) : "\u2014",
+      leadInk: best && best.tier === 0 ? "#c9a961" : "#7d8dab",
+      colB: counting + "/" + row.roster.length,
+      colC: row.decidedAt ? "golfer #" + row.decidedAt : (row.tied ? "tied \u2014 unbroken" : "\u2014"),
+      colCInk: row.decidedAt ? "#c8d3e6" : "#6f7f9d",
+      odds: (row.total * 100).toFixed(2) + "%",
+      rowBg: leader ? "rgba(212,175,95,.09)" : "transparent",
+      mark: leader ? "#d4af5f" : "transparent",
+      posInk: leader ? "#f0dcae" : (row.tied ? "#c9a961" : "#dce4f2"),
+      chev: open ? "\u2212" : "+", expanded: open,
+      shown: views.slice(0, keep), rest: views.slice(keep),
+      moreLabel: open ? "Hide the rest of the group"
+        : (hidden > 0 ? "Show all " + row.roster.length + " golfers (" + hidden + " more)" : "Full group shown"),
+      toggle: this.toggler(row.id)
+    };
+  }
+
+  drawRow(t) {
+    var self = this;
+    var open = !!this.state.open["g" + t.id];
+    var views = t.byWeight.map(function (g) { return self.golferDraw(g); });
+    return {
+      position: "\u2014", name: t.name, owner: t.owner, mono: t.mono,
+      monoBg: t.logoNull ? "rgba(255,255,255,.05)" : t.monoBg,
+      monoBorder: t.logoNull ? "1px dashed rgba(212,175,95,.55)" : "1px solid rgba(212,175,95,.35)",
+      leadName: t.byWeight[0].name,
+      leadLine: (t.byWeight[0].weight * 100).toFixed(2) + "% \u00b7 no position yet",
+      leadInk: "#8fa3c8",
+      colB: String(t.roster.length),
+      colC: t.groupNo + " of 12", colCInk: "#8fa3c8",
+      odds: (t.total * 100).toFixed(2) + "%",
+      rowBg: "transparent", mark: "transparent", posInk: "#6f7f9d",
+      chev: open ? "\u2212" : "+", expanded: open,
+      shown: views.slice(0, 3), rest: views.slice(3),
+      moreLabel: open ? "Hide the rest of the group"
+        : "Show all " + views.length + " golfers (" + (views.length - 3) + " more)",
+      toggle: this.toggler("g" + t.id)
+    };
+  }
+
+  statusView(live) {
+    if (!live) return {
+      label: "Not started", bg: "rgba(143,163,200,.14)", border: "rgba(143,163,200,.32)",
+      ink: "#c8d3e6", dot: "#8fa3c8",
+      note: "Built before the field posted \u00b7 this page fetches nothing"
+    };
+    var s = this.props.espnState || "live";
+    if (s === "down") return {
+      label: "ESPN unreachable", bg: "rgba(217,68,68,.14)", border: "rgba(217,68,68,.4)",
+      ink: "#f0a8a8", dot: "#d94444",
+      note: "TypeError: Failed to fetch \u00b7 showing the last-known board"
+    };
+    if (s === "stale") return {
+      label: "Stale", bg: "rgba(217,164,65,.14)", border: "rgba(217,164,65,.4)",
+      ink: "#f0d3a0", dot: "#d9a441",
+      note: "ESPN last answered 6m 12s ago \u00b7 retrying every 60s"
+    };
+    return {
+      label: "Live", bg: "rgba(110,196,138,.12)", border: "rgba(110,196,138,.35)",
+      ink: "#b6e6c6", dot: "#6ec48a",
+      note: "Leaderboard updated 14s ago \u00b7 polling ESPN every 60s"
+    };
+  }
+
+  renderVals() {
+    var self = this;
+    var d = this._d || (this._d = this.build());
+    var view = this.state.view || "standings";
+    var live = (this.props.buildMode || "live") === "live";
+    var narrow = !!this.state.narrow;
+    var rows = live
+      ? d.rows.map(function (r) { return self.liveRow(r); })
+      : d.teams.slice().sort(function (a, b) { return b.total - a.total; })
+          .map(function (t) { return self.drawRow(t); });
+
+    return {
+      rootRef: this.rootRef,
+      annot: this.props.showAnnotations !== false,
+      isStandings: view === "standings", isOdds: view === "odds",
+      isLive: live, notStarted: !live,
+      navStandings: function () { self.setState({ view: "standings" }); },
+      navOdds: function () { self.setState({ view: "odds" }); },
+      navInkStandings: view === "standings" ? "#f0dcae" : "#c8d3e6",
+      navBgStandings: view === "standings" ? "rgba(212,175,95,.14)" : "rgba(255,255,255,.04)",
+      navEdgeStandings: view === "standings" ? "rgba(212,175,95,.4)" : "rgba(255,255,255,.08)",
+      navBarStandings: view === "standings" ? "#d4af5f" : "#8fa3c8",
+      navInkOdds: view === "odds" ? "#f0dcae" : "#c8d3e6",
+      navBgOdds: view === "odds" ? "rgba(212,175,95,.14)" : "rgba(255,255,255,.04)",
+      navEdgeOdds: view === "odds" ? "rgba(212,175,95,.4)" : "rgba(255,255,255,.08)",
+      navBarOdds: view === "odds" ? "#d4af5f" : "#8fa3c8",
+      status: this.statusView(live),
+
+      rootDir: narrow ? "column" : "row",
+      sideW: narrow ? "100%" : "236px",
+      sideBorderR: narrow ? "none" : "1px solid rgba(212,175,95,.2)",
+      sideBorderB: narrow ? "1px solid rgba(212,175,95,.2)" : "none",
+      navDir: narrow ? "row" : "column",
+      navPad: narrow ? "10px 12px 12px" : "12px 8px",
+      topPad: narrow ? "10px 12px" : "12px 20px",
+      bannerPad: narrow ? "12px 12px 0" : "16px 20px 0",
+      bannerH: narrow ? "108px" : "184px",
+      secPad: narrow ? "14px 12px 26px" : "18px 20px 30px",
+      h1Size: narrow ? "24px" : "30px",
+
+      standSub: live
+        ? "Round 3 \u00b7 best leaderboard position held, ties broken on the next golfer down"
+        : "Ordered by the price each group was drawn at. Nothing is ranked on play.",
+      standChips: live
+        ? [{ text: "GolfPool.computeStandings()" }, { text: "lib.js verbatim \u2014 parity test covers this page" }]
+        : [{ text: 'build_mode: "groups"' }, { text: "DATA.live === null \u2192 no poll, no request" }, { text: "sort: teams[].total_odds desc" }],
+      tableTitle: live ? "League table" : "League table \u00b7 the draw",
+      headA: live ? "Leading golfer" : "Shortest price held",
+      headB: live ? "In it" : "Golfers",
+      headC: live ? "Decided on" : "Group",
+      tagHead: "",
+      oddsInk: live ? "#8fa3c8" : "#d4af5f",
+      rows: rows,
+
+      cols: narrow ? "26px 1fr 62px 22px"
+        : "40px minmax(128px,1.5fr) minmax(120px,1.3fr) 60px 88px 78px 26px",
+      rowPad: narrow ? "12px 10px" : "8px 12px",
+      dColA: narrow ? "none" : "inline",
+      dColABlock: narrow ? "none" : "block",
+      dColB: narrow ? "none" : "inline",
+      dColC: narrow ? "none" : "inline",
+      subPad: narrow ? "0 10px 8px 12px" : "0 12px 8px 57px",
+      subCols: live
+        ? (narrow ? "38px 1fr 46px 78px" : "52px 1fr 58px 46px 76px 108px")
+        : (narrow ? "1fr 66px" : "1fr 120px 76px"),
+      dPos: live ? "inline" : "none",
+      dScore: live ? "inline" : "none",
+      dThru: live && !narrow ? "inline" : "none",
+      dBar: !live && !narrow ? "block" : "none",
+      dDraw: live ? (narrow ? "none" : "inline") : "inline",
+      dTag: live ? "inline" : "none",
+
+      oddsCols: narrow ? "1fr" : "repeat(auto-fit,minmax(310px,1fr))",
+      exclCols: narrow ? "1fr 62px 58px" : "1fr 78px 70px",
+      groupSizes: "[" + d.sizes.join(", ") + "]",
+      excluded: [
+        { name: "Ludvig \u00c5berg", why: "over_fair_share \u2014 above 1/12 of the book", raw: "14.0%", devig: "12.01%" },
+        { name: "Justin Thomas", why: "named \u2014 excluded by the commissioner", raw: "3.6%", devig: "3.09%" }
+      ],
+      pollLine: live
+        ? (this.props.espnState === "down"
+          ? "poll failed \u00b7 last good board 20:44:31"
+          : "polling every 60s \u00b7 last poll 20:52:07")
+        : "nothing is fetched by this page",
+      rebuildLine: live
+        ? "Rebuilt 15 Aug 2026 20:38 UTC \u00b7 static odds, live board"
+        : "Built 12 Aug 2026 18:07 UTC \u00b7 static page, no requests"
+    };
+  }
+}
+
+</script>
+</body>
+</html>
