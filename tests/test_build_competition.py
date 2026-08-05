@@ -126,6 +126,119 @@ def test_auto_exclusion_off_leaves_the_field_alone():
     assert bc.resolve_exclusions(golfers, 2, [], auto=False) == []
 
 
+def test_a_withdrawn_golfer_carries_its_own_reason():
+    """
+    Three rules now, and a result file that said "excluded: Jason Day" without saying
+    which one fired would be claiming the pool dropped somebody it did not drop.
+    """
+    golfers = field(("A", 0.3), ("B", 0.2), ("C", 0.1))
+    assert bc.resolve_exclusions(golfers, 3, [], auto=False, withdrawn=["B"]) == [
+        {"golfer_name": "B", "reason": "withdrawn"}]
+
+
+def test_a_withdrawal_is_taken_out_before_the_fair_share_rule_is_measured():
+    """
+    The ordering the whole exclusion step turns on, and the one that is silent when it is
+    wrong. Taking a golfer out renormalises everybody else UP, so a withdrawal can push
+    the next golfer over 1/N -- here B is under half the whole field and over half of the
+    field without A. Run the fair-share cascade first and it would balance the pool around
+    a golfer who is not playing, and every number in the file would still add up.
+    """
+    golfers = field(("A", 0.40), ("B", 0.35), ("C", 0.15), ("D", 0.10))
+    assert [e["golfer_name"] for e in bc.resolve_exclusions(golfers, 2, [], auto=True)] == []
+
+    out = bc.resolve_exclusions(golfers, 2, [], auto=True, withdrawn=["A"])
+    assert [(e["golfer_name"], e["reason"]) for e in out] == [
+        ("A", "withdrawn"), ("B", "over_fair_share")]
+
+
+def test_a_golfer_both_named_and_withdrawn_is_excluded_once():
+    """
+    Both are true and the file has one row per golfer, so the instruction somebody typed
+    wins the label. Recording them twice would double-count them in `excluded`.
+    """
+    golfers = field(("A", 0.3), ("B", 0.2), ("C", 0.1))
+    out = bc.resolve_exclusions(golfers, 3, ["A"], auto=False, withdrawn=["A"])
+    assert out == [{"golfer_name": "A", "reason": "named"}]
+
+
+# ---------------------------------------------------------------------------
+# The gate: a name nobody has settled stops the deal
+# ---------------------------------------------------------------------------
+
+def gate_args(tmp_path, deal_anyway=False):
+    return types.SimpleNamespace(deal_anyway=deal_anyway,
+                                 output=str(tmp_path / "result.json"), match_review=None)
+
+
+def staged(unresolved, review=None):
+    """An espn_stage return with a chosen set of unresolved names."""
+    stage = espn_stage([golfer_name(i) for i in range(4)])
+    stage["report"]["unresolved"] = list(unresolved)
+    stage["review"] = review
+    return stage
+
+
+def test_the_gate_lets_a_settled_field_through(tmp_path):
+    """The ordinary run. Everything joined, so there is nothing to ask about."""
+    bc.gate_on_unresolved(staged([]), {}, gate_args(tmp_path))
+
+
+def test_the_gate_stops_the_deal_when_nobody_has_settled_a_name(tmp_path):
+    """
+    The whole point of the move. An unresolved golfer is either a name the join will not
+    guess at or somebody who is not playing, and dealing puts whichever of them withdrew
+    onto a card at a full share of a group they cannot score -- with no way back, because
+    a rebuild never re-deals.
+    """
+    with pytest.raises(SystemExit) as exc:
+        bc.gate_on_unresolved(staged([golfer_name(0)]), {golfer_name(0): 0.04},
+                              gate_args(tmp_path))
+    message = str(exc.value)
+    assert golfer_name(0) in message
+    assert "4.00%" in message, "the size of what is at stake, not just the count"
+    assert "--deal-anyway" in message, "and the other way out of it"
+
+
+def test_the_gate_hands_over_the_worksheet_it_is_asking_to_be_filled_in(tmp_path):
+    """
+    Stopping somebody without writing the file that answers the question would be a
+    refusal with no way to act on it. The review file is written inside finish(), which a
+    stopped build never reaches, so the gate writes it on the way out.
+    """
+    name = golfer_name(0)
+    stage = espn_stage([name], players=[], matches={})
+    stage["review"] = {
+        "path": str(tmp_path / "match-review.json"),
+        "tournament": "Wyndham Championship",
+        "espn": {"event_id": "401811961", "league": "pga"},
+        "golfers": [{"name": name, "grouping_weight": 0.04, "team": None}],
+        "matches": {}, "report": stage["report"], "players": [], "decisions": {},
+    }
+    with pytest.raises(SystemExit) as exc:
+        bc.gate_on_unresolved(stage, {name: 0.04}, gate_args(tmp_path))
+
+    written = json.loads((tmp_path / "match-review.json").read_text())
+    assert [row["kalshi_name"] for row in written["pending"]] == [name]
+    assert str(tmp_path / "match-review.json") in str(exc.value), "and it says where"
+
+
+def test_deal_anyway_deals_and_says_what_is_being_dealt(tmp_path, capsys):
+    """
+    The second honest answer, not merely an override. Before the first tee time ESPN's
+    field still moves, so somebody who looked twice and still cannot say should NOT
+    record an absence -- a wrong one takes a golfer out of the draw entirely. Dealing
+    them in at full weight is the recoverable mistake, and it is what this did before the
+    gate existed.
+    """
+    bc.gate_on_unresolved(staged([golfer_name(0), golfer_name(1)]),
+                          {golfer_name(0): 0.04, golfer_name(1): 0.01},
+                          gate_args(tmp_path, deal_anyway=True))
+    out = capsys.readouterr().out
+    assert "--deal-anyway" in out and golfer_name(0) in out
+    assert "5.00%" in out, "how much of the book is being dealt on nobody's say-so"
+
+
 # ---------------------------------------------------------------------------
 # assemble()
 # ---------------------------------------------------------------------------
@@ -322,10 +435,12 @@ def test_the_result_records_no_price_read_after_the_groups_were_drawn():
                    for g in result["golfers"])
         # The version is how a reader of an old file finds out the shape changed. A
         # silent drop would leave two incompatible documents both calling themselves 2.0.
-        # 4.0 removed `build_mode`; 3.0 removed the inlined crest and banner in favour of
-        # an art slug. The one price per golfer this test is about is unchanged through
-        # both and is still 2.1's doing.
-        assert result["schema_version"] == "4.0"
+        # 4.1 added the "withdrawn" exclusion reason; 4.0 removed `build_mode`; 3.0
+        # removed the inlined crest and banner in favour of an art slug. The one price per
+        # golfer this test is about is unchanged through all three and is still 2.1's
+        # doing -- which is the point of pinning the literal here rather than reading
+        # SCHEMA_VERSION back: this is where somebody notices the number moved.
+        assert result["schema_version"] == "4.1"
 
 
 def test_the_result_records_where_every_number_came_from():

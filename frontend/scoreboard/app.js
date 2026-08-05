@@ -770,18 +770,33 @@ function excludedCard(snap) {
       + 'cannot be evened out by anybody else, however the field is split. Dropping them '
       + 'is what lets the rest of the draw come out level.'));
   }
+  // Same rule as above, and the same reason for it: this note answers "did somebody take
+  // him off my team?", so it appears only when a withdrawal actually happened. A
+  // withdrawn golfer is the one entry in this list that nobody chose.
+  if (snap.excluded.some(function (e) { return e.reason === 'withdrawn'; })) {
+    node.body.append(el('p', 'small', 'These golfers were not in the field ESPN published '
+      + 'when the groups were drawn, so they were left out of the draw rather than dealt '
+      + 'to a team they could never score for. Their share of the book went back to '
+      + 'everybody else.'));
+  }
   return node;
 }
 
 /* Why a golfer is not in anybody's group, in the words somebody would use out loud.
  * `over_fair_share` is the field name in the result file and it belongs there; printing
- * it on screen made a fair-share rule read like an error code. */
+ * it on screen made a fair-share rule read like an error code.
+ *
+ * `withdrawn` needs its own sentence for the same reason and more urgently, because the
+ * bare word under a heading reading "Excluded from the draw" says the pool dropped
+ * somebody it did not drop. Nobody decided this one -- the golfer is not in the
+ * tournament. */
 function excludedWhy(e) {
   if (e.reason === 'over_fair_share') {
     return 'worth more than a whole group’s share of the field (1 in '
       + DATA.league.team_count + ')';
   }
   if (e.reason === 'named') return 'left out on purpose when the pool was set up';
+  if (e.reason === 'withdrawn') return 'not in the field — withdrawn before the draw';
   return e.reason.replace(/_/g, ' ');
 }
 

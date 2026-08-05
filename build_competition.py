@@ -59,6 +59,31 @@ applies whatever has been filled in. See match_review.py. The review is the step
 model is good at and a regular expression is not, and it happens where the answer can
 be read before it takes effect.
 
+AND THE DEAL WAITS FOR THE ANSWER
+----------------------------------
+Some of those open names are not names at all: they are golfers who withdrew. Measured
+on the Rocket Classic, 151 Kalshi markets against 147 ESPN competitors left 12 open, and
+4 of the 12 -- Daniel Brown, Taylor Moore, Brooks Koepka, Jason Day -- were simply not
+playing. From here the two look identical, and only one of them is a hole.
+
+So the join runs BEFORE the partition and the deal, and an unresolved name stops the run:
+
+    read ESPN field -> pull odds -> JOIN -> gate
+      -> exclusions (`withdrawn` beside `named` and `over_fair_share`)
+      -> partition -> deal
+
+It used to run last, forty lines after the deal, which meant a golfer who had withdrawn
+was partitioned, weighted and dealt onto somebody's card before anybody found out --
+carrying a full share of a group that could never score it, on a team whose `total_odds`
+said the draw was even. There was no way back either: a rebuild deliberately never
+re-partitions, so the only route from "he withdrew" to "deal without him" was --regroup,
+which re-deals every team. In a five-team pool the fair share is 20%, so a Koepka-sized
+hole is a real piece of one group, and which group is decided by a coin toss.
+
+Stopping costs one re-run and settles the question where it can be read. `--deal-anyway`
+is the other honest answer -- somebody looked and still cannot say which it is -- and it
+deals them in at full weight, exactly as this did before the gate existed.
+
 REBUILDING ONE
 --------------
 Because the result file describes the whole competition, it is also the input to the
@@ -168,7 +193,20 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 # keeping, and it is a record rather than an instruction -- it is false for the life of
 # a normally-built file while the tournament it describes comes and goes. Nothing reads
 # it to decide anything; the page asks the leaderboard.
-SCHEMA_VERSION = "4.0"
+# 4.1 ADDED a third value to `odds_snapshot.excluded[].reason`: "withdrawn", for a golfer
+# a review confirmed is not in this week's ESPN field. Additive -- no key is added,
+# removed or retyped, and a 4.0 reader reads a 4.1 file correctly on every key it knows.
+# What changes is which combinations occur. Before this, a golfer with `espn.in_field:
+# false` had always been dealt: the join ran after the partition, so a withdrawal was
+# discovered with the golfer already on somebody's card at a full `grouping_weight`, and
+# the team's `total_odds` claimed a share of the pool that one of its golfers could not
+# score. Now the join runs before the deal, a confirmed absence joins `named` and
+# `over_fair_share` in the exclusion set, and that golfer comes out shaped like every
+# other excluded one -- `excluded: true`, `grouping_weight: null`, no `team_id`. The
+# reason is a new word for a shape readers already handle. A golfer who withdraws AFTER
+# the draw is untouched and still carries their weight on the card they were dealt to:
+# a rebuild does not re-deal, so the totals stay the totals people were dealt.
+SCHEMA_VERSION = "4.1"
 
 # The market a competition is priced off. The Kalshi series ticker is the whole of the
 # difference between them -- every series returns the identical market shape.
@@ -385,6 +423,45 @@ def refuse_a_collapsed_join(espn, prior_espn, source_file):
         "--espn-event <id> to override the recorded one deliberately.")
 
 
+def report_withdrawals_on_cards(espn, teams, team_groups):
+    """
+    Name the teams carrying a golfer who has since been confirmed out of the field.
+
+    A withdrawal before the draw is handled by leaving the golfer out of it -- see
+    gate_on_unresolved. This is the other case, and it is the one a pool actually meets
+    most weeks: the groups were dealt on Wednesday, somebody pulled out on Thursday, and
+    a review has now confirmed it. The card does not change. That is the pool's
+    convention and it is the only answer consistent with a rebuild that never re-deals;
+    dropping the golfer and rescaling one team's total would report a total nobody was
+    dealt, which this file refuses to do everywhere else.
+
+    So the answer is "nothing happens", and the reason this function exists is that
+    "nothing happens" was previously indistinguishable from "nobody noticed". A team
+    losing a fifth of its group is worth a sentence naming the team, the golfer and the
+    size of the hole, and worth saying that --regroup is the thing that would re-deal
+    around it -- so that leaving the draw alone is visibly a decision rather than an
+    oversight.
+    """
+    absent = set(espn["report"]["absent"])
+    if not absent:
+        return
+    for team in teams:
+        members = team_groups[team["team_id"]]
+        total = sum(g["odds"] for g in members)
+        hit = [g for g in members if g["golfer_name"] in absent]
+        if not hit:
+            continue
+        share = sum(g["odds"] for g in hit)
+        print(f"!! {team['team_name']} holds {len(hit)} golfer(s) a review has confirmed are not "
+              "in this week's ESPN field: "
+              + ", ".join(f"{g['golfer_name']} {g['odds']:.4f}" for g in hit)
+              + f".\n   That is {share:.2%} of the {total:.2%} they were dealt, and it stays on "
+              "their card: people were told which golfers they own, so a rebuild does not take "
+              "one back. Those golfers score nothing, which is what a withdrawal costs the team "
+              "that drew them. --regroup re-deals every team around the field that is left.",
+              file=sys.stderr)
+
+
 def join_field(names, players, aliases, decisions):
     """
     Join the Kalshi field onto this week's ESPN field, and say what is left over.
@@ -418,8 +495,8 @@ def join_field(names, players, aliases, decisions):
     return matches, report
 
 
-def espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
-               tournament_name, aliases, recorded_decisions=None):
+def espn_stage(args, espn_event, espn_field, field, weight_by_name, tournament_name,
+               aliases, team_name_of=None, recorded_decisions=None):
     """
     The whole ESPN half of a build: read the field, join it, and assemble the review of
     whatever is left over.
@@ -430,8 +507,21 @@ def espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of
 
     The field arrives already read, from read_espn_field, because reading it is the
     precondition of the whole run and a precondition belongs before the work it gates
-    -- see build(). Everything from here down needs the draw, so this is where the two
-    halves meet rather than where either begins.
+    -- see build().
+
+    Nothing here needs the draw, and that is the point. This used to run last, after the
+    partition and the deal, and `team_name_of` was the only reason it had to -- one
+    column in the review file. It is now optional, and a build calls this BEFORE it
+    deals, so that a golfer who turns out to have withdrawn can be left out of the draw
+    rather than discovered inside it. A rebuild still passes the teams, because a rebuild
+    has the draw in front of it from the file it was handed.
+
+    `weight_by_name` is what each golfer is worth, and the two callers have different
+    numbers to offer. A rebuild passes the grouping weights the pool was dealt on. A
+    build cannot: the grouping weights depend on the exclusion set, which depends on the
+    answers to the very questions this stage is asking. So it passes the de-vig over the
+    whole field, which is a FLOOR on the same quantity -- removing anybody scales every
+    survivor up -- and orders the review file identically, because rescaling is monotone.
 
     Reviewed decisions come from two places and both are wanted. The result file
     carries the ones already applied, so a rebuild does not re-ask a question somebody
@@ -440,6 +530,7 @@ def espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of
     in this Kalshi field are dropped -- they are left over from a different draw and
     binding them would be binding somebody else's competition.
     """
+    team_name_of = team_name_of or {}
     meta, players = espn_field
     event_id = (espn_event or {}).get("event_id")
 
@@ -514,12 +605,26 @@ def pull_odds(event_ticker, price):
     return markets, grouper_cli.sort_field(golfers), sorted(tick)
 
 
-def resolve_exclusions(golfers, n_groups, named, auto):
+def resolve_exclusions(golfers, n_groups, named, auto, withdrawn=()):
     """
     The exclusion set, and a reason for each name.
 
     A result file that says "excluded: Scottie Scheffler" and nothing else is a
     decision with no argument attached. Everything here records which rule fired.
+
+    Three rules now, and they are applied in this order for a reason.
+
+    `named` is somebody's instruction and goes first. `withdrawn` is a fact about the
+    world -- a review looked at this week's published ESPN field and confirmed the
+    golfer is not in it -- and goes second. `over_fair_share` is a rule measured against
+    whatever is left, so it has to go last: taking a golfer out redistributes their
+    probability over everybody who remains, which can push the next one over 1/N.
+    grouper_cli.auto_exclusions iterates that cascade to a fixed point, but it can only
+    iterate over the field it is handed. Give it the withdrawals afterwards and it would
+    have balanced the pool around a golfer who is not playing.
+
+    A withdrawn name is never warned about the way an unknown `named` one is: it came out
+    of the join, which read it from this same field.
     """
     excluded = []
     named = list(named or [])
@@ -531,12 +636,107 @@ def resolve_exclusions(golfers, n_groups, named, auto):
             continue
         excluded.append({"golfer_name": name, "reason": "named"})
 
+    already = {e["golfer_name"] for e in excluded}
+    for name in withdrawn or ():
+        if name in known and name not in already:
+            excluded.append({"golfer_name": name, "reason": "withdrawn"})
+
     if auto:
         remaining = [g for g in golfers if g["golfer_name"] not in {e["golfer_name"] for e in excluded}]
         for name in grouper_cli.auto_exclusions(remaining, n_groups):
             excluded.append({"golfer_name": name, "reason": "over_fair_share"})
 
     return excluded
+
+
+# ---------------------------------------------------------------------------
+# The gate: a name nobody has settled stops the deal
+# ---------------------------------------------------------------------------
+
+def write_review(espn):
+    """
+    Write the review worksheet. -> the path written, or None if there was nothing to say.
+
+    Shared, because there are now two ways out of a run and both owe the reviewer this
+    file. finish() writes it at the end of a build that completed; gate_on_unresolved
+    writes it on the way out of one that stopped, which is the run that needs it most --
+    stopping somebody without handing them the worksheet that answers the question would
+    be a refusal with no way to act on it.
+    """
+    if not espn["review"]:
+        return None
+    return match_review.write(espn["review"]["path"],
+                              **{k: v for k, v in espn["review"].items() if k != "path"})
+
+
+def gate_on_unresolved(espn, devigged, args):
+    """
+    Stop before the deal when a Kalshi golfer cannot be found in this week's ESPN field.
+
+    An unresolved name is two different things wearing one silence: a golfer whose name
+    this join cannot spell, or a golfer who is not playing. Both come back with no
+    athlete id and no row. Only a person can tell them apart, and until somebody has,
+    dealing is a coin toss between "this golfer scores normally" and "one team is
+    carrying a hole worth a slice of a group".
+
+    Which is why this stops the DEAL rather than the run. A rebuild is not gated: it does
+    not deal, the golfers are already on cards, and refusing to refresh a working
+    scoreboard over an open name would be strictly worse than what this replaced.
+    `--regroup` goes through build() and is gated, because a regroup deals.
+
+    Nothing has been written when this fires, including the odds. The Kalshi pull has to
+    come first -- the join needs the Kalshi names -- so a stopped run spends it and keeps
+    nothing, and the next run reads the market again. That is correct rather than
+    unfortunate: the prices a competition is worth are the prices at the moment it was
+    actually dealt, and this run dealt nothing.
+
+    `--deal-anyway` is the second honest answer and not merely an escape hatch. Before
+    the first tee time "no row on the leaderboard" is genuinely not yet the same fact as
+    "withdrew" -- ESPN's field still moves, and a golfer Kalshi already prices may be an
+    alternate ESPN has not listed. Somebody who looked twice and still cannot say should
+    NOT record an absence: a wrong one now takes the golfer out of the draw entirely
+    rather than merely leaving them scoreless, and stops anybody looking again. Dealing
+    them in at full weight is what this tool did before the gate existed, and it is the
+    right answer to "I do not know".
+    """
+    pending = list(espn["report"]["unresolved"])
+    if not pending:
+        return
+
+    shown = ", ".join(f"{name} {devigged.get(name, 0.0):.4f}" for name in pending[:8])
+    share = sum(devigged.get(name, 0.0) for name in pending)
+
+    if args.deal_anyway:
+        print(f"note: --deal-anyway, so the {len(pending)} unsettled golfer(s) go into the draw "
+              f"at their full weight: {shown}" + (" ..." if len(pending) > 8 else ""))
+        print(f"  That is {share:.2%} of the book being dealt without anybody having confirmed "
+              "those golfers are playing. Whichever of them are not, their teams carry the hole "
+              "-- the right call when a field is still moving and an absence would be a guess, "
+              "and the wrong one if nobody has looked yet.")
+        return
+
+    written = write_review(espn)
+    where = written or match_review.review_path(args.output, args.match_review)
+    raise SystemExit(
+        f"{len(pending)} Kalshi golfer(s) are not in this week's ESPN field and nobody has said "
+        f"why:\n  {shown}" + (" ..." if len(pending) > 8 else "")
+        + f"\n  -- {share:.2%} of the priced book between them.\n\n"
+        "Each one is either a name this join will not guess at or a golfer who is not playing, "
+        "and from here those are the same silence. Dealing now would put whichever of them "
+        "withdrew onto somebody's card at a full share of a group they cannot score, and there "
+        "is no way back afterwards: a rebuild never re-deals, so the only route from 'he "
+        "withdrew' to 'deal without him' is --regroup, which re-deals every team. So this run "
+        "has stopped before the deal.\n\n"
+        "Nothing has been written. No groups were drawn, and the odds this run read were not "
+        "kept -- the next run reads the market again, and those are the prices the pool is "
+        f"dealt on.\n\nSettle them in {where} and run this again:\n"
+        '  {"athlete_id": "..."}  binds this golfer to that ESPN athlete\n'
+        '  {"absent": true}       records that they are not in the field, and deals without them\n'
+        "Record an absence only when you can say what happened -- before the first tee time "
+        "ESPN's field is still moving, and an absence now takes a golfer out of the draw rather "
+        "than merely leaving them scoreless. If you looked and still cannot tell, pass "
+        "--deal-anyway: they go into the draw at full weight, which is what this did before "
+        "this check existed.")
 
 
 # ---------------------------------------------------------------------------
@@ -624,25 +824,56 @@ def build(args, league=None, rebuilt_from=None, recorded_decisions=None):
     if len(field) < n_groups:
         raise SystemExit(f"only {len(field)} golfers for {n_groups} teams")
 
+    devigged = {g["golfer_name"]: g["odds"] for g in grouper_cli.normalize_probabilities(field)}
+
+    # -- ESPN, which now comes before the draw --------------------------------
+    # The join used to run last, after the partition and the deal, and its only tie to
+    # them was one column in the review file. Everything it needs is here: the Kalshi
+    # names, and what each of them is worth over the whole field. So it runs here, and a
+    # golfer it cannot find is a question that gets answered BEFORE anybody is dealt
+    # anything -- which is the whole of this change. See gate_on_unresolved.
+    #
+    # A --regroup deals new groups out of the same tournament, so the reviewed name
+    # decisions are still about the same people and come with it. Dropping them would
+    # make a regroup unresolve golfers somebody had already settled, for no reason
+    # except that the partitioner ran again.
+    aliases = load_aliases(args.alias_file)
+    espn = espn_stage(args, espn_event, espn_field, field, devigged, tournament_name,
+                      aliases, recorded_decisions=recorded_decisions)
+    gate_on_unresolved(espn, devigged, args)
+
     # -- exclusions ----------------------------------------------------------
+    # Measured over the whole priced book, which is what this line claims to be about --
+    # a golfer worth more than a group's share of what Kalshi priced. The rule itself is
+    # applied further down against the field that is actually left, so a withdrawal can
+    # push somebody over the line who is not named here; the "Excluded:" line below is
+    # where every golfer who was dropped says which rule dropped them.
     over = grouper_cli.golfers_over_threshold(field, n_groups)
     if over:
         print(f"Above the 1/{n_groups} fair share ({1/n_groups:.4f}): "
               + ", ".join(f"{g['golfer_name']} {g['odds']:.4f}" for g in over))
-    excluded = resolve_exclusions(field, n_groups, args.exclude, args.auto_exclude)
+    withdrawn = list(espn["report"]["absent"])
+    excluded = resolve_exclusions(field, n_groups, args.exclude, args.auto_exclude,
+                                  withdrawn=withdrawn)
     excluded_names = {e["golfer_name"] for e in excluded}
     if excluded:
         print("Excluded: " + ", ".join(f"{e['golfer_name']} ({e['reason']})" for e in excluded))
+    gone = [e["golfer_name"] for e in excluded if e["reason"] == "withdrawn"]
+    if gone:
+        print(f"  {len(gone)} of them because a review confirmed they are not in this week's "
+              f"ESPN field, worth {sum(devigged.get(n, 0.0) for n in gone):.2%} of the book "
+              "between them. They are left out of the draw rather than dealt onto a card they "
+              "cannot score on. Their share goes back to everybody else, so the fair-share rule "
+              "was re-measured over the field that is left.")
 
-    devigged = {g["golfer_name"]: g["odds"] for g in grouper_cli.normalize_probabilities(field)}
     if excluded_names:
         weighted = grouper_cli.odds_to_conditional(field, excluded_names)
     else:
         weighted = grouper_cli.normalize_probabilities(field)
 
     if len(weighted) < n_groups:
-        raise SystemExit(f"only {len(weighted)} golfers left after excluding {len(excluded)}, "
-                         f"which cannot fill {n_groups} groups")
+        raise SystemExit(f"only {len(weighted)} golfers left after excluding {len(excluded)} "
+                         f"({len(gone)} of them withdrawn), which cannot fill {n_groups} groups")
 
     # -- the partition -------------------------------------------------------
     print(f"Grouping {len(weighted)} golfers into {n_groups} groups...")
@@ -658,18 +889,6 @@ def build(args, league=None, rebuilt_from=None, recorded_decisions=None):
     order = list(range(n_groups))
     random.Random(seed).shuffle(order)
     team_groups = {teams[i]["team_id"]: groups[order[i]] for i in range(n_groups)}
-
-    # -- ESPN ----------------------------------------------------------------
-    aliases = load_aliases(args.alias_file)
-    weight_by_name = {g["golfer_name"]: g["odds"] for g in weighted}
-    team_name_of = {g["golfer_name"]: team["team_name"]
-                    for team in teams for g in team_groups[team["team_id"]]}
-    # A --regroup deals new groups out of the same tournament, so the reviewed name
-    # decisions are still about the same people and come with it. Dropping them would
-    # make a regroup unresolve golfers somebody had already settled, for no reason
-    # except that the partitioner ran again.
-    espn = espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
-                      tournament_name, aliases, recorded_decisions=recorded_decisions)
 
     # -- assemble ------------------------------------------------------------
     result = assemble(
@@ -713,8 +932,7 @@ def finish(result, args, espn, aliases, started):
     print(f"\nResult -> {args.output}  ({os.path.getsize(args.output) // 1024} KB)")
 
     if espn["review"]:
-        written = match_review.write(espn["review"]["path"],
-                                     **{k: v for k, v in espn["review"].items() if k != "path"})
+        written = write_review(espn)
         pending = espn["report"]["unresolved"]
         if written and pending:
             print(f"Review -> {written}  ({len(pending)} golfer(s) need a decision)")
@@ -841,6 +1059,20 @@ def rebuild(args, result):
     Re-partitioning is deliberately NOT what this does. Rebuilding a competition and
     quietly dealing everyone new golfers is the single most destructive thing this tool
     could do; --regroup asks for it explicitly and goes through build().
+
+    Which decides what happens to a golfer who withdraws AFTER the draw, and the answer
+    is: nothing. They keep the card they were dealt to, they carry the weight they were
+    dealt at, and they score nothing -- which is how a pool handles a withdrawal, and the
+    only answer consistent with a rebuild that never re-deals. Dropping them and
+    renormalizing their team's total would move one team's number and not the others', so
+    the file would report a total nobody was dealt; this function already refuses a file
+    that does that (see `orphans` below). What a rebuild does add is a sentence naming
+    the team that is carrying the hole, because until now that discovery was silent.
+
+    A rebuild is also NOT gated on unresolved names, and that asymmetry is deliberate.
+    The gate in build() protects the deal, and there is no deal here -- the golfers are
+    already on cards. Refusing to refresh a working scoreboard over an open name would be
+    strictly worse than the behaviour it replaced.
     """
     started = time.time()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -921,10 +1153,11 @@ def rebuild(args, result):
                     for team in teams for g in team_groups[team["team_id"]]}
     espn_field = read_espn_field(args, espn_event)
     check_pinned_event(espn_event, espn_field[0], tournament["name"], args.espn_event)
-    espn = espn_stage(args, espn_event, espn_field, field, weight_by_name, team_name_of,
-                      tournament["name"], aliases,
+    espn = espn_stage(args, espn_event, espn_field, field, weight_by_name,
+                      tournament["name"], aliases, team_name_of=team_name_of,
                       recorded_decisions=espn_source.get("match_decisions"))
     refuse_a_collapsed_join(espn, espn_source, args.from_result)
+    report_withdrawals_on_cards(espn, teams, team_groups)
 
     # -- assemble ------------------------------------------------------------
     rebuilt_from = {
@@ -1410,6 +1643,13 @@ def build_parser():
                     help="the review file for golfer names the join will not guess at. "
                          "Read for decisions before the join and rewritten after it. "
                          "Defaults to match-review.json beside --output.")
+    ap.add_argument("--deal-anyway", dest="deal_anyway", action="store_true",
+                    help="deal even though some Kalshi golfers were not found in the ESPN "
+                         "field. A build normally stops there, because an unfound golfer is "
+                         "either a name it will not guess at or somebody who withdrew, and "
+                         "dealing puts whichever of them withdrew onto a card at full weight. "
+                         "Pass this when you have looked and still cannot say -- an absence "
+                         "recorded wrongly is worse. Ignored by a rebuild, which does not deal.")
     ap.add_argument("--update-aliases", action="store_true",
                     help="write name bindings settled in the review file back to the alias "
                          "file, so the next tournament resolves them automatically")
@@ -1541,6 +1781,14 @@ def main(argv=None):
                 f"--regroup would overwrite {args.from_result} with a different draw, and that "
                 "file is the record of the groups people already have. Give --output a new "
                 "path, or --overwrite if replacing it is the point.")
+        # Said rather than refused, because the flag is valid on the other half of this
+        # branch: --regroup deals, so --regroup --deal-anyway means something. A plain
+        # rebuild deals nothing, so there is nothing for it to override -- and somebody
+        # who typed it was expecting an effect and should be told they did not get one.
+        if args.deal_anyway and not args.regroup:
+            print("note: --deal-anyway has no effect on a rebuild. It overrides the check that "
+                  "stops a DEAL when a golfer cannot be found in the ESPN field, and a rebuild "
+                  "does not deal -- the golfers named below are already on cards and stay there.")
         try:
             if args.regroup:
                 build(args, league=(league_mod.load_league(args.league) if args.league

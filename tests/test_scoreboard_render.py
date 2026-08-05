@@ -439,6 +439,48 @@ def test_the_optimality_certificate_is_shown(page, competition):
     assert not re.search(r"\d[eE][-+]\d", text), "no float noise in a display face"
 
 
+def test_a_withdrawn_golfer_is_not_presented_as_somebody_the_pool_dropped(browser,
+                                                                          rocket_classic,
+                                                                          serve_espn, tmp_path):
+    """
+    `withdrawn` is the one entry in this card that nobody chose, and the card is headed
+    "Excluded from the draw".
+
+    Every other reason has a sentence, and this one used to fall through to the raw field
+    name with the underscores taken out -- so a golfer who was simply not in the
+    tournament appeared under that heading, in a list beside the golfer the commissioner
+    had left out on purpose, with the single word "withdrawn" as the whole explanation.
+    The league reads that as somebody having taken a player off their team.
+    """
+    result = json.loads(json.dumps(rocket_classic["result"]))
+    gone = next(g for g in result["golfers"] if g["team_id"])
+    for team in result["teams"]:
+        if gone["name"] in team["golfer_names"]:
+            keep = [i for i, n in enumerate(team["golfer_names"]) if n != gone["name"]]
+            team["golfer_names"] = [team["golfer_names"][i] for i in keep]
+            team["golfer_ids"] = [team["golfer_ids"][i] for i in keep]
+            team["total_odds"] = round(team["total_odds"] - gone["odds"]["grouping_weight"], 10)
+            team["golfer_count"] = len(keep)
+    result["odds_snapshot"]["excluded"] = [
+        {"golfer_name": gone["name"], "reason": "withdrawn",
+         "raw_odds": gone["odds"]["raw"], "devigged_odds": gone["odds"]["devigged"]}]
+    gone.update(team_id=None, excluded=True)
+    gone["odds"]["grouping_weight"] = None
+    gone["espn"].update(match="absent", in_field=False, athlete_id=None, display_name=None)
+
+    paths, _ = bundler.bundle(result, TEMPLATE, str(tmp_path / "dist"))
+    ctx, out = open_page(browser, paths[0], serve_espn())
+    out["page"].locator("#tab-odds").click()
+    text = out["page"].locator("#odds-cards").text_content()
+
+    assert gone["name"] in text
+    assert "withdrawn before the draw" in text
+    assert "left out on purpose" not in text, "nobody left this golfer out on purpose"
+    assert "were not in the field ESPN published" in text, "and why they are on this list"
+    assert out["errors"] == []
+    ctx.close()
+
+
 def test_the_odds_view_carries_only_the_draw_and_nothing_that_needs_explaining(page):
     """
     The odds view is read by the league, not by whoever built it. Three cards were

@@ -337,6 +337,54 @@ nothing and are completely different facts, and only the first is knowable by lo
 so the report keeps them in separate piles: `absent` and `unresolved`. Only the second
 is a reason to do anything.
 
+### The deal waits for that answer
+
+The join runs **before** the partition and the deal, and an unresolved name stops the
+run:
+
+```
+read ESPN field → pull odds → JOIN → gate
+  → exclusions (`withdrawn` beside `named` and `over_fair_share`)
+  → partition → deal
+```
+
+It used to run last, forty lines after the deal. So a golfer who had withdrawn was
+partitioned, weighted and dealt onto somebody's card before anybody found out — carrying
+a full share of a group that could never score it, on a team whose `total_odds` said the
+draw was even. There was no way back either: a rebuild deliberately never re-partitions,
+so the only route from "he withdrew" to "deal without him" was `--regroup`, which
+re-deals every team. In a five-team pool the fair share is 20%, so a Koepka-sized hole is
+a real piece of one group, and which group is decided by a coin toss.
+
+A build that stops has written nothing — not the result file, not the odds it just read.
+The next run reads the market again, and those are the prices the pool is dealt on,
+because this one dealt nothing. What it does write is `match-review.json`, since a
+refusal somebody cannot act on is worse than the thing it refused.
+
+Settle the names and run it again, and a `{"absent": true}` becomes an exclusion with
+`reason: "withdrawn"` — taken out **before** the fair-share rule is measured, because
+removing a golfer scales everybody else up and can push the next one over 1/N. The
+survivors are renormalised back to a full 1.0 between them.
+
+`--deal-anyway` is the other honest answer, and not merely an override. Before the first
+tee time "no row on the leaderboard" is genuinely not yet the same fact as "withdrew", so
+somebody who looked twice and still cannot say should **not** record an absence — a wrong
+one now takes a golfer out of the draw entirely rather than merely leaving them
+scoreless. Dealing them in at full weight is what this did before the gate existed, and
+it is the recoverable mistake.
+
+**A rebuild is not gated**, because a rebuild does not deal. The gate protects the deal;
+refusing to refresh a working scoreboard over an open name would be strictly worse than
+what it replaced. `--regroup` goes through the build and *is* gated, because a regroup
+deals.
+
+And a golfer who withdraws **after** the draw keeps the card they were dealt to. Nothing
+moves: people were told which golfers they own, so a rebuild does not take one back, and
+dropping them would rescale one team's total and not the others' — leaving the file
+reporting a number nobody was dealt. They score nothing, which is what a withdrawal costs
+the team that drew them. The rebuild now names that team out loud, and says `--regroup`
+is the thing that would deal around it.
+
 Two more things make a build report fewer matches than it had names, and both are
 refusals rather than failures:
 
@@ -371,11 +419,22 @@ through the half that moves the standings. A golfer who is simply not in the fie
 back with an empty suggestion list, which is itself the answer — an ESPN field and a
 Kalshi field for the same tournament are very nearly the same people.
 
+Two columns in that file say less on a build than they do on a rebuild, and both for the
+same reason. `team` is **null** on a build, because a build has no draw when it writes
+this — the join runs first precisely so nobody is dealt a golfer whose status is still an
+open question. And `grouping_weight` is the de-vig over the whole field rather than the
+weight the partitioner saw, because that weight depends on the exclusion set, which
+depends on the answers in this very file. It is a floor on the same number (removing
+anybody scales every survivor up) and it ranks the list identically, because rescaling is
+monotone.
+
 Before the first tee time, "no row on the leaderboard" and "withdrew" are not yet the
 same fact: the build runs a day or two early, and a golfer Kalshi prices may be an
-alternate ESPN has not listed yet. Record an absence only when you can say what
-happened; an unresolved golfer costs nothing until play starts, and a wrong absence
-stops anybody looking again.
+alternate ESPN has not listed yet. Record an absence only when you can say what happened.
+A wrong one costs more than it used to — it now takes the golfer out of the draw rather
+than merely leaving them scoreless, and it stops anybody looking again. When you have
+looked twice and still cannot say, leave the entry unfilled and re-run with
+`--deal-anyway`.
 
 Somebody — in practice Claude, driving `.claude/skills/golf-pool/` — fills in
 `decisions`, binding an athlete id or recording an absence, and the next build reads it
@@ -397,7 +456,11 @@ waiting does not fix: everything else about a Wednesday build sorts itself out a
 first tee time, and this does not.
 
 Which makes the review worth clearing **before the page goes out**, because that is the
-only join.
+only join — and it is now the build itself that insists, rather than a paragraph in a
+README. A build stops at the gate rather than deal past an unresolved name, so the
+default outcome is a cleared review instead of a page somebody has to be told to check.
+`--deal-anyway` is still there for the golfer nobody can settle, and it says out loud
+what share of the book is being dealt on nobody's say-so.
 
 It is a smaller exposure than it looks, because the draw is frozen at the same moment.
 A golfer can only be on a team if Kalshi priced them at draw time, so the field that

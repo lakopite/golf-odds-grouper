@@ -666,7 +666,7 @@ def test_an_espn_outage_during_a_live_tournament_is_refused_too(result_file, mon
     assert "503" in str(exc.value)
 
 
-def test_a_3x_groups_file_rebuilds_into_a_4_0_one_with_the_espn_half_it_never_had(
+def test_a_3x_groups_file_rebuilds_into_a_current_one_with_the_espn_half_it_never_had(
         result_file, espn_field, tmp_path):
     """
     The upgrade path, and the one migration this change actually needs.
@@ -676,6 +676,10 @@ def test_a_3x_groups_file_rebuilds_into_a_4_0_one_with_the_espn_half_it_never_ha
     it against a posted field fills all of that in and drops the key, without anybody
     having to convert anything by hand -- and without touching the draw, which is the
     whole reason the file is worth upgrading rather than replacing.
+
+    Asserted against SCHEMA_VERSION rather than a literal, because what this test is
+    about is that the upgrade happens at all. Which version it lands on is 4.x's business
+    and is pinned once, in the test that owns the version.
     """
     path, result = result_file
     legacy = json.loads(json.dumps(result))
@@ -694,7 +698,7 @@ def test_a_3x_groups_file_rebuilds_into_a_4_0_one_with_the_espn_half_it_never_ha
     run(["--from-result", str(legacy_path), "--output", out])
     after = rebuilt(out)
 
-    assert after["schema_version"] == "4.0"
+    assert after["schema_version"] == bc.SCHEMA_VERSION
     assert "build_mode" not in after
     assert after["live"] is not None
     assert all(g["espn"]["athlete_id"] for g in after["golfers"])
@@ -837,9 +841,185 @@ def test_regroup_partitions_the_new_field_and_says_it_was_a_regroup(result_file,
     assert [t["team_id"] for t in after["teams"]] == [t["team_id"] for t in before["teams"]]
 
 
+def test_regroup_stops_before_dealing_a_golfer_nobody_has_settled(result_file, monkeypatch,
+                                                                  tmp_path):
+    """
+    A regroup deals, so a regroup is gated. The golfer ESPN does not list is either a name
+    the join will not guess at or somebody who is not playing, and dealing now would put
+    whichever of them withdrew onto a card at a full share of a group they cannot score.
+
+    Nothing is written -- not the result, not a partial one -- and the worksheet that
+    answers the question is, because a refusal somebody cannot act on is worse than the
+    thing it refused.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    missing = names[0]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names[1:]))
+    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
+        kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]])
+
+    out = tmp_path / "out.json"
+    with pytest.raises(SystemExit) as exc:
+        bc.main(["--from-result", path, "--regroup", "--time-limit", "0.3",
+                 "--output", str(out)])
+
+    assert missing in str(exc.value)
+    assert not out.exists(), "a run that stopped at the gate deals nothing and writes nothing"
+    review = json.loads((tmp_path / "match-review.json").read_text())
+    assert [row["kalshi_name"] for row in review["pending"]] == [missing]
+    assert review["pending"][0]["team"] is None, "there is no draw yet -- that is the point"
+
+
+def test_a_confirmed_withdrawal_is_dealt_around_rather_than_dealt_out(result_file,
+                                                                      monkeypatch, tmp_path):
+    """
+    The end of the road this change exists to build. Somebody looked at the leaderboard,
+    confirmed the golfer is not in it, wrote it down -- and the next deal leaves them out
+    of the draw instead of putting them on a card.
+
+    Which is a different claim from "they score nothing", and the numbers are where it
+    shows: they carry no grouping weight, they belong to no team, they appear in nobody's
+    roster, and the survivors are rescaled back to a full 1.0 between them. The old order
+    could not produce any of that -- it found out after the partition had already run.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    gone = names[0]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names[1:]))
+    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
+        kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]])
+    (tmp_path / "match-review.json").write_text(json.dumps({
+        "schema": match_review.SCHEMA,
+        "espn": {"event_id": "401811961", "league": "pga"},
+        "decisions": {gone: {"absent": True, "note": "withdrew before the first round"}},
+    }))
+
+    out = str(tmp_path / "out.json")
+    run(["--from-result", path, "--regroup", "--time-limit", "0.3", "--output", out])
+    after = rebuilt(out)
+
+    golfer = next(g for g in after["golfers"] if g["name"] == gone)
+    assert golfer["excluded"] is True
+    assert golfer["odds"]["grouping_weight"] is None
+    assert golfer["team_id"] is None
+    assert golfer["espn"]["in_field"] is False, "checked, and not playing"
+    assert golfer["odds"]["devigged"] > 0, "the file still records what they were worth"
+
+    assert {"golfer_name": gone, "reason": "withdrawn"} in [
+        {"golfer_name": e["golfer_name"], "reason": e["reason"]}
+        for e in after["odds_snapshot"]["excluded"]]
+    assert all(gone not in t["golfer_names"] for t in after["teams"])
+    assert sum(t["total_odds"] for t in after["teams"]) == pytest.approx(1.0, abs=1e-6)
+    assert after["grouping"]["grouped_golfers"] == len(names) - 1
+
+
+def test_deal_anyway_deals_the_golfer_nobody_could_settle(result_file, monkeypatch, tmp_path):
+    """
+    The override, end to end. It has to produce exactly what this tool produced before the
+    gate existed -- the golfer on a card, at full weight, scoring nothing -- because that
+    is the right answer when a field is still moving and an absence would be a guess.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    missing = names[0]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names[1:]))
+    monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
+        kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]])
+
+    out = str(tmp_path / "out.json")
+    run(["--from-result", path, "--regroup", "--deal-anyway", "--time-limit", "0.3",
+         "--output", out])
+    after = rebuilt(out)
+
+    golfer = next(g for g in after["golfers"] if g["name"] == missing)
+    assert golfer["excluded"] is False
+    assert golfer["team_id"], "dealt, like everybody else"
+    assert golfer["odds"]["grouping_weight"] is not None
+    assert golfer["espn"]["in_field"] is None, "nobody looked, and the file does not pretend"
+    assert after["sources"]["espn"]["match_report"]["unresolved"] == [missing]
+
+
+# ---------------------------------------------------------------------------
+# A withdrawal after the draw
+# ---------------------------------------------------------------------------
+
+def test_a_rebuild_is_not_gated_on_an_unsettled_name(result_file, monkeypatch, tmp_path):
+    """
+    The asymmetry, stated as its own claim. The gate protects the DEAL, and a rebuild does
+    not deal -- the golfers are already on cards. Refusing to refresh a working scoreboard
+    over an open name would be strictly worse than the behaviour this replaced, so a
+    rebuild carries straight on and writes the name into the review file instead.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names[1:]))
+
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--output", out])
+    assert rebuilt(out)["sources"]["espn"]["match_report"]["unresolved"] == [names[0]]
+
+
+def test_a_withdrawal_after_the_draw_keeps_the_card_it_was_dealt_to(result_file, monkeypatch,
+                                                                     tmp_path, capsys):
+    """
+    The other half of decision two, and the one a pool actually meets most weeks: the
+    groups went out on Wednesday, somebody pulled out on Thursday.
+
+    Nothing moves. People were told which golfers they own, so a rebuild does not take one
+    back -- and dropping them would rescale ONE team's total and not the others', leaving
+    the file reporting a number nobody was dealt. What a rebuild does add is a sentence
+    naming the team that is carrying the hole, because until now that discovery was
+    silent.
+    """
+    path, result = result_file
+    names = [g["name"] for g in result["golfers"]]
+    gone = names[0]
+    holder = next(t for t in result["teams"] if gone in t["golfer_names"])
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names[1:]))
+    (tmp_path / "match-review.json").write_text(json.dumps({
+        "schema": match_review.SCHEMA,
+        "espn": {"event_id": "401811961", "league": "pga"},
+        "decisions": {gone: {"absent": True, "note": "withdrew after the draw"}},
+    }))
+
+    out = str(tmp_path / "after.json")
+    run(["--from-result", path, "--output", out])
+    after = rebuilt(out)
+
+    golfer = next(g for g in after["golfers"] if g["name"] == gone)
+    assert golfer["excluded"] is False, "a rebuild excludes nobody -- it does not re-deal"
+    assert golfer["team_id"] == holder["team_id"]
+    assert golfer["odds"]["grouping_weight"] is not None
+    assert golfer["espn"]["in_field"] is False
+    assert [t["golfer_names"] for t in after["teams"]] == [
+        t["golfer_names"] for t in result["teams"]], "nobody was re-dealt"
+    assert next(t for t in after["teams"] if t["team_id"] == holder["team_id"])[
+        "total_odds"] == pytest.approx(holder["total_odds"], abs=1e-9)
+
+    err = capsys.readouterr().err
+    assert holder["team_name"] in err and gone in err
+    assert "--regroup" in err, "and what would deal around it, for somebody who wants that"
+
+
 # ---------------------------------------------------------------------------
 # The flags that only mean something together
 # ---------------------------------------------------------------------------
+
+def test_deal_anyway_on_a_plain_rebuild_says_it_did_nothing(result_file, espn_field,
+                                                             tmp_path, capsys):
+    """
+    Valid on the other half of this branch -- --regroup deals -- so it is a note rather
+    than an error. But somebody who typed it expected an effect and did not get one.
+    """
+    out = str(tmp_path / "after.json")
+    run(["--from-result", result_file[0], "--deal-anyway", "--output", out])
+    assert "no effect on a rebuild" in capsys.readouterr().out
 
 def test_regroup_needs_a_rebuild(capsys):
     """
@@ -963,13 +1143,18 @@ def test_the_tournaments_dates_and_course_survive_a_payload_that_omits_them(
     assert after["state_at_build"] == "post"
 
 
-def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, espn_field,
-                                                                   monkeypatch):
+def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, monkeypatch):
     """
     A file with no over_fair_share exclusions either had nobody over the line or had the
     rule switched off, and those two rebuild differently. Without recording which, a
     --regroup of a --no-auto-exclude competition drops the favourite out of the pool
     altogether -- not to another team, out.
+
+    This builds its own twelve-golfer competition rather than using `result_file`, so it
+    serves ESPN its own field too. It used to lean on the `espn_field` fixture, which
+    answers with the FORTY names of a different fixture -- so the join resolved none of
+    these twelve and nobody noticed, because an unresolved golfer used to be dealt anyway.
+    A regroup now stops on one. Serving the right field is what the test always meant.
     """
     result = make_result(n_teams=4, n_golfers=12)
     # One golfer worth more than a quarter of the field, kept deliberately.
@@ -978,6 +1163,9 @@ def test_the_fair_share_rule_being_switched_off_survives_a_regroup(tmp_path, esp
     path = tmp_path / "kept.json"
     path.write_text(json.dumps(result))
 
+    names = [g["name"] for g in result["golfers"]]
+    monkeypatch.setattr(espn, "fetch_leaderboard",
+                        lambda event_id, league=espn.DEFAULT_LEAGUE: leaderboard(names))
     monkeypatch.setattr(bc.kalshi_odds, "markets_for", lambda *a, **kw: [
         kalshi_market(g, g["odds"]["raw"]) for g in result["golfers"]])
     out = str(tmp_path / "out.json")

@@ -326,10 +326,15 @@ nowhere.
   The numbers may be exact; their captions may not be jargon. "ask prices · probability
   basis" is precise, and it is also the caption that got a scoreboard accused of hiding
   something. Say what the number means to somebody who has never priced a book.
-- Who was **excluded and why** (`odds_snapshot.excluded[].reason` is `named` or
-  `over_fair_share`). A golfer worth more than a whole group's fair share cannot be
-  balanced around, so they were dropped — that is a fact the pool will argue about and
-  the page should be able to settle.
+- Who was **excluded and why** (`odds_snapshot.excluded[].reason` is `named`,
+  `withdrawn` or `over_fair_share`). A golfer worth more than a whole group's fair share
+  cannot be balanced around, so they were dropped — that is a fact the pool will argue
+  about and the page should be able to settle. Give `withdrawn` its own sentence rather
+  than printing the raw word: it is the one entry in this list that nobody chose, and
+  the bare word under a heading reading "excluded from the draw" says the pool dropped
+  somebody it did not drop. They were not in the field ESPN published when the groups
+  were drawn, so they were left out rather than dealt to a team they could never score
+  for.
 - The **grouping certificate** (§`grouping`): the delta, whether it is provably optimal,
   and the group sizes.
 - The **full draw**: every group as it was dealt, and every golfer in it with what they
@@ -631,7 +636,7 @@ reader never has to establish which document they are holding. See §2.
     "price_mode": "ask", "field_size": 150,
     "raw_book_sum": 1.166, "liquidity": { … },
     "normalization": { "basis": "probability | share_of_n_slots", "note": "…" },
-    "excluded": [{ "golfer_name": "…", "reason": "named | over_fair_share",
+    "excluded": [{ "golfer_name": "…", "reason": "named | withdrawn | over_fair_share",
                    "raw_odds": 0.21, "devigged_odds": 0.18 }],
     // Whether the 1/n fair-share rule ran. An empty `excluded` means nobody was over
     // the line OR the rule was off, and only this says which.

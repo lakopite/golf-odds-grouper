@@ -122,6 +122,7 @@ Useful flags:
 | `--no-auto-exclude` | keep golfers over the fair-share threshold |
 | `--match-review build/match-review.json` | the file reviewed name decisions are read from and written to; defaults to `match-review.json` beside `--output` (§4.2) |
 | `--update-aliases` | keep the name bindings settled in that file as reusable aliases (§4.2) |
+| `--deal-anyway` | deal past golfers the join could not find in the ESPN field. A build normally stops there. Only when a review has looked and genuinely cannot say whether they withdrew (§4.2) |
 
 **Read the output before moving on.** It reports:
 
@@ -142,6 +143,13 @@ Useful flags:
   names it settled and by which tier (exact, alias, reviewed). Names it will not guess at
   come back as **NEEDS REVIEW**, listed, with a file to settle them in — that is §4.2,
   and it is a normal part of a build rather than a failure.
+
+  A build with any of those **stops before the deal** rather than finishing, because an
+  unresolved golfer is either a name the join will not guess at or somebody who withdrew,
+  and dealing puts whichever of them withdrew onto a card at a full share of a group they
+  cannot score. Nothing is written. Go to §4.2, settle them, run it again. If a name
+  genuinely cannot be settled, `--deal-anyway` deals it in at full weight — see §4.2 for
+  when that is the right answer rather than the lazy one.
 
   There is no other outcome to read: a build that could not read a field, or read an
   empty one, has already stopped and told you which of three things went wrong. Nothing
@@ -190,7 +198,10 @@ Short. The groups are in the file; do not paste 150 golfers into chat. Say:
 - **that the page starts ranking on its own at the first tee time**, so nobody needs a
   new file — say it once, plainly, or they will come back on Thursday asking for the
   scoreboard;
-- how many golfers came back needing a decision (§4.2), if any;
+- who was dropped as **withdrawn**, if anyone, and that the draw was made without them —
+  that is a golfer nobody chose to exclude and somebody will ask;
+- how many golfers came back needing a decision (§4.2), if any, and whether any were
+  dealt in with `--deal-anyway`;
 - anything odd — a fuzzy tournament match, a short field.
 
 If odds come up, say once that the page's odds are the snapshot from the draw and never
@@ -331,6 +342,13 @@ event that was pinned to the wrong id. It also works after the tournament has fi
 which a fresh build does not — settled markets quote nothing, so a `--regroup` at that
 point fails by design.
 
+A golfer who withdrew **after** the draw keeps the card they were dealt to, and a rebuild
+is the run that records it: the file marks them not in the field, the run names the team
+carrying the hole, and the groups do not move. That is the answer, not a limitation —
+people were told which golfers they own, and rescaling one team's total after the fact
+would report a number nobody was dealt. If they want the draw redone around it, that is
+`--regroup`, and it re-deals **everybody**.
+
 It refuses exactly what a first build refuses, in the same code: no readable ESPN field,
 no rebuild. Mid-tournament that matters most — ESPN blinks, the rebuild finds nothing,
 and writing on it would strip every athlete id off a working scoreboard and present that
@@ -357,14 +375,24 @@ Review -> build/match-review.json  (12 golfer(s) need a decision)
 ```
 
 Expect a handful. On the measured Rocket Classic field, 139 of 151 Kalshi names resolved
-outright, 12 came back for review, and 4 of those 12 turned out to be withdrawals.
+outright, 12 came back for review, and 4 of those 12 turned out to be withdrawals. (The
+eight name misses from that field are already in `data/espn_aliases.json`, so a build
+against a tournament this repo has seen before usually only stops on the withdrawals.)
 
-**This is not a blocker, but Wednesday night is now the only join**, so clearing it
-before the page goes out is worth more than it used to be. The build already wrote a
-complete result file and it is deployable exactly as it stands; the golfers left open simply score nothing, and their
-teams score nothing from them. If the user asked for the groups, hand the build over and
-mention the number. The review is what you do when the standings matter — an unresolved
-golfer worth 4% sitting in somebody's roster is the whole scoreboard.
+**On a build this is a blocker, and deliberately.** The run stops before the partition,
+writes `match-review.json`, and writes nothing else — no result file, and no record of
+the odds it read. Four of those twelve are not in the tournament, and from the build's
+side a withdrawal and a name it cannot spell are the same silence. Dealing would put
+whichever of them withdrew onto somebody's card at a full share of a group they cannot
+score, and there is no way back afterwards: a rebuild never re-deals, so the only route
+to "deal without him" is `--regroup`, which re-deals every team.
+
+So this is the step, not an optional polish on it. Settle the names, run the build again,
+and the withdrawals come out of the draw before the partition rather than being
+discovered inside it.
+
+**On a rebuild it is not a blocker**, because a rebuild does not deal — the golfers are
+already on cards. It carries on and lists what is still open.
 
 **Open the file and read it.** Each `pending` entry is one unsettled Kalshi name,
 heaviest first, with the ESPN athletes nobody claimed offered as ranked suggestions:
@@ -397,10 +425,14 @@ string:
 Two kinds of answer, and they are genuinely different. `athlete_id` **binds**: this
 Kalshi golfer is that ESPN athlete, and the page shows that athlete's scores under this
 golfer's name. `absent` records that the golfer is **not in the field at all** — a
-withdrawal. Both end with the golfer scoring nothing this week; the difference is that
-the second is a fact somebody checked, and the file will say so instead of leaving them
-looking missed. `athlete_id` is the only thing that binds — `espn_name` and `note` are
-for readers, and `espn_name` is what an alias gets learned from.
+withdrawal. `athlete_id` is the only thing that binds — `espn_name` and `note` are for
+readers, and `espn_name` is what an alias gets learned from.
+
+`absent` now decides a draw, so be exact about which run you are on. On a **build** the
+golfer is left out of the partition entirely: no grouping weight, no team, and everybody
+else's share renormalised over the field that is left. On a **rebuild** they keep the
+card they were already dealt to and score nothing, because a rebuild does not re-deal —
+people were told which golfers they own.
 
 Two ways to get this wrong, both easy:
 
@@ -425,14 +457,26 @@ the field ESPN published.
 runs a day or two early now, and ESPN's field still moves in that window — a golfer
 Kalshi already prices may be an alternate ESPN has not listed yet. Both cases look
 identical in one snapshot: no row, no suggestions. So record `absent` only when you can
-say what happened, and leave the rest unresolved. An unresolved golfer costs nothing
-until play starts and is settled by the next rebuild; an `absent` recorded wrongly is a
-decision that sticks and stops anybody looking again.
+say what happened. A wrong one now takes a golfer out of the draw rather than merely
+leaving them scoreless, and it sticks: nobody looks again at a question marked answered.
 
 Two reads are what tell them apart. Measured on the Wyndham, 2026-08-04: Daniel Berger
 was in ESPN's field at 18:16 and gone by 19:55, with David Skinns listed in his place
 and the field size unchanged at 147. That is a withdrawal, and it is knowable because
 somebody looked twice.
+
+**If you looked twice and still cannot say, do not guess — use `--deal-anyway`.** Leave
+the entry out of `decisions` and add the flag to the build:
+
+```bash
+python build_competition.py --league leagues/sunday-fivesome.json \
+  --tournament "Wyndham Championship" --deal-anyway
+```
+
+They go into the draw at full weight and score nothing if they are indeed out, which is
+exactly what this tool did before the gate existed. The run says which golfers it dealt
+on nobody's say-so and what share of the book they are. That is the recoverable mistake;
+a wrong `absent` is not.
 
 Then rebuild, and the decisions take effect:
 
@@ -501,7 +545,7 @@ Everything is in there; read it rather than recomputing.
 | Had anybody teed off when this was built? | `sources.espn.started_at_build`, with `tournament.state_at_build` for ESPN's own word. Normally false, because pools are drawn the night before. It is a record of the clock, **not** what the page ranks on — the page asks the leaderboard on every poll |
 | Why did I get this group? | `grouping.summary`, `grouping.optimal`, `generator.seed` |
 | Was the draw fair? | `teams[].total_odds` — all ≈ 1/n |
-| Why is X missing? | `odds_snapshot.excluded[]`, with a reason each |
+| Why is X missing? | `odds_snapshot.excluded[]`, with a reason each: `named` (somebody said so), `withdrawn` (a review confirmed they are not in this week's ESPN field, so they were left out of the draw), `over_fair_share` (worth more than 1/teams and unbalanceable) |
 | What was X worth? | `golfers[].odds` — `raw`, `devigged`, `grouping_weight` |
 | Is X actually playing? | `golfers[].espn.in_field` — true, false (checked, and they are not), or null (nobody has looked) |
 | Who is X on ESPN, and how do we know? | `golfers[].espn.athlete_id` / `.display_name`, and `.match` — `exact`, `alias`, `decision`, `absent` or `unresolved` |

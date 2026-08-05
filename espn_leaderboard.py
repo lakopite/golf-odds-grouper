@@ -586,6 +586,15 @@ def match_field(names, players, aliases=None, decisions=None):
     Both score nothing and neither is counted, so they are the same to the standings
     and completely different to a reader deciding whether the build is finished.
 
+    They are also, now, completely different to the draw. build_competition runs this
+    join BEFORE it partitions, and both piles are read there: `absent` becomes an
+    exclusion, so a golfer who withdrew is left out of the groups rather than dealt onto
+    a card they cannot score on, and `unresolved` stops the build, because from here a
+    withdrawal and a name this join will not guess at are the same silence and only a
+    person can tell them apart. Which makes keeping the two apart load-bearing rather
+    than merely honest: folding a question into a fact would deal a live golfer out of
+    the pool, and folding a fact into a question would put a dead one back in.
+
     Done in two passes, and the order matters. One ESPN athlete cannot be on two
     teams, so when two Kalshi names reach the same person the second is refused --
     and which one is "second" must not depend on how Kalshi happened to sort its

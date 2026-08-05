@@ -34,10 +34,26 @@ A name can be settled two ways, and they are genuinely different:
     {"athlete_id": "4588361"}      this Kalshi name IS that ESPN athlete
     {"absent": true}               this golfer is not in the field. They withdrew.
 
-Both end with the golfer scoring nothing this week -- an absent golfer has no
-leaderboard row to read. The difference is that the second is a fact somebody checked
-and the first tells the scoreboard whose scores to show. A build that has neither only
-knows it could not find the name, which is not the same as either.
+The difference is that the second is a fact somebody checked and the first tells the
+scoreboard whose scores to show. A build that has neither only knows it could not find
+the name, which is not the same as either.
+
+AND ONE OF THE TWO NOW DECIDES A DRAW
+--------------------------------------
+It did not use to matter much which of the two got recorded, because both ended the same
+way: the golfer scored nothing and sat on whichever card they had been dealt to. The join
+now runs before the partition, so an `absent` does more than describe a golfer -- it takes
+them out of the draw, and everybody else's share is renormalised over the field that is
+left. A build stops rather than deal past an unanswered name.
+
+That makes a wrong absence cost more than it did. Before the first tee time "no row on
+this leaderboard" is genuinely not yet the same fact as "withdrew": ESPN's field still
+moves in that window, and a golfer Kalshi already prices may be an alternate ESPN has not
+listed yet. Record an absence when you can say what happened -- two reads a couple of
+hours apart is what tells the two cases apart. When you have looked and still cannot say,
+leave the entry unfilled and let the build deal them in with `--deal-anyway`: they land on
+a card at full weight and score nothing if they are indeed out, which is the smaller and
+the recoverable mistake.
 """
 
 import json
@@ -61,8 +77,9 @@ HOW_TO_USE = [
     "     -- this Kalshi golfer is that ESPN athlete. `athlete_id` is what binds; "
     "`espn_name` is for readers and for learning a reusable alias.",
     '  "Jason Day": {"absent": true, "note": "withdrew before the first round"}',
-    "     -- this golfer is not in the field at all. They will score nothing, which is "
-    "correct, and the file will say it was checked rather than missed.",
+    "     -- this golfer is not in the field at all. On a build they are left OUT OF THE "
+    "DRAW and everybody else's share is renormalised over the field that is left; on a "
+    "rebuild they keep the card they were already dealt to and score nothing.",
     "Only use an `athlete_id` that appears in `pending[].suggestions` or in "
     "`espn_athletes_nobody_claimed`. An id from anywhere else is not in this field and "
     "will be refused.",
@@ -70,6 +87,11 @@ HOW_TO_USE = [
     "copy the highest confidence. If neither list has the golfer in it, they are "
     "absent -- an ESPN field and a Kalshi field for the same tournament are very "
     "nearly the same people.",
+    "Before the first tee time that is still not proof: ESPN's field moves in the day or "
+    "two before a round, so a golfer Kalshi already prices may be an alternate ESPN has "
+    "not listed yet. Record `absent` when you can say what happened. If you looked twice "
+    "and still cannot, leave the entry out and re-run the build with --deal-anyway -- "
+    "they go into the draw at full weight, which is the recoverable mistake.",
     "Then re-run the build with --match-review pointing at this file. Decisions "
     "already applied are listed below and do not need re-entering.",
 ]
@@ -137,10 +159,24 @@ def write(path, *, tournament, espn, golfers, matches, report, players,
     """
     Write the worksheet. Returns the path written, or None if there was nothing to say.
 
-    `golfers` is the Kalshi field as the build knows it -- name, grouping weight, and
-    which team holds them -- because the third of those decides how much a reviewer
-    should care. An unresolved golfer worth 0.0004 in nobody's group is noise; one
-    worth 4% sitting in a team's roster is the whole scoreboard.
+    `golfers` is the Kalshi field as the build knows it -- name, weight, and which team
+    holds them -- because how much a reviewer should care is the point of the ranking. An
+    unresolved golfer worth 0.0004 is noise; one worth 4% is the whole scoreboard.
+
+    Both of those columns say less than they used to, and it is worth being exact about
+    what each one now means.
+
+    `team` is null on a BUILD, because a build no longer has a draw when it writes this.
+    That is the change working rather than a gap: the join runs first precisely so that
+    nobody is dealt a golfer whose status is still an open question. A rebuild fills the
+    column in, because a rebuild is handed the draw in its result file.
+
+    `grouping_weight` is exactly that on a rebuild, and on a build it is the de-vig over
+    the whole field. A build cannot know the grouping weight here -- that depends on the
+    exclusion set, which depends on the answers to the questions in this very file -- and
+    the de-vig is a floor on the same quantity, since removing anybody scales every
+    survivor up. The ranking below is unaffected either way, because rescaling is
+    monotone: the heaviest golfer is the heaviest golfer under both numbers.
 
     Nothing is written when every name resolved and no decision was needed. A file
     whose only content is "nothing to do" is a file somebody has to open to find that
