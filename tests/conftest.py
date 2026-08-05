@@ -264,6 +264,40 @@ def espn_not_started_payload(espn_final_payload):
     return payload
 
 
+@pytest.fixture
+def espn_between_rounds_payload(espn_payload):
+    """
+    A round that has been declared and that nobody has a score in yet.
+
+    There is no capture of this and there was never going to be: it is the window between
+    ESPN moving `competitions[0].status.period` on and the first group teeing off, which
+    is short, happens at seven in the morning, and looks like nothing worth recording
+    until a page renders it wrong. So it is synthesised from the real Round 2 payload --
+    the period moves to 3, every competitor gets a round-3 linescore stub with no
+    `displayValue` key (exactly what ESPN sends for a round not yet played), and `thru`
+    goes back to 0. Positions are left alone, because ESPN does not take them away
+    overnight and a page still has a board to draw.
+
+    The rounds already played are left alone too, and that is the trap this fixture
+    exists for. Every golfer still carries a round-1 and a round-2 linescore, so a page
+    that reads the LAST element of `rounds` prints round two's score under a heading
+    saying round three -- for the entire field at once, in numbers that are individually
+    plausible. Nothing on screen would look broken.
+    """
+    payload = json.loads(json.dumps(espn_payload))
+    comp = payload["events"][0]["competitions"][0]
+    comp["status"]["period"] = 3
+    comp["status"]["type"] = {"state": "in", "detail": "Round 3"}
+    for c in comp["competitors"]:
+        status = c.setdefault("status", {})
+        status["thru"] = 0
+        status.pop("displayThru", None)
+        status["type"] = {"state": "pre", "name": "STATUS_SCHEDULED"}
+        c["linescores"] = [ls for ls in c.get("linescores", []) if ls.get("period") != 3]
+        c["linescores"].append({"period": 3, "teeTime": "2026-08-01T12:00Z"})
+    return payload
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",

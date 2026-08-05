@@ -82,6 +82,37 @@ function resolvePlayer(golfer) {
 
 function pct(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
 
+/* The current round, as one self-describing string: "R2 -2 thru 5".
+ *
+ * Three numbers get called "the score" during a tournament -- the running total, the
+ * round being played, and how many holes of it are done -- and only the first was on
+ * this page. A total and a hole count printed side by side unlabelled read as one fact
+ * ("-6 thru 5" is not six under through five holes), so each part here is labelled and
+ * the total keeps its own column.
+ *
+ * WHICH round is `meta.round`, off every poll: `competitions[0].status.period`, NOT
+ * `event.status` (docs/FRONTEND-SPEC.md §3). The golfer's linescore is then looked up BY
+ * that number and never taken off the end of `rounds` -- a golfer who has not teed off
+ * today has no linescore for today, so lib.js's array ends at yesterday and its last
+ * element is yesterday's score wearing today's label. Measured: six of the 147 in the
+ * checked-in Round 2 payload. Empty is the honest answer for them; "E" would claim they
+ * had been round in level par. */
+function roundLine(player) {
+  var n = STATE.meta && STATE.meta.round;
+  if (!player || typeof n !== 'number' || n < 1) return '';
+  var round = null;
+  (player.rounds || []).forEach(function (r) { if (r.round === n) round = r; });
+  if (!round && player.status !== 'STATUS_IN_PROGRESS') return '';
+  var bits = ['R' + n];
+  if (round) bits.push(GolfPool.fmtPar(round.toPar));
+  // Holes PLAYED, printed as the string ESPN sent -- "18" in both measured payloads, "F"
+  // on other events. Holes remaining would be arithmetic over a format nobody here has
+  // measured, and played is the number already in the payload.
+  var thru = player.thru == null ? '' : String(player.thru).trim();
+  if (thru && thru !== '0') bits.push(/^\d+$/.test(thru) ? 'thru ' + thru : thru);
+  return bits.join(' ');
+}
+
 /* One golfer's row. `player` is null before the tournament starts and for anyone who
  * never teed off, and the row still has to say who they are and what they were worth --
  * a roster does not shrink because the leaderboard has not opened.
@@ -102,11 +133,12 @@ function golferRow(golfer, player) {
   tr.append(el('td', 'gpos', player ? (player.position || player.statusShort || 'CUT')
                                     : (open ? 'n/a' : '—')));
   tr.append(el('td', 'gname', golfer.name));
+  // The TOURNAMENT total, summed from the linescores. The round being played is the next
+  // cell along and says so; these are two different numbers and were never one.
   tr.append(el('td', 'gscore', player ? GolfPool.fmtPar(player.toPar) : '—'));
-  // `thru` only, never statusShort: before a golfer tees off ESPN puts a raw ISO
-  // timestamp in there, and a cell that reads "2026-08-06T18:00:00Z" under a column
-  // headed "Thru" is worse than an empty one.
-  tr.append(el('td', 'gthru', player && player.thru ? String(player.thru) : ''));
+  // Never statusShort: before a golfer tees off ESPN puts a raw ISO timestamp in there,
+  // and a cell that reads "2026-08-06T18:00:00Z" is worse than an empty one.
+  tr.append(el('td', 'gcurrent', roundLine(player)));
   tr.append(el('td', 'godds', pct(golfer.odds.grouping_weight)));
   return tr;
 }

@@ -23,6 +23,7 @@ import re
 import pytest
 
 import bundle_frontend as bundler
+import espn_leaderboard
 import standings
 from conftest import ESPN_EVENT_ID, LEADERBOARD_GLOB
 
@@ -211,6 +212,190 @@ def test_a_keyboard_can_expand_a_team(page):
     # Rebuilding the board must not drop the keyboard on the floor.
     assert page["page"].evaluate(
         "() => document.activeElement.classList.contains('team-row')")
+
+
+# ---------------------------------------------------------------------------
+# Three scores in a row, and only one of them is the tournament
+#
+# A live board carries three numbers that all get called "the score": the running total
+# for the week, the score in the round being played, and how many holes of that round are
+# done. They move at different speeds and they answer different questions, and the page
+# used to print the first and the third side by side with nothing between them saying so
+# -- "-6 · thru 12", which reads as six under through twelve holes today.
+#
+# These drive the page with `espn-api/lb.json`: the SAME event, captured mid-Round-2,
+# whose 147 athlete ids are the same 147 the competition was built against. So every
+# golfer resolves, the board is the real one, and half the field is out on the course.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def midround_page(browser, competition, espn_payload, serve_espn):
+    ctx, out = open_page(browser, competition["html"], serve_espn(espn_payload))
+    yield {**out, "result": competition["result"]}
+    ctx.close()
+
+
+def board_rows(page):
+    """Every golfer row on the board, keyed by name. Collapsed rows included."""
+    return page.evaluate("""() => Object.fromEntries(
+      [...document.querySelectorAll('#board tr.golfer')].map(tr => [
+        tr.querySelector('.gname-inner > span').textContent.trim(),
+        {pos: tr.querySelector('td.g-pos').textContent,
+         score: tr.querySelector('td.g-score').textContent,
+         round: tr.querySelector('td.g-round').textContent,
+         tag: tr.querySelector('td.g-tag').textContent}]))""")
+
+
+def round_cell(player, number):
+    """What the round column should say for this golfer, from the parsed payload."""
+    scored = next((r for r in player["rounds"] if r["round"] == number), None)
+    if scored is None:
+        return ""
+    thru = player["thru"]
+    return espn_leaderboard.fmt_par(scored["to_par"]) + (f" thru {thru}" if thru else "")
+
+
+def test_the_round_column_names_the_round_being_played(midround_page, page):
+    """
+    Not a static heading. `competitions[0].status.period` moves under a tab somebody left
+    open on Friday night, so the heading is built on every render like the page title and
+    the tab label are -- and it has to be, because the cell underneath is now a score and
+    an unlabelled score beside the tournament total is the whole bug.
+    """
+    live = midround_page["page"].locator("#board .group thead th").all_text_contents()
+    assert "Round 2" in live
+    assert "Thru" not in live
+
+    # The same page against the finished payload: four rounds played, so it says four.
+    assert "Round 4" in page["page"].locator(
+        "#board .group thead th").all_text_contents()
+
+
+def test_the_current_round_score_is_shown_and_is_this_round(midround_page, espn_players):
+    """
+    `rounds` is parsed by lib.js and was read by nothing. The number in it is the one a
+    pool actually argues about on a Friday afternoon -- a golfer three under for the day
+    is climbing and a golfer three over is falling, and the tournament total says neither.
+    """
+    rows = board_rows(midround_page["page"])
+    assert len(rows) == sum(t["golfer_count"] for t in midround_page["result"]["teams"])
+    for player in espn_players:
+        assert rows[player["name"]]["round"] == round_cell(player, 2), player["name"]
+
+    # Not vacuous: most of the field is out there, and both halves of the cell are real.
+    filled = [r["round"] for r in rows.values() if r["round"]]
+    assert len(filled) == 140
+    assert any(c.endswith(" thru 5") for c in filled)
+    assert any(c.startswith("E ") for c in filled), "level for the day is E, not blank"
+
+
+def test_a_golfer_who_has_not_teed_off_today_gets_nothing_for_today(midround_page,
+                                                                    espn_players):
+    """
+    The trap, and it is armed in this payload rather than imagined.
+
+    Six golfers in the afternoon wave have a round-2 linescore whose displayValue is the
+    string "-". lib.js drops it, so their `rounds` array ENDS AT ROUND ONE -- and a page
+    that takes the last element of `rounds` as "this round" prints yesterday's score under
+    a heading that says today. It is a real number, in range, beside the right name.
+    """
+    rows = board_rows(midround_page["page"])
+    waiting = [p for p in espn_players if p["status"] == "STATUS_SCHEDULED"]
+    assert {p["name"] for p in waiting} == {
+        "Ryan Ruffels", "Keenan Huskey", "Jesper Svensson", "Ben James",
+        "Davis Chatfield", "Johnny Keefer"}
+
+    for player in waiting:
+        assert player["rounds"][-1]["round"] == 1, "the last element is round one"
+        yesterday = espn_leaderboard.fmt_par(player["rounds"][-1]["to_par"])
+        cell = rows[player["name"]]["round"]
+        assert cell == "", (player["name"], cell, yesterday)
+
+    # Blank, and blank on purpose: "E" and "—" both say they went round in level par.
+    assert rows["Ryan Ruffels"]["round"] not in ("E", "—", "0")
+    # Their tournament total is a real number and stays. It is round one's, and round one
+    # is over -- nothing about today is missing from it.
+    assert rows["Davis Chatfield"]["score"] == "+1"
+    assert rows["Johnny Keefer"]["score"] == "-4"
+
+
+def test_the_score_column_is_still_the_whole_tournament(midround_page, espn_players):
+    """
+    The other half of telling them apart: whatever the round column says, Score is the
+    running total summed from the linescores and has not moved.
+    """
+    rows = board_rows(midround_page["page"])
+    for player in espn_players:
+        expect = "—" if player["to_par"] is None else espn_leaderboard.fmt_par(player["to_par"])
+        assert rows[player["name"]]["score"] == expect, player["name"]
+
+    # And it is emphatically not ESPN's own score field, which counts completed rounds
+    # only: it disagrees with the running total for a third of the field in this payload.
+    stale = [p for p in espn_players
+             if espn_leaderboard.to_par(p["stale_to_par"]) != p["to_par"]]
+    assert len(stale) > 20
+
+
+def test_the_leading_golfer_line_separates_the_total_from_the_round(midround_page,
+                                                                    espn_players):
+    """
+    The line this work started from. It read `T13 · -6 · thru 5`: a TOURNAMENT total and
+    a count of holes played TODAY, adjacent, unlabelled, in the shape of a single fact.
+    Somebody read it as six under for the morning, which is a different golfer having a
+    different week.
+    """
+    by_name = {p["name"]: p for p in espn_players}
+    pairs = midround_page["page"].evaluate(
+        """() => [...document.querySelectorAll('#board tbody.team td.c-lead')].map(
+             c => [c.querySelector('.leadname').textContent,
+                   c.querySelector('.leadline').textContent])""")
+    assert pairs
+
+    for name, line in pairs:
+        player = by_name[name]
+        bits = [player["position"],
+                espn_leaderboard.fmt_par(player["to_par"]) + " total"]
+        today = round_cell(player, 2)
+        if today:
+            bits.append("R2 " + today)
+        assert line == " · ".join(bits), name
+        # The shape that caused it: a score, then a hole count, with nothing in between
+        # saying they belong to different rounds.
+        assert not re.search(r"· [-+E]\S* · thru", line), line
+
+    assert any("thru" in line for _, line in pairs), "somebody should be mid-round"
+
+
+def test_a_round_that_has_started_with_no_scores_in_it_is_blank_not_level(
+        browser, competition, espn_between_rounds_payload, serve_espn):
+    """
+    The gap between ESPN moving the round on and the first group teeing off. There is no
+    capture of it -- see the fixture -- and it is the state where every golfer on the
+    board has played rounds and none of them has played THIS one.
+
+    Every trap fires here at once: `rounds` is non-empty for the whole field and its last
+    element is the previous round, so last-element wins the whole board an extra round of
+    scores; and a page that renders a missing round as "E" or an em dash tells the pool
+    that 147 golfers are level after nobody has hit a ball.
+    """
+    ctx, out = open_page(browser, competition["html"],
+                         serve_espn(espn_between_rounds_payload))
+    p = out["page"]
+    assert "Round 3" in p.locator("#board .group thead th").all_text_contents()
+
+    cells = p.locator("#board td.g-round").all_text_contents()
+    assert len(cells) == sum(t["golfer_count"] for t in competition["result"]["teams"])
+    assert set(cells) == {""}, sorted(set(cells))
+
+    # Still a board. The positions and the totals are the ones ESPN published overnight,
+    # and they are exactly as real as they were before the round was called.
+    assert p.locator("#board tbody.team.is-leader").count() >= 1
+    assert set(p.locator("#board tbody.team td.c-rk").all_text_contents()) != {"—"}
+    for line in p.locator("#board tbody.team .leadline").all_text_contents():
+        assert " total" in line, line
+        assert "R3" not in line and "thru" not in line, line
+    assert out["errors"] == []
+    ctx.close()
 
 
 # ---------------------------------------------------------------------------
@@ -752,5 +937,45 @@ def test_the_team_name_is_readable_on_a_phone(browser, competition, serve_espn):
     # golfer, the score and the price.
     assert not p.locator("#board thead th.c-lead").first.is_visible()
     assert p.locator("#board .group th.g-score").first.is_visible()
+    assert out["errors"] == []
+    ctx.close()
+
+
+def test_the_round_and_the_holes_played_survive_a_phone(browser, competition,
+                                                        espn_payload, serve_espn):
+    """
+    This column used to be dropped here outright, which meant the phone -- the thing this
+    page is designed for, held in front of a television -- was the one place that could
+    not answer "how many holes has he got left". A one-shot lead through 6 and a one-shot
+    lead through 18 are not the same afternoon.
+
+    The collapsed team row above is a different table and keeps its zero-width columns;
+    this is the group underneath, which is a plain seven-column table inside one cell of
+    it and simply rebalances.
+    """
+    ctx, out = open_page(browser, competition["html"], serve_espn(espn_payload),
+                         viewport={"width": 390, "height": 900})
+    p = out["page"]
+    assert p.locator("#board .group th.g-round").first.is_visible()
+    assert p.locator("#board .group th.g-round").first.text_content() == "Round 2"
+
+    filled = [c for c in p.locator("#board td.g-round").all_text_contents() if c]
+    assert len(filled) == 140
+    assert any(" thru " in c for c in filled), "holes played, on a phone"
+
+    # Nothing in the group overflows the column it was given. A fixed-layout table does
+    # not push its neighbours out of the way -- it paints over them, and the neighbour
+    # here is the golfer's name.
+    assert p.evaluate("""() => [...document.querySelectorAll('#board .group th,'
+      + '#board .group td.g-pos, #board .group td.g-score,'
+      + '#board .group td.g-round, #board .group td.g-odds')]
+      .filter(c => c.scrollWidth > c.clientWidth + 1)
+      .map(c => c.className + ':' + c.textContent)""") == []
+
+    # The margin is still readable beside its marker: "decided here" takes its own line
+    # rather than squeezing the name that earned it down to an initial.
+    assert p.evaluate("""() => [...document.querySelectorAll('#board .decided-here')]
+      .every(d => { const n = d.parentElement.firstElementChild;
+                    return n.scrollWidth <= n.clientWidth + 1; })""")
     assert out["errors"] == []
     ctx.close()
