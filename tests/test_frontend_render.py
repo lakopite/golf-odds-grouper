@@ -22,6 +22,7 @@ import re
 import pytest
 
 import bundle_frontend as bundler
+import espn_leaderboard
 import standings
 from conftest import ESPN_EVENT_ID, LEADERBOARD_GLOB
 
@@ -105,6 +106,57 @@ def test_cut_golfers_are_marked_out(page, competition):
     """74 of the 147 missed the cut, and the page has to be able to say so."""
     cut = [p for p in competition["players"] if p["position_number"] is None]
     assert page["page"].locator("#standings article.team table.golfers tbody tr.out").count() == len(cut)
+
+
+def test_the_current_round_is_named_scored_and_counted(browser, competition,
+                                                       espn_payload, espn_players):
+    """
+    The contract grew a line (docs/FRONTEND-SPEC.md §5.2) and the reference is what proves
+    a contract, so it shows the round too -- in the same cell that used to hold a bare
+    hole count, because a total and a hole count printed side by side unlabelled read as
+    one number.
+
+    This page has no column headings at all, so each cell names its own round: "R2 -2
+    thru 5". Driven with `espn-api/lb.json`, the same event mid-Round-2 -- same 147
+    athlete ids, so every golfer resolves and half the field is out on the course.
+    """
+    ctx = browser.new_context()
+    ctx.route(LEADERBOARD_GLOB, lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"access-control-allow-origin": "*"}, body=json.dumps(espn_payload)))
+    p = ctx.new_page()
+    errors = []
+    p.on("pageerror", lambda e: errors.append(str(e)))
+    p.goto("file://" + competition["html"])
+    p.wait_for_selector("#standings article.team", timeout=15000)
+
+    cells = p.evaluate("""() => Object.fromEntries(
+      [...document.querySelectorAll('#standings table.golfers tbody tr')].map(tr => [
+        tr.querySelector('td.gname').textContent,
+        [tr.querySelector('td.gscore').textContent,
+         tr.querySelector('td.gcurrent').textContent]]))""")
+
+    for player in espn_players:
+        score, current = cells[player["name"]]
+        # The tournament total, unchanged and still summed from the linescores.
+        assert score == ("—" if player["to_par"] is None
+                         else espn_leaderboard.fmt_par(player["to_par"])), player["name"]
+        # Today: selected by meta.round, NOT by taking the last element of `rounds`. Six
+        # golfers in this payload have not teed off and their array ends at round one --
+        # last-element would print round one's score under today's label.
+        scored = next((r for r in player["rounds"] if r["round"] == 2), None)
+        if scored is None:
+            assert current == "", player["name"]
+        else:
+            assert current == "R2 " + espn_leaderboard.fmt_par(scored["to_par"]) + (
+                f" thru {player['thru']}" if player["thru"] else ""), player["name"]
+
+    waiting = [pl["name"] for pl in espn_players if pl["status"] == "STATUS_SCHEDULED"]
+    assert len(waiting) == 6
+    assert all(cells[name][1] == "" for name in waiting)
+    assert sum(1 for _, current in cells.values() if current) == 140
+    assert errors == []
+    ctx.close()
 
 
 def test_the_snapshot_odds_are_stated_with_their_capture_time(page, competition):

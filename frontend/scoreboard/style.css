@@ -409,15 +409,18 @@ td.c-chev { text-align: right; }
 /* Right-aligned columns sit flush against each other, so the padding goes on the left
  * of each -- otherwise "SCORE" and "DRAW" touch the moment a media query drops the
  * column that was between them. */
-.group th.g-score, .group th.g-thru, .group th.g-odds, .group th.g-tag,
-.group td.g-score, .group td.g-thru, .group td.g-odds, .group td.g-tag {
+.group th.g-score, .group th.g-round, .group th.g-odds, .group th.g-tag,
+.group td.g-score, .group td.g-round, .group td.g-odds, .group td.g-tag {
   text-align: right;
   padding-left: 10px;
 }
 
 .group .g-pos { width: 52px; }
 .group .g-score { width: 68px; }
-.group .g-thru { width: 56px; }
+/* Wide enough for the longest thing the round column can hold -- "+10 thru 18", eleven
+ * monospaced characters -- because it is set `nowrap` below and a cell that does not fit
+ * paints over the golfer's name rather than wrapping under it. */
+.group .g-round { width: 104px; }
 .group .g-bar { width: 130px; padding-left: 10px; }
 .group .g-odds { width: 86px; }
 .group .g-tag { width: 118px; }
@@ -434,7 +437,14 @@ td.g-name { font-size: 12px; color: var(--ink); min-width: 0; }
 .gname-inner { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .gname-inner > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 td.g-score { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
-td.g-thru { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-6); }
+/* Today's round. A step down from the total beside it -- smaller and paler, so a glance
+ * down the column lands on the tournament score first -- but a step up from where the
+ * bare hole count used to sit, because this cell now carries a number somebody reads
+ * rather than a footnote. Kept on one line: it is two facts and they belong together. */
+td.g-round {
+  text-align: right; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-4);
+}
 td.g-odds { text-align: right; font-family: var(--mono); font-size: 11px; color: var(--ink-4); }
 td.g-tag {
   text-align: right; font-family: var(--display); font-size: 10px; font-weight: 600;
@@ -618,11 +628,40 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
   .team-row > td { padding: 12px 10px; }
   td.c-rk { font-size: 17px; }
 
+  /* The round column STAYS on a phone, and it is the one thing on this list that is not
+   * a luxury: how many holes a golfer has played is the difference between a lead that
+   * is real and one with nine holes still to come, and it used to vanish here entirely.
+   *
+   * The colspan=7 problem two rules up does not reach this table -- that is the outer
+   * board, and this one is a plain seven-column table inside a single cell of it. So the
+   * columns here are a straight width rebalance: pos, score and draw each give up a few
+   * pixels, the tag and the weight bar are still gone, and the golfer's name takes what
+   * is left. Measured at 390px: 124px for the name, which holds all but the longest
+   * double-barrelled surnames before it ellipses. */
   .team-detail > td { padding: 0 10px 8px 12px; }
-  .group .g-pos { width: 42px; }
-  .group .g-thru, .group .g-tag, .group .g-bar { display: none; }
-  .group .g-score { width: 56px; }
-  .group .g-odds { width: 70px; }
+  .group .g-tag, .group .g-bar { display: none; }
+  .group .g-pos { width: 36px; }
+  .group .g-score { width: 46px; }
+  .group .g-round { width: 80px; font-size: 10px; }
+  .group .g-odds { width: 56px; }
+  .group td.g-score, .group td.g-round, .group td.g-odds { padding-left: 7px; }
+
+  /* Headings, and the selector has to be `.board .group th` rather than `.group th`.
+   * A group table is INSIDE the board, so `.board thead th` up the file reaches its
+   * header row too and outweighs `.group th` -- which is why these headings render at
+   * the board's 10.5px and the board's 12px side padding rather than the 9.5px the
+   * group's own rule asks for. Left alone, SCORE measures 53px and the column it has to
+   * sit in is 46px, so it runs straight into the heading beside it. Tracking and padding
+   * are most of that width and none of the meaning; the words are unchanged. */
+  .board .group th { font-size: 9px; letter-spacing: .06em; padding: 5px 0 4px; }
+  .board .group th.g-score, .board .group th.g-round,
+  .board .group th.g-odds { padding-left: 7px; }
+
+  /* "decided here" is the margin, and the margin is the content (§10) -- so it stays on
+   * a phone and takes its own line when the name needs the width. Side by side in 130px
+   * the flex row shrinks the name instead, and the golfer who decided the whole position
+   * renders as a single letter and an ellipsis. */
+  .gname-inner { flex-wrap: wrap; gap: 1px 7px; }
 
   .cards { grid-template-columns: 1fr; }
   .excl { grid-template-columns: 1fr 62px 58px; }
@@ -630,9 +669,9 @@ tbody.team:not(.is-open) tr.golfer.is-rest { display: none; }
   .secthead h2 { font-size: 18px; }
 }
 
-/* A group table on a groups-mode page has no positions, scores or thru to show --
+/* A group table on a groups-mode page has no positions, scores or round to show --
  * nobody has teed off. Hiding the columns beats four columns of em dashes. */
 .group.is-draw .g-pos,
 .group.is-draw .g-score,
-.group.is-draw .g-thru,
+.group.is-draw .g-round,
 .group.is-draw .g-tag { display: none; }

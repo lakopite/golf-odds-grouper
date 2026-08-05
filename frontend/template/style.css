@@ -66,12 +66,20 @@ table.golfers { width: 100%; border-collapse: collapse; margin-top: 0.6rem; font
 table.golfers td { padding: 0.2rem 0.35rem; border-top: 1px solid var(--line); }
 table.golfers tr.out { color: var(--muted); }
 .gpos { width: 3.5rem; }
-.gscore, .gthru, .godds { text-align: right; width: 4.5rem; font-variant-numeric: tabular-nums; }
+.gscore, .gcurrent, .godds { text-align: right; width: 4.5rem; font-variant-numeric: tabular-nums; }
+/* Wider than the others: it holds the round, the score in it and the holes played --
+ * "R2 -2 thru 5" -- because a bare hole count next to the tournament total reads as one
+ * number rather than two. */
+.gcurrent { width: 7rem; white-space: nowrap; }
 .gname { width: auto; }
 
 footer { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8em; word-break: break-all; }
 
+/* The current-round cell stays on a phone. It used to be dropped here as the least
+   interesting column, back when it held a bare hole count; now it carries how far into
+   the round a golfer is, which is the difference between a lead that is settled and one
+   with nine holes still to play. This table is auto-layout, so the name column simply
+   takes less. */
 @media (max-width: 34rem) {
-  .gthru { display: none; }
   .team-head { flex-wrap: wrap; }
 }

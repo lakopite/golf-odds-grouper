@@ -151,6 +151,14 @@ and the same tournament's final payload.
 3. **`linescores[]` contains stubs** for rounds not yet played — no `value`, no
    `displayValue` key at all. Filter before summing. A withdrawn round reads `"-"`.
 
+   That filtering is why the parsed `rounds[]` **must not be indexed from the end**. A
+   golfer in the afternoon wave already has a linescore for the round in progress and its
+   `displayValue` is `"-"`, so it drops out and their array stops at the round before —
+   six of the 147 in `espn-api/lb.json`, whose `rounds` end at round 1 while round 2 is
+   being played. `rounds[rounds.length - 1]` hands back *yesterday's* score to be printed
+   under today's heading: a real number, in range, beside the right name, and wrong.
+   Select the round by its `period`, and render nothing when there is no entry for it.
+
 4. **`sortOrder` is the in-play rank**, and it is the only field that is. Zero
    inversions against the running total; the stale score field inverts 29 times. It is
    a total order `1..N` over the whole field, and it places every cut player (74–147)
@@ -269,7 +277,29 @@ One row or card per team, in finishing order. Each carries:
 
 Expanded, drilled into, or always visible — a design decision. Each golfer needs:
 
-position · name · score to par · thru · what they were worth at creation
+position · name · tournament total · this round's score · holes played in this round ·
+what they were worth at creation
+
+**Three of those are scores, they answer different questions, and a design that lets two
+of them touch will be read as one number.** The tournament total is the sum of the
+linescores (§3, item 2). This round's score is the linescore for
+`competitions[0].status.period`. Holes played is `status.displayThru`. A golfer can be
+six under for the week and three over for the morning, and `-6 · thru 12` reads as *six
+under through twelve holes today* — a different golfer having a different week. **Label
+every score with the round it belongs to, wherever two of them appear together**,
+including the one-line summary of the team's leading golfer, which is exactly where the
+shipped page had it wrong.
+
+**Pick the round by its number**, never off the end of `rounds[]` — see §3, item 3, for
+the six golfers that gets wrong on the checked-in payload — and **render a round nobody
+has started as blank**. Not `E` and not an em dash: both of those say the golfer went
+round in level par, and they have not been round at all. The same holds for the whole
+field in the window between ESPN advancing `period` and the first group teeing off.
+
+**Holes played, not holes remaining.** `displayThru` is a string. It counts up (`"18"` on
+a completed round) in every payload measured here, but ESPN uses `"F"` on other events,
+so `18 - thru` is arithmetic over a format this repo has not checked. Printing what the
+field already says costs nothing and cannot be wrong.
 
 Sorted by the rank key (§6), so the golfer carrying the team is always first. Cut,
 withdrawn and unscoreable golfers stay listed — a team's roster does not shrink — but
@@ -843,6 +873,11 @@ reference honours `prefers-color-scheme`.
 - [ ] Joins golfers to the board on `golfers[].espn.athlete_id` and nothing else — no
       name matching anywhere in the page
 - [ ] Running total summed from `linescores`, never `score.displayValue`
+- [ ] The tournament total, this round's score and holes played are each labelled with
+      the round they belong to — no two of them adjacent and bare (§5.2)
+- [ ] This round's score is selected out of `rounds[]` by `status.period`, never by
+      taking the last element, and a round nobody has started renders blank — not `E`,
+      not an em dash (§3 item 3, §5.2)
 - [ ] Standings match `tests/fixtures/standings_golden.json`
 - [ ] Ties shown as ties; `decided_at` surfaced
 - [ ] Cut / WD golfers and golfers with no athlete id listed and visibly out

@@ -181,6 +181,77 @@ function initials(name) {
 }
 
 /* ------------------------------------------------------------------ *
+ * The current round
+ *
+ * Three different numbers get called "the score" on a Friday afternoon: the
+ * tournament total, today's round, and how far into today the golfer is. The page used
+ * to show the first and the third, next to each other, unlabelled -- "-6 · thru 12",
+ * which reads as six under through twelve holes and is in fact two rounds' worth of
+ * information stuck together. Everything below exists to keep the three apart.
+ * ------------------------------------------------------------------ */
+
+/* Which round is being played, off the poll. `competitions[0].status.period`, which
+ * `parseLeaderboard` puts on `meta.round` -- NOT `event.status`, which is the envelope's
+ * idea of the whole tournament. See docs/FRONTEND-SPEC.md §3.
+ *
+ * 0 before anybody tees off, and missing on a payload with no events in it. Both mean
+ * "there is no round to report", which is not the same as round zero. */
+function roundNumber() {
+  var n = STATE.meta && STATE.meta.round;
+  return typeof n === 'number' && n > 0 ? n : null;
+}
+
+/* This golfer's linescore for THAT round, or null.
+ *
+ * Selected by round number, and never by taking the last element of `rounds`. Measured
+ * on the checked-in Round 2 payload: six afternoon-wave golfers have a round-2 linescore
+ * whose displayValue is the string "-", which lib.js's toPar() filter drops, so their
+ * `rounds` array ends at round 1. `rounds[rounds.length - 1]` hands back their round ONE
+ * score to be printed under today's heading -- a real number, in range, beside a name
+ * that belongs to it, and wrong. Nothing on screen would look broken. */
+function currentRound(player) {
+  var n = roundNumber();
+  if (!player || !n) return null;
+  var rounds = player.rounds || [];
+  for (var i = 0; i < rounds.length; i++) {
+    if (rounds[i].round === n) return rounds[i];
+  }
+  return null;
+}
+
+/* "-2 thru 5": today's score and how much of today it covers, as one string.
+ *
+ * Empty when the golfer has no linescore for this round and is not out on the course --
+ * the afternoon wave every Thursday and Friday morning, and every cut golfer from round
+ * three on. Empty, never "E" and never an em dash: both of those say they went round in
+ * level par, and they have not been round at all.
+ *
+ * Holes PLAYED, printed as the string ESPN sent. Both measured payloads count up ("18"
+ * for a completed round), other events use "F", and holes REMAINING would need `18 -
+ * thru` to be safe against every format this repo has not seen. Played is already in the
+ * payload and needs no arithmetic; "F" is passed through as itself, because a leaderboard
+ * that says F means finished and "thru F" does not. */
+function roundLine(player) {
+  var round = currentRound(player);
+  if (!round && !(player && player.status === 'STATUS_IN_PROGRESS')) return '';
+  var bits = [];
+  if (round) bits.push(GolfPool.fmtPar(round.toPar));
+  var thru = player.thru == null ? '' : String(player.thru).trim();
+  if (thru && thru !== '0') bits.push(/^\d+$/.test(thru) ? 'thru ' + thru : thru);
+  return bits.join(' ');
+}
+
+/* What to call the column, and it changes under an open tab -- a page left up overnight
+ * is on the next round by breakfast with nobody touching it, so this is read on every
+ * render like the headings in renderStandings(). "Thru" is the fallback for a payload
+ * that carries no period: the cell then holds holes played and nothing else, which is
+ * exactly what the column used to be. */
+function roundHead() {
+  var n = roundNumber();
+  return n ? 'Round ' + n : 'Thru';
+}
+
+/* ------------------------------------------------------------------ *
  * The one thing that decides whether a position appears
  * ------------------------------------------------------------------ */
 
@@ -332,13 +403,41 @@ function golferView(golfer, player, isRanked) {
     // and printing "CUT" in three columns is not three facts.
     pos: madeCut ? player.position : '—',
     name: golfer.name,
+    // The tournament total, summed from the linescores, and the only thing under the
+    // heading "Score". Today's round lives one column over and says which round it is.
     score: player ? GolfPool.fmtPar(player.toPar) : '—',
-    thru: madeCut ? String(player.thru || '') : '',
+    round: roundLine(player),
     odds: pct(golfer.odds.grouping_weight),
     bar: MAX_WEIGHT ? ((golfer.odds.grouping_weight || 0) / MAX_WEIGHT * 100).toFixed(1) + '%' : '0%',
     tag: tag,
     unresolved: !!(espn && espn.match === 'unresolved')
   };
+}
+
+/* The one line under a team's leading golfer, and the place the three scores used to
+ * collide. It read `T13 · -6 · thru 5`, where the -6 is the TOURNAMENT total and the 5 is
+ * how many holes of TODAY have been played -- two rounds' worth of fact, adjacent and
+ * unlabelled, in a shape that reads as one. Somebody checking on a Friday lunchtime came
+ * away believing a golfer was six under for the morning.
+ *
+ * Now every part says what it is: `T13 · -6 total · R2 -2 thru 5`. The round is abbreviated
+ * here and spelled out in the group table's heading, because this line is 25% of a table
+ * row and that one is a column heading with room for a word.
+ *
+ * Nothing is invented when a part is missing: a golfer with no total gets no "total", one
+ * whose round has not begun gets no round, and neither gets a dash standing in for a
+ * number nobody has. */
+function leadLine(player) {
+  var bits = [player.position || player.statusShort || 'CUT'];
+  if (player.toPar !== null && player.toPar !== undefined) {
+    bits.push(GolfPool.fmtPar(player.toPar) + ' total');
+  }
+  var round = roundLine(player);
+  if (round) {
+    var n = roundNumber();
+    bits.push(n ? 'R' + n + ' ' + round : round);
+  }
+  return bits.join(' · ');
 }
 
 /* Ranked. The rule is lib.js's, verbatim, and everything here is a label on it. */
@@ -353,11 +452,8 @@ function liveRows() {
       tied: row.tied,
       decidedAt: row.decidedAt,
       leadName: best ? best.golfer.name : 'no golfers',
-      leadLine: bestPlayer
-        ? (bestPlayer.position || bestPlayer.statusShort || 'CUT') + ' · '
-          + GolfPool.fmtPar(bestPlayer.toPar)
-          + (bestPlayer.thru ? ' · thru ' + bestPlayer.thru : '')
-        : (best ? 'not on the board' : '—'),
+      leadLine: bestPlayer ? leadLine(bestPlayer)
+                           : (best ? 'not on the board' : '—'),
       leadLive: !!(best && best.rank[0] === 0),
       colB: row.counting + '/' + row.roster,
       colC: row.decidedAt ? 'golfer #' + row.decidedAt : (row.tied ? 'tied — unbroken' : '—'),
@@ -422,7 +518,14 @@ function groupTable(row, isRanked) {
 
   var head = document.createElement('thead');
   var hr = document.createElement('tr');
-  [['g-pos', 'Pos'], ['g-name', 'Golfer'], ['g-score', 'Score'], ['g-thru', 'Thru'],
+  // Seven, and the same seven in every body row -- deleting a <th> without its <td>
+  // shifts every right-aligned cell one column over and lands the draw percentages under
+  // the wrong heading. tests/test_scoreboard_render.py holds the count to account.
+  //
+  // "Score" is the tournament total. The column beside it names the round it is showing,
+  // which is why the heading is built here on every render rather than sitting in
+  // index.html: the round advances under a tab somebody left open.
+  [['g-pos', 'Pos'], ['g-name', 'Golfer'], ['g-score', 'Score'], ['g-round', roundHead()],
    ['g-bar', ''], ['g-odds', 'Draw'], ['g-tag', '']].forEach(function (pair) {
     var th = el('th', pair[0], pair[1]);
     th.scope = 'col';
@@ -444,7 +547,7 @@ function groupTable(row, isRanked) {
     tr.append(name);
 
     tr.append(el('td', 'g-score', g.score));
-    tr.append(el('td', 'g-thru', g.thru));
+    tr.append(el('td', 'g-round', g.round));
 
     var barTd = el('td', 'g-bar');
     var bar = el('span', 'bar');
