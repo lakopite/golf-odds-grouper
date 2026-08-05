@@ -131,6 +131,32 @@ creation instead, and `--no-logo` builds without art. Those two images are the o
 thing that changes between leagues: everything else about how the page looks belongs
 to the template. `leagues/README.md` has the details.
 
+### Seeing the ranked page before the tournament exists
+
+The page ranks itself at the first tee time, which makes the ranked page impossible to
+show anybody on a Wednesday: the only honest way to see it is to wait for Thursday.
+`tools/preview_live.py` builds a preview out of real ESPN data and nothing else. It
+takes this week's real field payload and a real leaderboard from a tournament that has
+been played, and transplants the second onto the first — every position, tie, thru-count
+and cut on the preview is a number ESPN published, wearing this week's names.
+
+```bash
+python tools/preview_live.py --result build/result.json --stage round2   # Friday afternoon
+python tools/preview_live.py --result build/result.json --stage final    # Sunday night
+python bundle_frontend.py --result build/preview-round2.json --out dist/
+```
+
+The leaderboard is baked into the page as a `data:` URI, so the page polls it through
+the same loop, parses it with the same `lib.js` and ranks it with the same rule —
+nothing in `frontend/` knows the difference, and nothing in `frontend/` was changed to
+make it work. Who ends up where is one sample from the same de-vigged prices the groups
+were drawn on (Plackett-Luce), so favourites turn up near the top about as often as the
+book says they should; `--draw uniform` shuffles instead. It is seeded and reproducible.
+
+**The scores did not happen**, so a preview is for looking at rather than for sending:
+the files are named `preview-*`, the result JSON carries a `preview` block, and the
+masthead on the page says so.
+
 Inside a Claude Code session, `.claude/skills/golf-pool/` drives all of this from a
 sentence: *"build this week's pool for my-league at the Wyndham"*.
 
@@ -453,10 +479,10 @@ the night people actually draw. If positions start appearing before anyone tees 
 gate that stops a page inventing a leaderboard needs rethinking. Run them before trusting
 a season's first pull.
 
-Three suites need a runtime beyond Python and skip cleanly without it:
-`test_frontend_parity.py` needs `node`, and `test_scoreboard_render.py` and
-`test_frontend_render.py` drive the two bundled pages in a real browser through
-Playwright.
+Four suites need a runtime beyond Python and skip cleanly without it:
+`test_frontend_parity.py` needs `node`, and `test_scoreboard_render.py`,
+`test_frontend_render.py` and `test_preview_live.py` drive a bundled page in a real
+browser through Playwright.
 
 ## How the grouping works
 

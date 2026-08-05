@@ -552,6 +552,14 @@ new link. **Never offer a rebuild to "add the scoring".** It would produce a fil
 identical in every way anybody can see, and telling somebody to wait for one is telling
 them to wait for something that has already happened.
 
+**Wanting to *see* the ranked page early is a different question, and it has an answer.**
+`tools/preview_live.py --result build/result.json --stage round2|final` deals a played
+tournament's real leaderboard over this week's real field and bakes it into the page, so
+the ranked view can be looked at on a Wednesday. Bundle the `build/preview-*.json` it
+writes exactly like any other result file. The scores did not happen — the files are
+named `preview-*` and the masthead says so — so it is for showing, never for sending as
+the week's scoreboard.
+
 So the page built on Wednesday is the groups sheet on Wednesday and the scoreboard on
 Thursday, and it is the same file. It is complete, it is deployable, and it opens from
 disk on a plane — the draw is baked in, and a failed poll costs the ranking and nothing
@@ -571,6 +579,7 @@ else.
 | `match_review.py` | the worksheet those leftover names get settled in, and the aliases a settlement is worth keeping (§4.2) |
 | `data/espn_aliases.json` | the learned Kalshi → ESPN name aliases. Written only by `--update-aliases`, created on first use, safe to hand-edit |
 | `standings.py` | the standings rule, in Python, for testing |
+| `tools/preview_live.py` | the ranked page, previewed before anybody has teed off (§6) |
 | `frontend/scoreboard/` | the designed scoreboard — what a plain bundle produces |
 | `frontend/template/` | the plain reference page, for telling a bad page from bad data |
 | `frontend/lib.js` | the standings rule in JavaScript. One copy, inlined by both |
